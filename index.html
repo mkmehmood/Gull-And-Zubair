@@ -2642,26 +2642,33 @@
 }
 
 /* Status States */
+/* Update your existing CSS block for the dot states */
+
+/* Status States */
 .signal-online {
     background-color: #10b981 !important; /* Green */
     box-shadow: 0 0 8px #10b981, 0 0 15px rgba(16, 185, 129, 0.4) !important;
+    border-color: #ffffff;
 }
 
 .signal-connecting {
     background-color: #f59e0b !important; /* Orange */
-    animation: pulse-signal 1s infinite;
+    box-shadow: 0 0 10px #f59e0b !important;
+    animation: signal-pulse 0.8s infinite alternate;
 }
 
 .signal-offline {
     background-color: #ef4444 !important; /* Red */
+    box-shadow: none !important;
     opacity: 0.7;
+    border-color: rgba(255,255,255,0.5);
 }
 
-@keyframes pulse-signal {
-    0% { transform: scale(1); opacity: 1; }
-    50% { transform: scale(0.8); opacity: 0.7; }
-    100% { transform: scale(1); opacity: 1; }
+@keyframes signal-pulse {
+    from { transform: scale(1); opacity: 1; }
+    to { transform: scale(1.3); opacity: 0.7; }
 }
+
 
     /* Add to your existing CSS */
     #cash-net-total {
@@ -18515,6 +18522,178 @@ window.validateEnhancedDataIntegrity = validateEnhancedDataIntegrity;
 window.exportEnhancedBackup = exportEnhancedBackup;
 
 console.log('✅ Firestore Enhancement Module Loaded');
+
+    // ==========================================
+    // 1. CONNECTION INDICATOR LOGIC
+    // ==========================================
+    
+    // Updates the existing #connection-indicator based on app state
+    function updateConnectionStatus() {
+        const dot = document.getElementById('connection-indicator');
+        if (!dot) return;
+
+        if (!navigator.onLine) {
+            // No Internet
+            dot.className = 'signal-offline'; // Red
+            dot.title = "Offline - Changes saved locally";
+        } else if (isSyncing) {
+            // Internet available + Currently Syncing
+            dot.className = 'signal-connecting'; // Orange Pulse
+            dot.title = "Syncing with Cloud...";
+        } else if (firebase.apps.length && currentUser) {
+            // Logged in + Online + Idle
+            dot.className = 'signal-online'; // Green
+            dot.title = "Online - Connected to Firestore";
+        } else {
+            // Online but not initialized/logged in
+            dot.className = 'signal-offline';
+            dot.title = "Disconnected - Please Sign In";
+        }
+    }
+
+    // Hook into existing events
+    window.addEventListener('online', updateConnectionStatus);
+    window.addEventListener('offline', updateConnectionStatus);
+
+    // Override the existing sync function to update the dot immediately
+    // We wrap your existing performOneClickSync
+    const originalSync = window.performOneClickSync;
+    window.performOneClickSync = async function(silent) {
+        updateConnectionStatus(); // Update dot to "Connecting"
+        try {
+            await originalSync(silent);
+        } finally {
+            isSyncing = false; // Force flag off
+            updateConnectionStatus(); // Update dot back to "Online"
+        }
+    };
+
+    // Initial check
+    document.addEventListener('DOMContentLoaded', () => {
+        updateConnectionStatus();
+        // Check every 5 seconds just in case state gets desynced
+        setInterval(updateConnectionStatus, 5000); 
+    });
+
+
+    // ==========================================
+    // 2. PULL-TO-REFRESH IMPLEMENTATION
+    // ==========================================
+    
+    (function() {
+        const body = document.body;
+        const threshold = 150; // Distance to pull to trigger refresh
+        let startY = 0;
+        let isPulling = false;
+        
+        // Create the visual indicator
+        const refreshSpinner = document.createElement('div');
+        refreshSpinner.id = 'pull-refresh-spinner';
+        refreshSpinner.style.cssText = `
+            position: fixed;
+            top: -50px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10001;
+            background: var(--glass);
+            backdrop-filter: blur(10px);
+            padding: 10px 20px;
+            border-radius: 20px;
+            border: 1px solid var(--glass-border);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: top 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            font-size: 0.8rem;
+            color: var(--text-main);
+            font-weight: 600;
+        `;
+        refreshSpinner.innerHTML = `
+            <div class="splash-loader" style="width:15px; height:15px; border-width:2px; margin:0;"></div>
+            <span>Pull to Sync</span>
+        `;
+        document.body.appendChild(refreshSpinner);
+
+        const updateSpinner = (y) => {
+            const textSpan = refreshSpinner.querySelector('span');
+            // Calculate opacity and position
+            const progress = Math.min(y / threshold, 1);
+            
+            if (y > threshold) {
+                textSpan.innerText = "Release to Sync";
+                textSpan.style.color = "var(--accent)";
+            } else {
+                textSpan.innerText = "Pull down to Sync";
+                textSpan.style.color = "var(--text-main)";
+            }
+            
+            // Move spinner down visible area
+            if (y > 0) {
+                refreshSpinner.style.top = (20 + (y * 0.3)) + 'px'; 
+            } else {
+                refreshSpinner.style.top = '-50px';
+            }
+        };
+
+        // Touch Start
+        document.addEventListener('touchstart', (e) => {
+            // Only trigger if we are at the very top of the page
+            if (window.scrollY === 0) {
+                startY = e.touches[0].clientY;
+                isPulling = true;
+            } else {
+                isPulling = false;
+            }
+        }, { passive: true });
+
+        // Touch Move
+        document.addEventListener('touchmove', (e) => {
+            if (!isPulling) return;
+            
+            const currentY = e.touches[0].clientY;
+            const diff = currentY - startY;
+
+            // Only allow pulling down, and dampen the drag feel
+            if (diff > 0) {
+                // If dragging down, prevent default browser refresh
+                // Note: 'passive: false' is needed on listener to prevent default, 
+                // but usually browsers handle overscroll-y: contain via CSS better.
+                updateSpinner(diff);
+            }
+        }, { passive: true });
+
+        // Touch End
+        document.addEventListener('touchend', async (e) => {
+            if (!isPulling) return;
+            
+            const endY = e.changedTouches[0].clientY;
+            const diff = endY - startY;
+
+            if (diff > threshold && window.scrollY === 0) {
+                // Trigger Refresh
+                refreshSpinner.querySelector('span').innerText = "Syncing...";
+                refreshSpinner.style.top = '30px'; // Lock in place
+                
+                // Haptic feedback if available
+                if (navigator.vibrate) navigator.vibrate(50);
+
+                // Call your robust sync function
+                await performOneClickSync(false); // false = show toasts
+                
+                // Hide after small delay
+                setTimeout(() => {
+                    refreshSpinner.style.top = '-50px';
+                }, 1000);
+            } else {
+                // Cancel
+                refreshSpinner.style.top = '-50px';
+            }
+            
+            isPulling = false;
+        });
+    })();
+
 
 </script>
 </body>
