@@ -9034,7 +9034,6 @@ let stockReturns = [];
 const firebaseConfig = {
   apiKey: "AIzaSyDYjGQILtrcG2nfKACSfsVtfIPZOAgbr_s",
   authDomain: "calculator-fabd3.firebaseapp.com",
-  databaseURL: "https://calculator-fabd3-default-rtdb.firebaseio.com",
   projectId: "calculator-fabd3",
   storageBucket: "calculator-fabd3.firebasestorage.app",
   messagingSenderId: "124313576124",
@@ -9165,106 +9164,6 @@ function initializeFirebaseSystem() {
 // Retry Firebase initialization with exponential backoff
 
 
-async function initializeFirestoreStructure(silent = false) {
-    if (!database || !currentUser) {
-        console.error('Cannot initialize: No database or user');
-        return;
-    }
-    
-    if (!silent) showToast('🔧 Initializing cloud database structure...', 'info');
-    
-    try {
-        const userRef = database.collection('users').doc(currentUser.id);
-        
-        // Create all collections with a single placeholder document
-        // (Firestore doesn't create empty collections, so we add a temp doc)
-        const batch = database.batch();
-        
-        const collections = [
-            'production',
-            'sales',
-            'calculator_history',
-            'rep_sales',
-            'transactions',
-            'entities',
-            'inventory',
-            'factory_history',
-            'returns'
-        ];
-        
-        // Add placeholder document to each collection
-        collections.forEach(collectionName => {
-            const placeholderRef = userRef.collection(collectionName).doc('_placeholder_');
-            batch.set(placeholderRef, {
-                _placeholder: true,
-                created_at: new Date().toISOString(),
-                note: 'This is a placeholder document. It will be deleted when real data is added.'
-            });
-        });
-        
-        // Create settings/config document with default values
-        const settingsRef = userRef.collection('settings').doc('config');
-        batch.set(settingsRef, {
-            factory_default_formulas: { standard: [], asaan: [] },
-            factory_additional_costs: { standard: 0, asaan: 0 },
-            factory_cost_adjustment_factor: { standard: 1, asaan: 1 },
-            factory_sale_prices: { standard: 0, asaan: 0 },
-            factory_unit_tracking: {
-                standard: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] },
-                asaan: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] }
-            },
-            naswar_default_settings: {},
-            deleted_records: [],
-            appMode: 'admin',
-            repProfile: 'NORAN SHAH',
-            adminPin: '1234',
-            initialized_at: new Date().toISOString(),
-            last_synced: new Date().toISOString()
-        });
-        
-        // Commit the batch
-        await batch.commit();
-        
-        console.log('✅ Firestore structure initialized for user:', currentUser.id);
-        if (!silent) showToast('✅ Database structure created successfully!', 'success');
-        
-        return true;
-        
-    } catch (error) {
-        console.error('❌ Structure initialization error:', error);
-        if (!silent) showToast('❌ Failed to create structure: ' + error.message, 'error');
-        return false;
-    }
-}
-
-/**
- * CLEANUP PLACEHOLDER DOCUMENTS
- * Call this after you've added real data to remove placeholders
- */
-async function cleanupPlaceholders() {
-    if (!database || !currentUser) return;
-    
-    try {
-        const userRef = database.collection('users').doc(currentUser.id);
-        const collections = [
-            'production', 'sales', 'calculator_history', 'rep_sales',
-            'transactions', 'entities', 'inventory', 'factory_history', 'returns'
-        ];
-        
-        const batch = database.batch();
-        
-        for (const collectionName of collections) {
-            const placeholderRef = userRef.collection(collectionName).doc('_placeholder_');
-            batch.delete(placeholderRef);
-        }
-        
-        await batch.commit();
-        console.log('✅ Placeholder documents removed');
-        
-    } catch (error) {
-        console.error('Placeholder cleanup error:', error);
-    }
-}
 // ========================================
 // FIRESTORE AUTO-INITIALIZATION FUNCTIONS
 // ========================================
@@ -9740,62 +9639,155 @@ function mergeDatasets(localArray, cloudArray) {
 // FIRESTORE DATA SANITIZATION
 // ============================================
 // Firestore has strict requirements - this function ensures all data is valid
-function sanitizeForFirestore(obj) {
+function sanitizeForFirestore(obj, depth = 0) {
+    // Prevent infinite recursion
+    if (depth > 20) {
+        console.warn('Sanitization depth limit reached');
+        return null;
+    }
+    
+    // Handle null and undefined
     if (obj === null || obj === undefined) {
         return null;
     }
     
+    // CRITICAL: Handle Date objects BEFORE checking typeof obj === 'object'
+    // This prevents Date objects from being processed as regular objects
+    if (obj instanceof Date) {
+        return obj.toISOString();
+    }
+    
     // Handle primitives
     if (typeof obj !== 'object') {
-        // Convert undefined to null
-        if (obj === undefined) return null;
-        // Ensure numbers are valid
+        // Numbers
         if (typeof obj === 'number') {
             if (isNaN(obj) || !isFinite(obj)) return 0;
             return obj;
         }
-        // Ensure strings are strings
-        if (typeof obj === 'string') return obj;
-        // Booleans are fine
-        if (typeof obj === 'boolean') return obj;
-        // Convert anything else to string
-        return String(obj);
+        // Strings - ensure they're actual strings
+        if (typeof obj === 'string') {
+            return obj;
+        }
+        // Booleans
+        if (typeof obj === 'boolean') {
+            return obj;
+        }
+        // Everything else - convert to string safely
+        try {
+            return String(obj);
+        } catch (e) {
+            console.warn('Failed to convert to string:', obj);
+            return null;
+        }
     }
     
     // Handle arrays
     if (Array.isArray(obj)) {
-        return obj.map(item => sanitizeForFirestore(item)).filter(item => item !== null);
+        const sanitizedArray = [];
+        for (let i = 0; i < obj.length; i++) {
+            const item = obj[i];
+            // Skip functions
+            if (typeof item === 'function') continue;
+            
+            const sanitized = sanitizeForFirestore(item, depth + 1);
+            // Only include non-null values
+            if (sanitized !== null && sanitized !== undefined) {
+                sanitizedArray.push(sanitized);
+            }
+        }
+        return sanitizedArray;
     }
     
     // Handle objects
     const sanitized = {};
-    for (const [key, value] of Object.entries(obj)) {
-        // Skip functions and undefined
-        if (typeof value === 'function' || value === undefined) {
-            continue;
+    
+    try {
+        // CRITICAL FIX: Use proper object iteration that doesn't rely on indexOf
+        for (const key in obj) {
+            if (!obj.hasOwnProperty(key)) continue;
+            
+            const value = obj[key];
+            
+            // Skip invalid keys
+            if (!key || typeof key !== 'string') {
+                console.warn('Invalid key detected:', key, typeof key);
+                continue;
+            }
+            
+            // Skip functions
+            if (typeof value === 'function') {
+                continue;
+            }
+            
+            // Clean the key - Firestore doesn't allow certain characters
+            // Must not contain . $ # [ ] /
+            let cleanKey = key;
+            // CRITICAL FIX: Ensure key is a string before using string methods
+            if (typeof key !== 'string') {
+                console.warn('Non-string key detected:', key, typeof key);
+                cleanKey = String(key);
+            }
+            // Now safely clean the key
+            cleanKey = cleanKey.replace(/[\.\$#\[\]\/\\]/g, '_');
+            
+            // Skip if key became empty after cleaning
+            if (!cleanKey) continue;
+            
+            // Special handling for 'id' field - must be string
+            if (cleanKey === 'id') {
+                if (value === null || value === undefined) {
+                    sanitized[cleanKey] = '';
+                } else {
+                    try {
+                        sanitized[cleanKey] = String(value);
+                    } catch (e) {
+                        sanitized[cleanKey] = '';
+                    }
+                }
+                continue;
+            }
+            
+            // Special handling for numeric fields
+            if (cleanKey === 'amount' || cleanKey === 'quantity' || cleanKey === 'price' || cleanKey === 'cost') {
+                const num = parseFloat(value);
+                sanitized[cleanKey] = (isNaN(num) || !isFinite(num)) ? 0 : num;
+                continue;
+            }
+            
+            // Handle timestamp fields
+            if (cleanKey === 'timestamp' || cleanKey === 'createdAt' || cleanKey === 'updatedAt') {
+                if (value instanceof Date) {
+                    sanitized[cleanKey] = value.toISOString();
+                } else if (typeof value === 'string' || typeof value === 'number') {
+                    sanitized[cleanKey] = value;
+                } else {
+                    sanitized[cleanKey] = new Date().toISOString();
+                }
+                continue;
+            }
+            
+            // Recursively sanitize nested values
+            const sanitizedValue = sanitizeForFirestore(value, depth + 1);
+            
+            // Only add non-null values
+            if (sanitizedValue !== null && sanitizedValue !== undefined) {
+                // For nested objects, skip empty objects
+                if (typeof sanitizedValue === 'object' && !Array.isArray(sanitizedValue)) {
+                    if (Object.keys(sanitizedValue).length > 0) {
+                        sanitized[cleanKey] = sanitizedValue;
+                    }
+                } else if (Array.isArray(sanitizedValue)) {
+                    // For arrays, skip empty arrays (unless it's intentionally empty)
+                    sanitized[cleanKey] = sanitizedValue;
+                } else {
+                    // Primitive values
+                    sanitized[cleanKey] = sanitizedValue;
+                }
+            }
         }
-        
-        // Ensure key is a valid string (no special chars)
-        const cleanKey = String(key).replace(/[$.[\]#\/]/g, '_');
-        
-        // CRITICAL: Ensure 'id' field is always a string
-        if (cleanKey === 'id') {
-            sanitized[cleanKey] = String(value);
-            continue;
-        }
-        
-        // CRITICAL: Ensure 'amount' field is always a valid number
-        if (cleanKey === 'amount') {
-            const num = parseFloat(value);
-            sanitized[cleanKey] = (isNaN(num) || !isFinite(num)) ? 0 : num;
-            continue;
-        }
-        
-        // Recursively sanitize
-        const sanitizedValue = sanitizeForFirestore(value);
-        if (sanitizedValue !== null) {
-            sanitized[cleanKey] = sanitizedValue;
-        }
+    } catch (e) {
+        console.error('Error sanitizing object:', e, obj);
+        return {};
     }
     
     return sanitized;
@@ -9874,11 +9866,27 @@ async function performOneClickSync(silent = false) {
         return;
     }
 
-    if (isSyncing) return;
+    if (isSyncing) {
+        console.warn('⚠️ Sync already in progress, skipping...');
+        return;
+    }
     isSyncing = true;
 
     const btn = document.getElementById('sync-btn');
     const originalText = btn ? btn.innerHTML : '';
+    
+    // CRITICAL FIX: Add timeout protection to prevent permanent freeze
+    const syncTimeout = setTimeout(() => {
+        console.error('❌ SYNC TIMEOUT - Resetting sync state');
+        isSyncing = false;
+        if (!silent) {
+            showToast("⚠️ Sync timeout - Please try again", "warning");
+            if (btn) {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }
+        }
+    }, 60000); // 60 second timeout
 
     try {
         if (!silent) {
@@ -9925,7 +9933,28 @@ async function performOneClickSync(silent = false) {
         };
 
         // --- FIRST DECLARATION (Incoming Data) ---
-        const settingsData = settingsSnap.exists ? settingsSnap.data() : {};
+        // CRITICAL FIX: Safely extract and validate settings data from Firestore
+        let settingsData = {};
+        try {
+            if (settingsSnap.exists) {
+                const rawData = settingsSnap.data();
+                // Ensure we have an actual object, not null or array
+                if (rawData && typeof rawData === 'object' && !Array.isArray(rawData)) {
+                    settingsData = rawData;
+                    console.log('✅ Settings loaded from Firestore');
+                } else {
+                    console.warn('⚠️ Invalid settings data structure from Firestore, using empty object');
+                    settingsData = {};
+                }
+            } else {
+                console.log('ℹ️ No settings document found in Firestore, will create new one');
+                settingsData = {};
+            }
+        } catch (settingsError) {
+            console.error('❌ Error reading settings from Firestore:', settingsError);
+            settingsData = {};
+        }
+        
         const now = new Date().toISOString();
 
         // MERGE DELETED RECORDS SAFEGUARDS
@@ -9948,14 +9977,95 @@ async function performOneClickSync(silent = false) {
 
 
         // Merge settings (Read from incoming settingsData)
-        if (settingsData.factory_default_formulas) factoryDefaultFormulas = settingsData.factory_default_formulas;
-        if (settingsData.factory_additional_costs) factoryAdditionalCosts = settingsData.factory_additional_costs;
-        if (settingsData.factory_cost_adjustment_factor) factoryCostAdjustmentFactor = settingsData.factory_cost_adjustment_factor;
-        if (settingsData.factory_sale_prices) factorySalePrices = settingsData.factory_sale_prices;
-        if (settingsData.factory_unit_tracking) factoryUnitTracking = settingsData.factory_unit_tracking;
-        if (settingsData.naswar_default_settings) defaultSettings = settingsData.naswar_default_settings;
+        // CRITICAL FIX: Wrap each setting merge in try-catch to prevent sync freeze
+        try {
+            if (settingsData.factory_default_formulas && typeof settingsData.factory_default_formulas === 'object') {
+                // Validate structure before assigning
+                const formulas = settingsData.factory_default_formulas;
+                if (('standard' in formulas) && ('asaan' in formulas)) {
+                    factoryDefaultFormulas = {
+                        standard: Array.isArray(formulas.standard) ? formulas.standard : [],
+                        asaan: Array.isArray(formulas.asaan) ? formulas.asaan : []
+                    };
+                    console.log('✅ Loaded factory_default_formulas from cloud');
+                } else {
+                    console.warn('⚠️ Invalid factory_default_formulas structure, keeping local version');
+                }
+            }
+        } catch (e) {
+            console.error('❌ Error loading factory_default_formulas:', e);
+        }
+        
+        try {
+            if (settingsData.factory_additional_costs && typeof settingsData.factory_additional_costs === 'object') {
+                const costs = settingsData.factory_additional_costs;
+                if (('standard' in costs) && ('asaan' in costs)) {
+                    factoryAdditionalCosts = {
+                        standard: parseFloat(costs.standard) || 0,
+                        asaan: parseFloat(costs.asaan) || 0
+                    };
+                    console.log('✅ Loaded factory_additional_costs from cloud');
+                } else {
+                    console.warn('⚠️ Invalid factory_additional_costs structure, keeping local version');
+                }
+            }
+        } catch (e) {
+            console.error('❌ Error loading factory_additional_costs:', e);
+        }
+        
+        try {
+            if (settingsData.factory_cost_adjustment_factor && typeof settingsData.factory_cost_adjustment_factor === 'object') {
+                const factor = settingsData.factory_cost_adjustment_factor;
+                if (('standard' in factor) && ('asaan' in factor)) {
+                    factoryCostAdjustmentFactor = {
+                        standard: parseFloat(factor.standard) || 1,
+                        asaan: parseFloat(factor.asaan) || 1
+                    };
+                    console.log('✅ Loaded factory_cost_adjustment_factor from cloud');
+                } else {
+                    console.warn('⚠️ Invalid factory_cost_adjustment_factor structure, keeping local version');
+                }
+            }
+        } catch (e) {
+            console.error('❌ Error loading factory_cost_adjustment_factor:', e);
+        }
+        
+        try {
+            if (settingsData.factory_sale_prices && typeof settingsData.factory_sale_prices === 'object') {
+                const prices = settingsData.factory_sale_prices;
+                if (('standard' in prices) && ('asaan' in prices)) {
+                    factorySalePrices = {
+                        standard: parseFloat(prices.standard) || 0,
+                        asaan: parseFloat(prices.asaan) || 0
+                    };
+                    console.log('✅ Loaded factory_sale_prices from cloud');
+                } else {
+                    console.warn('⚠️ Invalid factory_sale_prices structure, keeping local version');
+                }
+            }
+        } catch (e) {
+            console.error('❌ Error loading factory_sale_prices:', e);
+        }
+        
+        try {
+            if (settingsData.factory_unit_tracking && typeof settingsData.factory_unit_tracking === 'object') {
+                factoryUnitTracking = settingsData.factory_unit_tracking;
+                console.log('✅ Loaded factory_unit_tracking from cloud');
+            }
+        } catch (e) {
+            console.error('❌ Error loading factory_unit_tracking:', e);
+        }
+        
+        try {
+            if (settingsData.naswar_default_settings) {
+                defaultSettings = settingsData.naswar_default_settings;
+                console.log('✅ Loaded naswar_default_settings from cloud');
+            }
+        } catch (e) {
+            console.error('❌ Error loading naswar_default_settings:', e);
+        }
 
-        // SAVE LOCALLY
+        // SAVE LOCALLY (including factory settings)
         await Promise.all([
             idb.set('mfg_pro_pkr', db),
             idb.set('customer_sales', customerSales),
@@ -9966,6 +10076,12 @@ async function performOneClickSync(silent = false) {
             idb.set('payment_entities', paymentEntities),
             idb.set('payment_transactions', paymentTransactions),
             idb.set('stock_returns', stockReturns),
+            idb.set('factory_default_formulas', factoryDefaultFormulas),
+            idb.set('factory_additional_costs', factoryAdditionalCosts),
+            idb.set('factory_cost_adjustment_factor', factoryCostAdjustmentFactor),
+            idb.set('factory_sale_prices', factorySalePrices),
+            idb.set('factory_unit_tracking', factoryUnitTracking),
+            idb.set('naswar_default_settings', defaultSettings),
             idb.set('deleted_records', Array.from(deletedRecordIds)),
             idb.set('last_synced', now)
         ]);
@@ -9993,17 +10109,42 @@ async function performOneClickSync(silent = false) {
         };
 
         for (const [collectionName, dataArray] of Object.entries(collections)) {
+            // Validate collection name is a proper string
+            if (!collectionName || typeof collectionName !== 'string') {
+                console.error('[SYNC] Invalid collection name:', collectionName);
+                continue;
+            }
+            
             if (Array.isArray(dataArray)) {
+                console.log(`📝 Syncing ${collectionName}: ${dataArray.length} items`);
+                
                 for (const item of dataArray) {
                     if (item && item.id) {
                         try {
                             const currentBatch = getCurrentBatch();
                             
-                            // CRITICAL FIX: Convert ID to string (Firestore requirement)
-                            const docId = String(item.id);
+                            // CRITICAL FIX: Convert ID to string and validate (Firestore requirement)
+                            let docId = String(item.id);
+                            
+                            // Ensure docId is valid - Firestore doc IDs cannot contain / or be empty
+                            if (!docId || docId.includes('/')) {
+                                console.error(`[SYNC] Invalid document ID in ${collectionName}:`, docId);
+                                continue; // Skip this item
+                            }
                             
                             // CRITICAL FIX: Sanitize data before writing
                             const sanitizedItem = sanitizeForFirestore(item);
+                            
+                            // Validate sanitized item has content
+                            if (!sanitizedItem || typeof sanitizedItem !== 'object' || Object.keys(sanitizedItem).length === 0) {
+                                console.error(`[SYNC] Empty sanitized item in ${collectionName}:`, item.id);
+                                continue; // Skip empty items
+                            }
+                            
+                            // Ensure sanitizedItem.id is a string
+                            if (sanitizedItem.id && typeof sanitizedItem.id !== 'string') {
+                                sanitizedItem.id = String(sanitizedItem.id);
+                            }
                             
                             currentBatch.set(userRef.collection(collectionName).doc(docId), sanitizedItem);
                             operationCount++;
@@ -10019,20 +10160,62 @@ async function performOneClickSync(silent = false) {
         // Write Settings
         // --- FIX IS HERE: Renamed variable to settingsPayload ---
         const configBatch = getCurrentBatch();
+        
+        // Ensure factory settings have proper structure
+        // ROBUST VERSION: Handles data from Firestore that may have been manually edited
+        const ensureFactorySettings = (obj, defaultVal) => {
+            // Check if obj is null, undefined, or not an object
+            if (!obj || typeof obj !== 'object') {
+                console.warn('⚠️ Factory settings invalid, using default:', defaultVal);
+                return defaultVal;
+            }
+            
+            // Check if it's an array (shouldn't be)
+            if (Array.isArray(obj)) {
+                console.warn('⚠️ Factory settings is array, using default:', defaultVal);
+                return defaultVal;
+            }
+            
+            // CRITICAL FIX: Use 'in' operator instead of hasOwnProperty for Firestore objects
+            // Firestore objects may not have the standard Object prototype
+            const hasStandard = ('standard' in obj) && obj.standard !== undefined;
+            const hasAsaan = ('asaan' in obj) && obj.asaan !== undefined;
+            
+            if (!hasStandard || !hasAsaan) {
+                console.warn('⚠️ Factory settings missing standard/asaan keys, using default:', defaultVal);
+                console.warn('   Received:', obj);
+                return defaultVal;
+            }
+            
+            // Return a clean copy to avoid prototype issues
+            return {
+                standard: obj.standard,
+                asaan: obj.asaan
+            };
+        };
+        
         const settingsPayload = {
-            factory_default_formulas: factoryDefaultFormulas,
-            factory_additional_costs: factoryAdditionalCosts,
-            factory_cost_adjustment_factor: factoryCostAdjustmentFactor,
-            factory_sale_prices: factorySalePrices,
-            factory_unit_tracking: factoryUnitTracking,
-            naswar_default_settings: defaultSettings,
+            factory_default_formulas: ensureFactorySettings(factoryDefaultFormulas, { standard: [], asaan: [] }),
+            factory_additional_costs: ensureFactorySettings(factoryAdditionalCosts, { standard: 0, asaan: 0 }),
+            factory_cost_adjustment_factor: ensureFactorySettings(factoryCostAdjustmentFactor, { standard: 1, asaan: 1 }),
+            factory_sale_prices: ensureFactorySettings(factorySalePrices, { standard: 0, asaan: 0 }),
+            factory_unit_tracking: ensureFactorySettings(factoryUnitTracking, { 
+                standard: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] },
+                asaan: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] }
+            }),
+            naswar_default_settings: defaultSettings || {},
             deleted_records: Array.from(deletedRecordIds),
-            appMode: appMode,
-            repProfile: currentRepProfile,
-            adminPin: adminPin,
+            appMode: appMode || 'admin',
+            repProfile: currentRepProfile || {},
+            adminPin: adminPin || '',
             last_synced: now
         };
+        
+        console.log('🔧 [SYNC] Factory formulas before sanitization:', JSON.stringify(settingsPayload.factory_default_formulas, null, 2));
+        
         const sanitizedSettings = sanitizeForFirestore(settingsPayload);
+        
+        console.log('🔧 [SYNC] Factory formulas after sanitization:', JSON.stringify(sanitizedSettings.factory_default_formulas, null, 2));
         configBatch.set(userRef.collection('settings').doc('config'), sanitizedSettings, { merge: true });
 
         await Promise.all(batches.map(b => b.commit()));
@@ -10046,8 +10229,14 @@ async function performOneClickSync(silent = false) {
 
     } catch (e) {
         console.error("Sync Error:", e);
+        console.error("Error stack:", e.stack);
         if (!silent) showToast("❌ Sync Failed: " + e.message, "error");
     } finally {
+        // CRITICAL FIX: Clear the timeout to prevent it from firing after successful sync
+        if (typeof syncTimeout !== 'undefined') {
+            clearTimeout(syncTimeout);
+        }
+        
         isSyncing = false;
         if (!silent && btn) {
             btn.innerHTML = originalText;
@@ -10064,11 +10253,27 @@ async function performOneClickSync(silent = false) {
 // This takes your LOCAL data and overwrites the CLOUD data.
 async function pushDataToCloud(silent = false) {
     if (!database || !currentUser) return;
-    if (isSyncing) return; 
+    if (isSyncing) {
+        console.warn('⚠️ Sync/Push already in progress, skipping...');
+        return;
+    }
     isSyncing = true;
 
     let btn = null;
     let originalText = '';
+    
+    // CRITICAL FIX: Add timeout protection to prevent permanent freeze
+    const pushTimeout = setTimeout(() => {
+        console.error('❌ PUSH TIMEOUT - Resetting sync state');
+        isSyncing = false;
+        if (!silent) {
+            showToast("⚠️ Upload timeout - Please try again", "warning");
+            if (btn) {
+                btn.innerText = originalText;
+                btn.disabled = false;
+            }
+        }
+    }, 60000); // 60 second timeout
 
     try {
         if (!silent) {
@@ -10114,18 +10319,44 @@ async function pushDataToCloud(silent = false) {
         };
 
         for (const [collectionName, dataArray] of Object.entries(collections)) {
+            // Validate collection name is a proper string
+            if (!collectionName || typeof collectionName !== 'string') {
+                console.error('[PUSH] Invalid collection name:', collectionName);
+                continue;
+            }
+            
             if (Array.isArray(dataArray)) {
+                console.log(`📝 Processing ${collectionName}: ${dataArray.length} items`);
+                
                 for (const item of dataArray) {
                     if (item && item.id) {
                         try {
                             const batch = getCurrentBatch();
                             
-                            // CRITICAL FIX: Convert ID to string (Firestore requirement)
-                            const docId = String(item.id);
+                            // CRITICAL FIX: Convert ID to string and validate (Firestore requirement)
+                            let docId = String(item.id);
+                            
+                            // Ensure docId is valid - Firestore doc IDs cannot contain / or be empty
+                            if (!docId || docId.includes('/')) {
+                                console.error(`[PUSH] Invalid document ID in ${collectionName}:`, docId);
+                                continue; // Skip this item
+                            }
+                            
                             const docRef = userRef.collection(collectionName).doc(docId);
                             
                             // CRITICAL FIX: Sanitize data before writing
                             const sanitizedItem = sanitizeForFirestore(item);
+                            
+                            // Validate sanitized item has content
+                            if (!sanitizedItem || typeof sanitizedItem !== 'object' || Object.keys(sanitizedItem).length === 0) {
+                                console.error(`[PUSH] Empty sanitized item in ${collectionName}:`, item.id);
+                                continue; // Skip empty items
+                            }
+                            
+                            // Ensure sanitizedItem.id is a string
+                            if (sanitizedItem.id && typeof sanitizedItem.id !== 'string') {
+                                sanitizedItem.id = String(sanitizedItem.id);
+                            }
                             
                             batch.set(docRef, sanitizedItem);
                             operationCount++;
@@ -10142,20 +10373,83 @@ async function pushDataToCloud(silent = false) {
         const now = new Date().toISOString();
         const batch = getCurrentBatch();
         const settingsRef = userRef.collection('settings').doc('config');
+        
+        // Ensure factory settings have proper structure
+        // ROBUST VERSION: Handles data from Firestore that may have been manually edited
+        const ensureFactorySettings = (obj, defaultVal) => {
+            // Check if obj is null, undefined, or not an object
+            if (!obj || typeof obj !== 'object') {
+                console.warn('⚠️ Factory settings invalid, using default:', defaultVal);
+                return defaultVal;
+            }
+            
+            // Check if it's an array (shouldn't be)
+            if (Array.isArray(obj)) {
+                console.warn('⚠️ Factory settings is array, using default:', defaultVal);
+                return defaultVal;
+            }
+            
+            // CRITICAL FIX: Use 'in' operator instead of hasOwnProperty for Firestore objects
+            // Firestore objects may not have the standard Object prototype
+            const hasStandard = ('standard' in obj) && obj.standard !== undefined;
+            const hasAsaan = ('asaan' in obj) && obj.asaan !== undefined;
+            
+            if (!hasStandard || !hasAsaan) {
+                console.warn('⚠️ Factory settings missing standard/asaan keys, using default:', defaultVal);
+                console.warn('   Received:', obj);
+                return defaultVal;
+            }
+            
+            // Return a clean copy to avoid prototype issues
+            return {
+                standard: obj.standard,
+                asaan: obj.asaan
+            };
+        };
+        
         const settingsData = {
-            factory_default_formulas: factoryDefaultFormulas,
-            factory_additional_costs: factoryAdditionalCosts,
-            factory_cost_adjustment_factor: factoryCostAdjustmentFactor,
-            factory_sale_prices: factorySalePrices,
-            factory_unit_tracking: factoryUnitTracking,
-            naswar_default_settings: defaultSettings,
+            factory_default_formulas: ensureFactorySettings(factoryDefaultFormulas, { standard: [], asaan: [] }),
+            factory_additional_costs: ensureFactorySettings(factoryAdditionalCosts, { standard: 0, asaan: 0 }),
+            factory_cost_adjustment_factor: ensureFactorySettings(factoryCostAdjustmentFactor, { standard: 1, asaan: 1 }),
+            factory_sale_prices: ensureFactorySettings(factorySalePrices, { standard: 0, asaan: 0 }),
+            factory_unit_tracking: ensureFactorySettings(factoryUnitTracking, { 
+                standard: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] },
+                asaan: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] }
+            }),
+            naswar_default_settings: defaultSettings || {},
             deleted_records: Array.from(deletedRecordIds),
-            appMode: appMode,
-            repProfile: currentRepProfile,
-            adminPin: adminPin,
+            appMode: appMode || 'admin',
+            repProfile: currentRepProfile || {},
+            adminPin: adminPin || '',
             last_synced: now
         };
+        
+        // Sanitize and validate before upload
+        console.log('📦 Sanitizing settings data...');
+        console.log('📝 Factory formulas before sanitization:', JSON.stringify(settingsData.factory_default_formulas, null, 2));
+        console.log('📝 Additional costs before sanitization:', JSON.stringify(settingsData.factory_additional_costs, null, 2));
+        console.log('📝 Sale prices before sanitization:', JSON.stringify(settingsData.factory_sale_prices, null, 2));
+        console.log('📝 Cost adjustment factor before sanitization:', JSON.stringify(settingsData.factory_cost_adjustment_factor, null, 2));
+        
         const sanitizedSettings = sanitizeForFirestore(settingsData);
+        
+        console.log('✅ Settings sanitized');
+        console.log('📝 Factory formulas after sanitization:', JSON.stringify(sanitizedSettings.factory_default_formulas, null, 2));
+        console.log('📝 Additional costs after sanitization:', JSON.stringify(sanitizedSettings.factory_additional_costs, null, 2));
+        console.log('📝 Sale prices after sanitization:', JSON.stringify(sanitizedSettings.factory_sale_prices, null, 2));
+        console.log('📝 Cost adjustment factor after sanitization:', JSON.stringify(sanitizedSettings.factory_cost_adjustment_factor, null, 2));
+        
+        // Double-check that critical fields are present
+        if (!sanitizedSettings.factory_default_formulas) {
+            sanitizedSettings.factory_default_formulas = { standard: [], asaan: [] };
+        }
+        if (!sanitizedSettings.factory_additional_costs) {
+            sanitizedSettings.factory_additional_costs = { standard: 0, asaan: 0 };
+        }
+        if (!sanitizedSettings.factory_cost_adjustment_factor) {
+            sanitizedSettings.factory_cost_adjustment_factor = { standard: 1, asaan: 1 };
+        }
+        
         batch.set(settingsRef, sanitizedSettings, { merge: true });
 
         // Push last batch if it has operations
@@ -10167,7 +10461,27 @@ async function pushDataToCloud(silent = false) {
         await idb.set('last_synced', now); 
 
         // Commit all batches
-        await Promise.all(batches.map(b => b.commit()));
+        console.log(`📤 Committing ${batches.length} batch(es) to Firestore...`);
+        try {
+            await Promise.all(batches.map(b => b.commit()));
+            console.log('✅ All batches committed successfully');
+            console.log('✅ Factory formulas uploaded successfully to Firestore');
+        } catch (batchError) {
+            console.error('❌ Batch commit error:', batchError);
+            console.error('❌ Error details:', {
+                message: batchError.message,
+                code: batchError.code,
+                stack: batchError.stack
+            });
+            
+            // Check if it's a sanitization issue
+            if (batchError.message && (batchError.message.includes('indexOf') || batchError.message.includes('is not a function'))) {
+                console.error('🔴 SANITIZATION ERROR DETECTED - Data type mismatch');
+                console.error('🔴 Settings data that failed:', settingsData);
+            }
+            
+            throw batchError;
+        }
         
         if (!silent) {
             showToast('✅ Cloud Backup Complete', 'success');
@@ -10178,8 +10492,14 @@ async function pushDataToCloud(silent = false) {
 
     } catch (error) {
         console.error('Backup Error:', error);
+        console.error('Error stack:', error.stack);
         if (!silent) showToast(`❌ Backup failed: ${error.message}`, 'error');
     } finally {
+        // CRITICAL FIX: Clear the timeout to prevent it from firing after successful push
+        if (typeof pushTimeout !== 'undefined') {
+            clearTimeout(pushTimeout);
+        }
+        
         isSyncing = false;
         if (btn) {
             btn.innerText = originalText || 'Backup to Cloud';
@@ -10252,12 +10572,31 @@ async function pullDataFromCloud(silent = false) {
         // Restore settings from config document
         if (settingsSnap.exists) {
             const cloud = settingsSnap.data();
-            factoryDefaultFormulas = cloud.factory_default_formulas || factoryDefaultFormulas;
-            factoryAdditionalCosts = cloud.factory_additional_costs || factoryAdditionalCosts;
-            factoryCostAdjustmentFactor = cloud.factory_cost_adjustment_factor || factoryCostAdjustmentFactor;
-            factorySalePrices = cloud.factory_sale_prices || factorySalePrices;
-            factoryUnitTracking = cloud.factory_unit_tracking || factoryUnitTracking;
-            defaultSettings = cloud.naswar_default_settings || defaultSettings;
+            
+            // Restore factory settings with validation
+            if (cloud.factory_default_formulas && typeof cloud.factory_default_formulas === 'object') {
+                factoryDefaultFormulas = cloud.factory_default_formulas;
+            }
+            if (cloud.factory_additional_costs && typeof cloud.factory_additional_costs === 'object') {
+                factoryAdditionalCosts = cloud.factory_additional_costs;
+            }
+            if (cloud.factory_cost_adjustment_factor && typeof cloud.factory_cost_adjustment_factor === 'object') {
+                factoryCostAdjustmentFactor = cloud.factory_cost_adjustment_factor;
+            }
+            if (cloud.factory_sale_prices && typeof cloud.factory_sale_prices === 'object') {
+                factorySalePrices = cloud.factory_sale_prices;
+            }
+            if (cloud.factory_unit_tracking && typeof cloud.factory_unit_tracking === 'object') {
+                factoryUnitTracking = cloud.factory_unit_tracking;
+            }
+            if (cloud.naswar_default_settings) {
+                defaultSettings = cloud.naswar_default_settings;
+            }
+            
+            // Restore app mode and profile if they exist
+            if (cloud.appMode) appMode = cloud.appMode;
+            if (cloud.repProfile) currentRepProfile = cloud.repProfile;
+            if (cloud.adminPin) adminPin = cloud.adminPin;
             
             // Restore Deleted Records Set
             if (cloud.deleted_records && Array.isArray(cloud.deleted_records)) {
@@ -10367,19 +10706,13 @@ function clearAutoBackup() {
     }
 }
 
-
-function clearAutoBackup() {
-    if (autoSaveTimer) {
-        clearInterval(autoSaveTimer);
-        autoSaveTimer = null;
-    }
-}
-
-// --- HELPER: WAKE UP DB ---
+// --- HELPER: WAKE UP DB (Firestore Ping) ---
 async function wakeUpDatabase() {
     if (!firebaseDB || !currentUser) return false;
     try {
-        const wakeUpPromise = firebaseDB.ref(`users/${currentUser.id}`).once("value");
+        // Firestore: read the user settings/config doc as a lightweight connectivity ping
+        const wakeUpPromise = firebaseDB.collection('users').doc(currentUser.id)
+            .collection('settings').doc('config').get();
         const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 45000));
         await Promise.race([wakeUpPromise, timeoutPromise]);
         dbWakeUpAttempted = true;
@@ -17377,6 +17710,811 @@ if (document.readyState === 'loading') {
 }
 
 
+
+
+
+// ==========================================
+// FIRESTORE ENHANCEMENT MODULE
+// Enhances existing Firebase/Firestore system
+// ==========================================
+
+console.log('🔄 Loading Firestore enhancement module...');
+
+// ==========================================
+// ENHANCED DATA STRUCTURE MAPPING
+// ==========================================
+
+// ---------------------------------------------------------------------------
+// AUTHORITATIVE FIRESTORE SNAPSHOT DATA-STRUCTURE MAP
+// ---------------------------------------------------------------------------
+// Every local IndexedDB key is declared here exactly once.
+// -  "collection" entries  → each array item becomes its own Firestore document
+//    inside  users/{uid}/{firestoreCollection}/{docId}
+// -  "settings_config"     → all object/scalar keys are stored as fields inside
+//    the single document  users/{uid}/settings/config
+// -  "local_only" entries  → never written to Firestore; used only on-device
+// ---------------------------------------------------------------------------
+
+// 1) Collections: each array item → one Firestore document
+const FIRESTORE_ENHANCED_SCHEMA = {
+    production: {
+        localKey: 'mfg_pro_pkr',
+        firestoreCollection: 'production',
+        localVariable: 'db',
+        type: 'array',
+        description: 'Manufacturing / production records',
+        fields: ['date', 'netWeight', 'costPrice', 'salePrice', 'profit', 'id', 'timestamp']
+    },
+    calculator_history: {
+        localKey: 'noman_history',
+        firestoreCollection: 'calculator_history',
+        localVariable: 'salesHistory',
+        type: 'array',
+        description: 'Calculator history – totals, revenue, returns, cash/credit splits',
+        fields: ['totalSold', 'revenue', 'returns', 'cash', 'credit', 'seller', 'date', 'id', 'timestamp']
+    },
+    sales: {
+        localKey: 'customer_sales',
+        firestoreCollection: 'sales',
+        localVariable: 'customerSales',
+        type: 'array',
+        description: 'Individual customer sales transactions',
+        fields: ['customerName', 'quantity', 'paymentType', 'supplyStore', 'date', 'phone', 'id', 'timestamp']
+    },
+    rep_sales: {
+        localKey: 'rep_sales',
+        firestoreCollection: 'rep_sales',
+        localVariable: 'repSales',
+        type: 'array',
+        description: 'Rep-mode sales with GPS coordinates',
+        fields: ['customerName', 'quantity', 'paymentType', 'salesRep', 'latitude', 'longitude', 'date', 'phone', 'id', 'timestamp']
+    },
+    inventory: {
+        localKey: 'factory_inventory_data',
+        firestoreCollection: 'inventory',
+        localVariable: 'factoryInventoryData',
+        type: 'array',
+        description: 'Raw-material inventory (name, qty, cost, value)',
+        fields: ['materialName', 'quantityOnHand', 'unitCost', 'totalValue', 'id', 'timestamp']
+    },
+    factory_history: {
+        localKey: 'factory_production_history',
+        firestoreCollection: 'factory_history',
+        localVariable: 'factoryProductionHistory',
+        type: 'array',
+        description: 'Factory formula production-batch history',
+        fields: ['unitsProduced', 'materialCosts', 'productType', 'date', 'id', 'timestamp']
+    },
+    returns: {
+        localKey: 'stock_returns',
+        firestoreCollection: 'returns',
+        localVariable: 'stockReturns',
+        type: 'array',
+        description: 'Stock-return logs from sellers',
+        fields: ['seller', 'quantity', 'reason', 'date', 'id', 'timestamp']
+    },
+    entities: {
+        localKey: 'payment_entities',
+        firestoreCollection: 'entities',
+        localVariable: 'paymentEntities',
+        type: 'array',
+        description: 'Registry of customers & suppliers (Payee / Payor)',
+        fields: ['name', 'phone', 'entityType', 'id', 'timestamp']
+    },
+    transactions: {
+        localKey: 'payment_transactions',
+        firestoreCollection: 'transactions',
+        localVariable: 'paymentTransactions',
+        type: 'array',
+        description: 'Cash-in / cash-out ledger linked to entities',
+        fields: ['entityId', 'amount', 'type', 'description', 'date', 'id', 'timestamp']
+    }
+};
+
+// 2) Settings / config fields  →  all live inside a SINGLE Firestore document:
+//       users/{uid}/settings/config
+//    They are read & written together as one object in every sync batch.
+const FIRESTORE_SETTINGS_SCHEMA = {
+    factory_default_formulas: {
+        localKey: 'factory_default_formulas',
+        localVariable: 'factoryDefaultFormulas',
+        type: 'object',
+        defaultValue: { standard: [], asaan: [] },
+        description: 'Recipe / formula definitions (Standard vs Asaan)'
+    },
+    factory_additional_costs: {
+        localKey: 'factory_additional_costs',
+        localVariable: 'factoryAdditionalCosts',
+        type: 'object',
+        defaultValue: { standard: 0, asaan: 0 },
+        description: 'Overhead / extra costs per unit'
+    },
+    factory_sale_prices: {
+        localKey: 'factory_sale_prices',
+        localVariable: 'factorySalePrices',
+        type: 'object',
+        defaultValue: { standard: 0, asaan: 0 },
+        description: 'Standard selling price per kg/unit per store type'
+    },
+    factory_cost_adjustment_factor: {
+        localKey: 'factory_cost_adjustment_factor',
+        localVariable: 'factoryCostAdjustmentFactor',
+        type: 'object',
+        defaultValue: { standard: 1, asaan: 1 },
+        description: 'Cost-price multiplier for reporting'
+    },
+    factory_unit_tracking: {
+        localKey: 'factory_unit_tracking',
+        localVariable: 'factoryUnitTracking',
+        type: 'object',
+        defaultValue: {
+            standard: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] },
+            asaan:    { produced: 0, consumed: 0, available: 0, unitCostHistory: [] }
+        },
+        description: 'Unit lifecycle: produced → consumed → available'
+    },
+    naswar_default_settings: {
+        localKey: 'naswar_default_settings',
+        localVariable: 'defaultSettings',
+        type: 'object',
+        defaultValue: {},
+        description: 'General app default-settings object'
+    },
+    appMode: {
+        localKey: 'appMode',
+        localVariable: 'appMode',
+        type: 'string',
+        defaultValue: 'admin',
+        description: 'Current operating mode: admin | rep'
+    },
+    repProfile: {
+        localKey: 'repProfile',
+        localVariable: 'currentRepProfile',
+        type: 'string',
+        defaultValue: 'NORAN SHAH',
+        description: 'Active sales-representative profile name'
+    },
+    adminPin: {
+        localKey: 'adminPin',
+        localVariable: 'adminPin',
+        type: 'string',
+        defaultValue: '1234',
+        description: '4-digit PIN for Admin-mode unlock'
+    },
+    deleted_records: {
+        localKey: 'deleted_records',
+        localVariable: 'deletedRecordIds',
+        type: 'set_as_array',
+        defaultValue: [],
+        description: 'Tombstone IDs – prevents deleted records from re-appearing on sync'
+    },
+    last_synced: {
+        localKey: 'last_synced',
+        localVariable: null,
+        type: 'string_iso_date',
+        defaultValue: null,
+        description: 'ISO timestamp of the last successful cloud sync'
+    }
+};
+
+// 3) Local-only keys  →  written to IndexedDB only; NEVER sent to Firestore
+const FIRESTORE_LOCAL_ONLY_KEYS = {
+    theme: {
+        localKey: 'theme',
+        localVariable: null,
+        type: 'string',
+        defaultValue: 'dark',
+        description: 'UI theme preference: light | dark'
+    },
+    bio_enabled: {
+        localKey: 'bio_enabled',
+        localVariable: null,
+        type: 'boolean_string',
+        defaultValue: 'false',
+        description: 'Biometric security-lock flag'
+    },
+    bio_cred_id: {
+        localKey: 'bio_cred_id',
+        localVariable: null,
+        type: 'string',
+        defaultValue: '',
+        description: 'WebAuthn biometric credential ID'
+    }
+};
+
+// ==========================================
+// ENHANCED FIRESTORE MANAGER
+// ==========================================
+
+class EnhancedFirestoreManager {
+    constructor() {
+        this.isEnhancedSyncing = false;
+        this.realtimeListeners = new Map();
+    }
+
+    /**
+     * Check if Firebase is ready (uses existing system)
+     */
+    isFirebaseReady() {
+        return typeof database !== 'undefined' && 
+               database !== null && 
+               typeof currentUser !== 'undefined' && 
+               currentUser !== null &&
+               currentUser.id !== 'default_user';
+    }
+
+    /**
+     * Get user reference (uses existing user-based structure)
+     */
+    getUserRef() {
+        if (!this.isFirebaseReady()) {
+            throw new Error('Firebase not ready or user not logged in');
+        }
+        return database.collection('users').doc(currentUser.id);
+    }
+
+    /**
+     * Enhanced initialization - works with existing structure
+     */
+    async initializeEnhancedStructure(silent = false) {
+        if (!this.isFirebaseReady()) {
+            console.log('⚠️ Cannot initialize: User not logged in');
+            return false;
+        }
+
+        try {
+            if (!silent) console.log('🔧 Enhancing Firestore structure...');
+            
+            const userRef = this.getUserRef();
+            
+            // Verify all collections exist
+            const collections = Object.values(FIRESTORE_ENHANCED_SCHEMA);
+            
+            for (const schema of collections) {
+                if (typeof idb === 'undefined') continue;
+                
+                const localData = await idb.get(schema.localKey) || [];
+                
+                if (Array.isArray(localData) && localData.length > 0) {
+                    // Collection has local data - ensure it exists in Firestore
+                    const collectionRef = userRef.collection(schema.firestoreCollection);
+                    const snapshot = await collectionRef.limit(1).get();
+                    
+                    if (snapshot.empty) {
+                        console.log(`📝 Creating ${schema.firestoreCollection} collection...`);
+                        // Add first document to create collection
+                        if (localData[0] && localData[0].id) {
+                            await collectionRef.doc(String(localData[0].id)).set(
+                                sanitizeForFirestore(localData[0])
+                            );
+                        }
+                    }
+                }
+            }
+            
+            // --- Ensure settings/config document exists with all schema-defined defaults ---
+            const settingsRef = userRef.collection('settings').doc('config');
+            const settingsSnap = await settingsRef.get();
+
+            if (!settingsSnap.exists) {
+                // Build the default settings payload from FIRESTORE_SETTINGS_SCHEMA
+                const defaults = {};
+                for (const [name, schema] of Object.entries(FIRESTORE_SETTINGS_SCHEMA)) {
+                    defaults[name] = schema.defaultValue;
+                }
+                defaults.initialized_at = new Date().toISOString();
+                defaults.last_synced    = new Date().toISOString();
+                defaults.version        = '1.0.0';
+
+                await settingsRef.set(sanitizeForFirestore(defaults));
+                console.log('📝 Created settings/config with all FIRESTORE_SETTINGS_SCHEMA defaults');
+            } else {
+                // Patch any missing fields into the existing doc (non-destructive)
+                const existing = settingsSnap.data();
+                const patch = {};
+                let needsPatch = false;
+
+                for (const [name, schema] of Object.entries(FIRESTORE_SETTINGS_SCHEMA)) {
+                    if (existing[name] === undefined || existing[name] === null) {
+                        patch[name] = schema.defaultValue;
+                        needsPatch = true;
+                    }
+                }
+
+                if (needsPatch) {
+                    await settingsRef.update(sanitizeForFirestore(patch));
+                    console.log('🔧 Patched missing settings/config fields:', Object.keys(patch));
+                }
+            }
+
+            console.log('✅ Enhanced structure verified');
+            return true;
+            
+        } catch (error) {
+            console.error('❌ Enhanced initialization error:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Enhanced sync - adds additional validation and logging
+     */
+    async performEnhancedSync(silent = false) {
+        if (this.isEnhancedSyncing) {
+            console.log('⚠️ Enhanced sync already in progress');
+            return;
+        }
+
+        if (!this.isFirebaseReady()) {
+            if (!silent) {
+                console.log('⚠️ Please log in to use enhanced sync');
+                if (typeof showToast === 'function') {
+                    showToast('Please log in first', 'warning');
+                }
+            }
+            return;
+        }
+
+        this.isEnhancedSyncing = true;
+
+        try {
+            if (!silent) {
+                console.log('🔄 Starting enhanced sync...');
+                if (typeof showToast === 'function') {
+                    showToast('🔄 Enhanced sync in progress...', 'info');
+                }
+            }
+
+            // Use existing sync function with enhancements
+            if (typeof performOneClickSync === 'function') {
+                await performOneClickSync(silent);
+            }
+
+            // Add enhanced logging
+            const stats = await this.getSyncStats();
+            console.log('📊 Sync Statistics:', stats);
+
+            if (!silent && typeof showToast === 'function') {
+                showToast(`✅ Synced ${stats.totalRecords} records`, 'success');
+            }
+
+        } catch (error) {
+            console.error('❌ Enhanced sync error:', error);
+            if (!silent && typeof showToast === 'function') {
+                showToast('❌ Sync error: ' + error.message, 'error');
+            }
+        } finally {
+            this.isEnhancedSyncing = false;
+        }
+    }
+
+    /**
+     * Get sync statistics
+     */
+    async getSyncStats() {
+        const stats = {
+            totalRecords: 0,
+            collections: {},
+            lastSynced: null
+        };
+
+        try {
+            if (typeof idb === 'undefined') return stats;
+
+            for (const [name, schema] of Object.entries(FIRESTORE_ENHANCED_SCHEMA)) {
+                const data = await idb.get(schema.localKey) || [];
+                const count = Array.isArray(data) ? data.length : 0;
+                stats.collections[name] = count;
+                stats.totalRecords += count;
+            }
+
+            stats.lastSynced = await idb.get('last_synced');
+
+        } catch (error) {
+            console.error('Error getting sync stats:', error);
+        }
+
+        return stats;
+    }
+
+    /**
+     * Setup enhanced realtime listeners
+     */
+    setupEnhancedRealtimeListeners() {
+        if (!this.isFirebaseReady()) {
+            console.log('⚠️ Cannot setup listeners: User not logged in');
+            return;
+        }
+
+        try {
+            const userRef = this.getUserRef();
+
+            Object.values(FIRESTORE_ENHANCED_SCHEMA).forEach(schema => {
+                if (this.realtimeListeners.has(schema.firestoreCollection)) {
+                    return; // Already listening
+                }
+
+                const collectionRef = userRef.collection(schema.firestoreCollection);
+                
+                const unsubscribe = collectionRef.onSnapshot(
+                    async (snapshot) => {
+                        console.log(`🔔 Realtime update: ${schema.firestoreCollection}`);
+                        
+                        if (typeof idb === 'undefined') return;
+
+                        snapshot.docChanges().forEach(async (change) => {
+                            const data = { id: change.doc.id, ...change.doc.data() };
+                            const localData = await idb.get(schema.localKey) || [];
+
+                            if (change.type === 'added' || change.type === 'modified') {
+                                const index = localData.findIndex(item => item.id === data.id);
+                                if (index >= 0) {
+                                    localData[index] = data;
+                                } else {
+                                    localData.push(data);
+                                }
+                                await idb.set(schema.localKey, localData);
+                            } else if (change.type === 'removed') {
+                                const filtered = localData.filter(item => item.id !== data.id);
+                                await idb.set(schema.localKey, filtered);
+                            }
+
+                            // Refresh UI if function exists
+                            if (typeof refreshAllDisplays === 'function') {
+                                refreshAllDisplays();
+                            }
+                        });
+                    },
+                    (error) => {
+                        console.error(`❌ Listener error for ${schema.firestoreCollection}:`, error);
+                    }
+                );
+
+                this.realtimeListeners.set(schema.firestoreCollection, unsubscribe);
+                console.log(`✅ Enhanced listener for ${schema.firestoreCollection}`);
+            });
+
+            console.log('✅ All enhanced realtime listeners activated');
+
+        } catch (error) {
+            console.error('❌ Error setting up enhanced listeners:', error);
+        }
+    }
+
+    /**
+     * Remove all enhanced listeners
+     */
+    removeEnhancedListeners() {
+        this.realtimeListeners.forEach((unsubscribe, name) => {
+            unsubscribe();
+            console.log(`🔇 Removed listener: ${name}`);
+        });
+        this.realtimeListeners.clear();
+        console.log('🔇 All enhanced listeners removed');
+    }
+
+    /**
+     * Add a record with enhanced validation
+     */
+    async addRecordEnhanced(collectionName, data) {
+        if (!this.isFirebaseReady()) {
+            throw new Error('User not logged in');
+        }
+
+        try {
+            const schema = FIRESTORE_ENHANCED_SCHEMA[collectionName];
+            if (!schema) {
+                throw new Error(`Unknown collection: ${collectionName}`);
+            }
+
+            const userRef = this.getUserRef();
+
+            // Generate ID if not provided
+            if (!data.id) {
+                data.id = userRef.collection(schema.firestoreCollection).doc().id;
+            }
+
+            // Add timestamp
+            data.timestamp = new Date().toISOString();
+
+            // Sanitize and add to Firestore
+            const sanitized = sanitizeForFirestore(data);
+            await userRef.collection(schema.firestoreCollection).doc(String(data.id)).set(sanitized);
+
+            // Add to local storage
+            if (typeof idb !== 'undefined') {
+                const localData = await idb.get(schema.localKey) || [];
+                localData.push(data);
+                await idb.set(schema.localKey, localData);
+            }
+
+            console.log(`✅ Added record to ${collectionName}`);
+            return data;
+
+        } catch (error) {
+            console.error('❌ Error adding record:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Update a record with enhanced validation
+     */
+    async updateRecordEnhanced(collectionName, recordId, updates) {
+        if (!this.isFirebaseReady()) {
+            throw new Error('User not logged in');
+        }
+
+        try {
+            const schema = FIRESTORE_ENHANCED_SCHEMA[collectionName];
+            if (!schema) {
+                throw new Error(`Unknown collection: ${collectionName}`);
+            }
+
+            const userRef = this.getUserRef();
+
+            // Add timestamp
+            updates.timestamp = new Date().toISOString();
+
+            // Update Firestore
+            const sanitized = sanitizeForFirestore(updates);
+            await userRef.collection(schema.firestoreCollection).doc(String(recordId)).update(sanitized);
+
+            // Update local storage
+            if (typeof idb !== 'undefined') {
+                const localData = await idb.get(schema.localKey) || [];
+                const index = localData.findIndex(item => item.id === recordId);
+                
+                if (index >= 0) {
+                    localData[index] = { ...localData[index], ...updates };
+                    await idb.set(schema.localKey, localData);
+                }
+            }
+
+            console.log(`✅ Updated record in ${collectionName}`);
+            return true;
+
+        } catch (error) {
+            console.error('❌ Error updating record:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Delete a record with enhanced validation
+     */
+    async deleteRecordEnhanced(collectionName, recordId) {
+        if (!this.isFirebaseReady()) {
+            throw new Error('User not logged in');
+        }
+
+        try {
+            const schema = FIRESTORE_ENHANCED_SCHEMA[collectionName];
+            if (!schema) {
+                throw new Error(`Unknown collection: ${collectionName}`);
+            }
+
+            const userRef = this.getUserRef();
+
+            // Delete from Firestore
+            await userRef.collection(schema.firestoreCollection).doc(String(recordId)).delete();
+
+            // Delete from local storage
+            if (typeof idb !== 'undefined') {
+                const localData = await idb.get(schema.localKey) || [];
+                const filtered = localData.filter(item => item.id !== recordId);
+                await idb.set(schema.localKey, filtered);
+
+                // Add to deleted records
+                if (typeof deletedRecordIds !== 'undefined') {
+                    deletedRecordIds.add(recordId);
+                    await idb.set('deleted_records', Array.from(deletedRecordIds));
+                }
+            }
+
+            console.log(`🗑️ Deleted record ${recordId} from ${collectionName}`);
+            return true;
+
+        } catch (error) {
+            console.error('❌ Error deleting record:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Validate data integrity
+     */
+    async validateDataIntegrity() {
+        if (!this.isFirebaseReady()) {
+            console.log('⚠️ Cannot validate: User not logged in');
+            return { valid: false, errors: ['User not logged in'] };
+        }
+
+        const results = {
+            valid: true,
+            errors: [],
+            warnings: [],
+            stats: {}
+        };
+
+        try {
+            const userRef = this.getUserRef();
+
+            for (const [name, schema] of Object.entries(FIRESTORE_ENHANCED_SCHEMA)) {
+                // Get local count
+                const localData = typeof idb !== 'undefined' ? await idb.get(schema.localKey) || [] : [];
+                const localCount = Array.isArray(localData) ? localData.length : 0;
+
+                // Get Firestore count
+                const snapshot = await userRef.collection(schema.firestoreCollection).get();
+                const firestoreCount = snapshot.size;
+
+                results.stats[name] = {
+                    local: localCount,
+                    firestore: firestoreCount,
+                    difference: Math.abs(localCount - firestoreCount)
+                };
+
+                if (localCount !== firestoreCount) {
+                    results.warnings.push(
+                        `${name}: Local (${localCount}) != Firestore (${firestoreCount})`
+                    );
+                }
+            }
+
+            // --- Validate settings/config document fields ---
+            const settingsSnap = await userRef.collection('settings').doc('config').get();
+            const cloudSettings = settingsSnap.exists ? settingsSnap.data() : {};
+            results.stats['settings_config'] = { fields: {} };
+
+            for (const [name, schema] of Object.entries(FIRESTORE_SETTINGS_SCHEMA)) {
+                const localVal  = typeof idb !== 'undefined' ? await idb.get(schema.localKey) : schema.defaultValue;
+                const cloudVal  = cloudSettings[name];
+                const localHas  = localVal !== null && localVal !== undefined;
+                const cloudHas  = cloudVal !== null && cloudVal !== undefined;
+
+                results.stats['settings_config'].fields[name] = {
+                    local:     localHas,
+                    firestore: cloudHas
+                };
+
+                if (localHas && !cloudHas) {
+                    results.warnings.push(
+                        `settings/config.${name}: exists locally but missing in Firestore`
+                    );
+                }
+            }
+
+            console.log('📊 Data Integrity Check:', results);
+            return results;
+
+        } catch (error) {
+            console.error('❌ Validation error:', error);
+            results.valid = false;
+            results.errors.push(error.message);
+            return results;
+        }
+    }
+
+    /**
+     * Export all data for backup
+     */
+    async exportAllData() {
+        if (typeof idb === 'undefined') {
+            throw new Error('IndexedDB not available');
+        }
+
+        const backup = {
+            timestamp: new Date().toISOString(),
+            userId: currentUser ? currentUser.id : 'unknown',
+            data: {}
+        };
+
+        for (const [name, schema] of Object.entries(FIRESTORE_ENHANCED_SCHEMA)) {
+            backup.data[name] = await idb.get(schema.localKey) || [];
+        }
+
+        // Add all settings/config fields (driven by FIRESTORE_SETTINGS_SCHEMA)
+        backup.settings = {};
+        for (const [name, schema] of Object.entries(FIRESTORE_SETTINGS_SCHEMA)) {
+            backup.settings[name] = await idb.get(schema.localKey, schema.defaultValue);
+        }
+
+        // Add local-only keys for a full device snapshot
+        backup.localOnly = {};
+        for (const [name, schema] of Object.entries(FIRESTORE_LOCAL_ONLY_KEYS)) {
+            backup.localOnly[name] = await idb.get(schema.localKey, schema.defaultValue);
+        }
+
+        return backup;
+    }
+}
+
+// ==========================================
+// GLOBAL INSTANCE
+// ==========================================
+
+const enhancedFirestore = new EnhancedFirestoreManager();
+
+// ==========================================
+// ENHANCED PUBLIC API FUNCTIONS
+// ==========================================
+
+/**
+ * Trigger enhanced sync
+ */
+function triggerEnhancedSync() {
+    enhancedFirestore.performEnhancedSync(false);
+}
+
+/**
+ * Get sync statistics
+ */
+async function getEnhancedSyncStats() {
+    return await enhancedFirestore.getSyncStats();
+}
+
+/**
+ * Validate data integrity
+ */
+async function validateEnhancedDataIntegrity() {
+    return await enhancedFirestore.validateDataIntegrity();
+}
+
+/**
+ * Export backup
+ */
+async function exportEnhancedBackup() {
+    const backup = await enhancedFirestore.exportAllData();
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `naswar-backup-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    if (typeof showToast === 'function') {
+        showToast('✅ Backup downloaded', 'success');
+    }
+}
+
+// ==========================================
+// AUTO-INITIALIZATION WITH EXISTING SYSTEM
+// ==========================================
+
+// Hook into existing auth state changes
+if (typeof auth !== 'undefined' && auth !== null) {
+    auth.onAuthStateChanged(async (user) => {
+        if (user && user.uid) {
+            console.log('🔧 Enhanced Firestore: User logged in');
+            
+            // Wait for existing system to initialize
+            setTimeout(async () => {
+                if (enhancedFirestore.isFirebaseReady()) {
+                    await enhancedFirestore.initializeEnhancedStructure(true);
+                    
+                    // Setup realtime listeners
+                    enhancedFirestore.setupEnhancedRealtimeListeners();
+                }
+            }, 2000);
+        } else {
+            console.log('🔇 Enhanced Firestore: User logged out');
+            enhancedFirestore.removeEnhancedListeners();
+        }
+    });
+}
+
+// Expose to global scope
+window.enhancedFirestore = enhancedFirestore;
+window.triggerEnhancedSync = triggerEnhancedSync;
+window.getEnhancedSyncStats = getEnhancedSyncStats;
+window.validateEnhancedDataIntegrity = validateEnhancedDataIntegrity;
+window.exportEnhancedBackup = exportEnhancedBackup;
+
+console.log('✅ Firestore Enhancement Module Loaded');
 
 </script>
 </body>
