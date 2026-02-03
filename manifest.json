@@ -50,7 +50,7 @@
       "name": "New Sale",
       "short_name": "Sale",
       "description": "Record a new customer sale",
-      "url": "/naswar-dealer/?action=sales",
+      "url": "/Gull-And-Zubair/?action=sales",
       "icons": [
         {
           "src": "192.png",
@@ -63,7 +63,7 @@
       "name": "Production Entry",
       "short_name": "Production",
       "description": "Add manufacturing record",
-      "url": "/naswar-dealer/?action=production",
+      "url": "/Gull-And-Zubair/?action=production",
       "icons": [
         {
           "src": "192.png",
@@ -76,7 +76,7 @@
       "name": "Calculator",
       "short_name": "Calc",
       "description": "Open sales calculator",
-      "url": "/naswar-dealer/?action=calc",
+      "url": "/Gull-And-Zubair/?action=calc",
       "icons": [
         {
           "src": "192.png",
@@ -87,7 +87,7 @@
     }
   ],
   "share_target": {
-    "action": "/naswar-dealer/",
+    "action": "/Gull-And-Zubair/",
     "method": "GET",
     "enctype": "application/x-www-form-urlencoded",
     "params": {
