@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "io.github.mkmehmood.GAZ",
+        "sha256_cert_fingerprints": ["B6:EC:77:61:A6:86:1C:50:FC:2A:93:53:A8:55:F0:52:37:79:DC:0F:23:DB:D1:0D:92:09:5D:CB:6D:26:C5:08"]
+      }
+    }]
