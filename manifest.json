@@ -2,9 +2,9 @@
   "name": "Gull and Zubair Naswar Dealers",
   "short_name": "Gull & Zubair",
   "description": "Comprehensive management system for production, sales, inventory, and credits.",
-  "id": "/naswar-dealer/",
-  "start_url": "/naswar-dealer/",
-  "scope": "/naswar-dealer/",
+  "id": "/Gull-And-Zubair/",
+  "start_url": "/Gull-And-Zubair/",
+  "scope": "/Gull-And-Zubair/",
   "display": "standalone",
   "display_override": [
     "standalone",
