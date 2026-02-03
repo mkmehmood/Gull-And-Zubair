@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Cleanup Utility - Clear Old Supabase Data</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 900px;
+            margin: 40px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #d32f2f;
+            margin-bottom: 10px;
+        }
+        .warning {
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .warning h2 {
+            color: #856404;
+            margin-top: 0;
+        }
+        .info {
+            background: #e3f2fd;
+            border: 2px solid #2196f3;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .success {
+            background: #d4edda;
+            border: 2px solid #28a745;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            display: none;
+        }
+        .error {
+            background: #f8d7da;
+            border: 2px solid #dc3545;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            display: none;
+        }
+        button {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px 5px;
+            font-weight: bold;
+        }
+        button:hover {
+            background: #c82333;
+        }
+        button.secondary {
+            background: #6c757d;
+        }
+        button.secondary:hover {
+            background: #545b62;
+        }
+        button.safe {
+            background: #28a745;
+        }
+        button.safe:hover {
+            background: #218838;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .data-list {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .data-item {
+            padding: 10px;
+            margin: 5px 0;
+            background: white;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        .section {
+            margin: 30px 0;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+        }
+        code {
+            background: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚠️ Data Cleanup Utility</h1>
+        <p>This tool will help you clean up old Supabase data and start fresh with Firebase.</p>
+
+        <div class="warning">
+            <h2>⚠️ WARNING - READ CAREFULLY</h2>
+            <p><strong>This tool will DELETE ALL LOCAL DATA including:</strong></p>
+            <ul>
+                <li>All sales records</li>
+                <li>All customer data</li>
+                <li>All production history</li>
+                <li>All payment records</li>
+                <li>All factory inventory</li>
+                <li>User settings and preferences</li>
+            </ul>
+            <p><strong>Make sure you have:</strong></p>
+            <ol>
+                <li>✅ Backed up any important data</li>
+                <li>✅ Synced all data to Firebase (if applicable)</li>
+                <li>✅ Understood that this action CANNOT be undone</li>
+            </ol>
+        </div>
+
+        <div class="section">
+            <h2>Step 1: Check Current Data</h2>
+            <p>Click below to see what data is currently stored in your browser:</p>
+            <button onclick="checkCurrentData()" class="safe">Check Current Data</button>
+            <div id="current-data" class="data-list" style="display:none;"></div>
+        </div>
+
+        <div class="section">
+            <h2>Step 2: Choose Cleanup Method</h2>
+            
+            <h3>Option A: Clear Everything (Recommended for Migration)</h3>
+            <p>This will clear ALL local data and caches. Use this when switching from Supabase to Firebase.</p>
+            <button onclick="clearEverything()">🗑️ Clear All Data (Nuclear Option)</button>
+
+            <h3>Option B: Clear Only Old Supabase Data</h3>
+            <p>This attempts to preserve Firebase data while removing old Supabase remnants.</p>
+            <button onclick="clearSupabaseOnly()" class="secondary">Clear Supabase Data Only</button>
+
+            <h3>Option C: Clear Browser Storage Only</h3>
+            <p>Clears LocalStorage and IndexedDB but keeps service worker cache.</p>
+            <button onclick="clearStorageOnly()" class="secondary">Clear Storage Only</button>
+        </div>
+
+        <div class="section">
+            <h2>Step 3: Additional Cleanup</h2>
+            <button onclick="clearServiceWorker()" class="secondary">Clear Service Worker Cache</button>
+            <button onclick="clearCookies()" class="secondary">Clear Cookies</button>
+        </div>
+
+        <div id="success-message" class="success">
+            <h2>✅ Success!</h2>
+            <p id="success-text"></p>
+        </div>
+
+        <div id="error-message" class="error">
+            <h2>❌ Error</h2>
+            <p id="error-text"></p>
+        </div>
+
+        <div class="info">
+            <h3>ℹ️ After Cleanup</h3>
+            <ol>
+                <li>Close this page</li>
+                <li>Clear your browser cache (Ctrl+Shift+Delete)</li>
+                <li>Close all tabs of your app</li>
+                <li>Reopen your app</li>
+                <li>Sign in with your Firebase credentials</li>
+                <li>Your app should now use Firebase exclusively</li>
+            </ol>
+        </div>
+    </div>
+
+    <script>
+        const IDB_NAME = 'naswar_db';
+        const IDB_STORE = 'app_data';
+
+        async function checkCurrentData() {
+            const container = document.getElementById('current-data');
+            container.style.display = 'block';
+            container.innerHTML = '<p>Checking data...</p>';
+
+            let html = '<h3>LocalStorage Data:</h3>';
+            let lsCount = 0;
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                html += `<div class="data-item">📦 ${key}</div>`;
+                lsCount++;
+            }
+            if (lsCount === 0) html += '<p>No data in LocalStorage</p>';
+
+            // Check IndexedDB
+            try {
+                const db = await openIndexedDB();
+                if (db) {
+                    const keys = await getAllIDBKeys(db);
+                    html += '<h3>IndexedDB Data:</h3>';
+                    if (keys.length === 0) {
+                        html += '<p>No data in IndexedDB</p>';
+                    } else {
+                        keys.forEach(key => {
+                            html += `<div class="data-item">💾 ${key}</div>`;
+                        });
+                    }
+                    db.close();
+                }
+            } catch (error) {
+                html += '<p>Could not read IndexedDB: ' + error.message + '</p>';
+            }
+
+            // Check cookies
+            html += '<h3>Cookies:</h3>';
+            const cookies = document.cookie.split(';');
+            if (cookies.length === 1 && cookies[0] === '') {
+                html += '<p>No cookies</p>';
+            } else {
+                cookies.forEach(cookie => {
+                    const name = cookie.split('=')[0].trim();
+                    html += `<div class="data-item">🍪 ${name}</div>`;
+                });
+            }
+
+            container.innerHTML = html;
+        }
+
+        async function openIndexedDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(IDB_NAME);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        async function getAllIDBKeys(db) {
+            return new Promise((resolve, reject) => {
+                if (!db.objectStoreNames.contains(IDB_STORE)) {
+                    resolve([]);
+                    return;
+                }
+                const transaction = db.transaction(IDB_STORE, 'readonly');
+                const store = transaction.objectStore(IDB_STORE);
+                const request = store.getAllKeys();
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        async function clearEverything() {
+            if (!confirm('⚠️ ARE YOU SURE? This will DELETE ALL LOCAL DATA permanently. This action CANNOT be undone!')) {
+                return;
+            }
+
+            if (!confirm('⚠️ FINAL WARNING: All your local sales, customer, and production data will be PERMANENTLY DELETED. Continue?')) {
+                return;
+            }
+
+            try {
+                // Clear LocalStorage
+                localStorage.clear();
+                console.log('✓ LocalStorage cleared');
+
+                // Clear SessionStorage
+                sessionStorage.clear();
+                console.log('✓ SessionStorage cleared');
+
+                // Delete IndexedDB
+                await deleteIndexedDB();
+                console.log('✓ IndexedDB deleted');
+
+                // Clear cookies
+                clearAllCookies();
+                console.log('✓ Cookies cleared');
+
+                // Clear caches
+                if ('caches' in window) {
+                    const cacheNames = await caches.keys();
+                    await Promise.all(cacheNames.map(name => caches.delete(name)));
+                    console.log('✓ Cache storage cleared');
+                }
+
+                // Unregister service workers
+                if ('serviceWorker' in navigator) {
+                    const registrations = await navigator.serviceWorker.getRegistrations();
+                    await Promise.all(registrations.map(reg => reg.unregister()));
+                    console.log('✓ Service workers unregistered');
+                }
+
+                showSuccess('All data has been cleared! Please close this tab, clear your browser cache (Ctrl+Shift+Delete), and reopen your app.');
+
+                // Reload after 3 seconds
+                setTimeout(() => {
+                    window.location.reload();
+                }, 3000);
+
+            } catch (error) {
+                showError('Error during cleanup: ' + error.message);
+                console.error(error);
+            }
+        }
+
+        async function clearSupabaseOnly() {
+            if (!confirm('This will attempt to clear only Supabase-related data. Continue?')) {
+                return;
+            }
+
+            try {
+                // Remove Supabase-specific keys
+                const supabaseKeys = ['supabase.auth.token', 'sb-', 'supabase'];
+                
+                // Clear from LocalStorage
+                for (let i = localStorage.length - 1; i >= 0; i--) {
+                    const key = localStorage.key(i);
+                    if (supabaseKeys.some(sk => key.includes(sk))) {
+                        localStorage.removeItem(key);
+                        console.log('Removed:', key);
+                    }
+                }
+
+                // Clear Supabase cookies
+                const cookies = document.cookie.split(';');
+                cookies.forEach(cookie => {
+                    const name = cookie.split('=')[0].trim();
+                    if (supabaseKeys.some(sk => name.includes(sk))) {
+                        document.cookie = name + '=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+                        console.log('Cleared cookie:', name);
+                    }
+                });
+
+                showSuccess('Supabase data cleared. Please refresh your app.');
+
+            } catch (error) {
+                showError('Error: ' + error.message);
+            }
+        }
+
+        async function clearStorageOnly() {
+            if (!confirm('Clear LocalStorage and IndexedDB? Your app will lose all local data.')) {
+                return;
+            }
+
+            try {
+                localStorage.clear();
+                sessionStorage.clear();
+                await deleteIndexedDB();
+                
+                showSuccess('Storage cleared. Please refresh your app.');
+            } catch (error) {
+                showError('Error: ' + error.message);
+            }
+        }
+
+        async function deleteIndexedDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.deleteDatabase(IDB_NAME);
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+                request.onblocked = () => {
+                    console.warn('IndexedDB deletion blocked - close other tabs');
+                    resolve(); // Continue anyway
+                };
+            });
+        }
+
+        async function clearServiceWorker() {
+            try {
+                if ('serviceWorker' in navigator) {
+                    const registrations = await navigator.serviceWorker.getRegistrations();
+                    await Promise.all(registrations.map(reg => reg.unregister()));
+                    showSuccess('Service workers cleared');
+                } else {
+                    showError('Service workers not supported');
+                }
+            } catch (error) {
+                showError('Error clearing service workers: ' + error.message);
+            }
+        }
+
+        function clearCookies() {
+            clearAllCookies();
+            showSuccess('Cookies cleared');
+        }
+
+        function clearAllCookies() {
+            const cookies = document.cookie.split(';');
+            cookies.forEach(cookie => {
+                const name = cookie.split('=')[0].trim();
+                document.cookie = name + '=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+                // Also try with domain
+                const domain = window.location.hostname;
+                document.cookie = name + '=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=' + domain;
+            });
+        }
+
+        function showSuccess(message) {
+            const successDiv = document.getElementById('success-message');
+            const successText = document.getElementById('success-text');
+            successText.textContent = message;
+            successDiv.style.display = 'block';
+            document.getElementById('error-message').style.display = 'none';
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('error-message');
+            const errorText = document.getElementById('error-text');
+            errorText.textContent = message;
+            errorDiv.style.display = 'block';
+            document.getElementById('success-message').style.display = 'none';
+        }
+
+        // Auto-check data on load
+        window.addEventListener('load', () => {
+            console.log('Data Cleanup Utility loaded');
+        });
+    </script>
+</body>
+</html>
