@@ -12518,7 +12518,7 @@ async function renderEntityTable() {
             <td style="text-align:right; font-size:0.75rem;">${entity.phone || '-'}</td>
             <td style="text-align:center;">
                 <button class="btn-theme" style="padding:4px 10px; font-size:0.75rem;" 
-                    onclick="openEntityDetailsOverlay(${entity.id})">
+                    onclick="openEntityDetailsOverlay('${entity.id}')">
                     Manage
                 </button>
             </td>
@@ -17433,32 +17433,7 @@ async function saveCustomerDetails() {
     
     if (!name) return;
 
-    // 1. Find or Create Entity - with safe toLowerCase
-    let entity = paymentEntities.find(e => e && e.name && e.name.toLowerCase() === name.toLowerCase());
-    
-    if (entity) {
-        // Update existing
-        entity.phone = phone;
-        entity.address = address; // Add address field
-        entity.updatedAt = Date.now();
-    } else {
-        // Create new 'Payor' entity if it doesn't exist
-        entity = {
-            id: Date.now(),
-            name: name,
-            type: 'payor',
-            phone: phone,
-            address: address,
-            wallet: '',
-            createdAt: Date.now(),
-            updatedAt: Date.now()
-        };
-        paymentEntities.push(entity);
-    }
-    
-    // 2. Save Entity Data
-    await idb.set('payment_entities', paymentEntities);
-    
+ 
     // 3. Update Sales Records (Optional: Update flat phone data in sales history for consistency)
     let salesUpdated = false;
     repSales.forEach(sale => {
