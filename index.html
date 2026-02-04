@@ -9157,17 +9157,15 @@ let stockReturns = [];
 // FIREBASE CLOUD SYNC & REALTIME SYSTEM (FIXED)
 // ============================================
 
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
+// Firebase Configuration
 const firebaseConfig = {
   apiKey: "AIzaSyDYjGQILtrcG2nfKACSfsVtfIPZOAgbr_s",
   authDomain: "calculator-fabd3.firebaseapp.com",
-  databaseURL: "https://calculator-fabd3-default-rtdb.firebaseio.com",
   projectId: "calculator-fabd3",
   storageBucket: "calculator-fabd3.firebasestorage.app",
   messagingSenderId: "124313576124",
-  appId: "1:124313576124:web:fb721bb61bc19b51db26b9",
-  measurementId: "G-G45Y5KL4EJ"
-};
+  appId: "1:124313576124:web:fb721bb61bc19b51db26b9"
+}; 
 // --- GLOBAL VARIABLES ---
 let firebaseDB = null;
 let database = null;
@@ -9197,6 +9195,23 @@ function initializeFirebaseSystem() {
         if (!firebase.apps.length) {
             firebase.initializeApp(firebaseConfig);
             console.log('🔥 Firebase App Initialized');
+        }
+
+        // 2.5. CRITICAL FIX: Set auth persistence to LOCAL (survives page refresh)
+        try {
+            if (firebase && firebase.auth) {
+                firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL)
+                    .then(() => {
+                        console.log('✅ Auth persistence set to LOCAL');
+                    })
+                    .catch((error) => {
+                        console.error('❌ Error setting persistence:', error);
+                    });
+            } else {
+                console.warn('⚠️ Firebase auth not ready for persistence setting');
+            }
+        } catch (error) {
+            console.error('❌ Error setting auth persistence:', error);
         }
 
              // 3. Setup Firestore
@@ -9299,19 +9314,33 @@ function initializeFirebaseSystem() {
         // 6. Listen for auth state changes
                 // 6. Listen for auth state changes
         auth.onAuthStateChanged(async (user) => {
+            console.log('🔐 Auth state changed:', user ? user.email : 'No user');
+            
             if (user) {
-                // User is signed in
+                // ✅ USER IS AUTHENTICATED
                 currentUser = {
                     id: user.uid,
                     email: user.email,
-                    displayName: user.displayName
+                    displayName: user.displayName || user.email.split('@')[0]
                 };
+                
+                // CRITICAL: Ensure database is initialized
+                if (!database) {
+                    console.warn('⚠️ Database was null, reinitializing...');
+                    database = firebase.firestore();
+                    firebaseDB = database;
+                }
+                
+                // Save to localStorage for persistence
+                localStorage.setItem('currentUser', JSON.stringify(currentUser));
+                localStorage.setItem('isLoggedIn', 'true');
                 
                 // FIX: Immediately hide overlay and show success toast
                 hideAuthOverlay(); 
-                showToast(`Welcome back, ${user.email.split('@')[0]}`, 'success');
+                showToast(`✅ Welcome back, ${currentUser.displayName}!`, 'success');
 
-                console.log('✅ User logged in:', user.email);
+                console.log('✅ User authenticated:', user.email);
+                console.log('✅ Database ready:', !!database);
                 
                 // Check if this is first time login
                 const isFirstTime = await idb.get('firestore_initialized_' + user.uid);
@@ -9333,10 +9362,19 @@ function initializeFirebaseSystem() {
                 }, 1000);
 
             } else {
-                // User is signed out
+                // ❌ USER IS NOT AUTHENTICATED
                 currentUser = null;
-                console.log('User logged out');
+                // Note: We keep database initialized - it's just not usable without auth
+                
+                localStorage.removeItem('currentUser');
+                localStorage.setItem('isLoggedIn', 'false');
+                
+                console.log('⚠️ User logged out');
                 updateSyncButton();
+                
+                // Only show auth overlay if user explicitly logged out (not on every page load)
+                // showAuthOverlay() has built-in checks to prevent unnecessary display
+                showAuthOverlay();
             }
         });
         
@@ -10245,14 +10283,43 @@ async function batchWriteOperations(db, operations) {
 // 2. Main Sync Execution Function
 // FIX: Robust Sync with null checks to prevent TypeError
 async function performOneClickSync(silent = false) {
+    // ⚠️ CRITICAL FIX 0: Check if Firebase SDK is loaded
+    if (typeof firebase === 'undefined') {
+        console.error('❌ Sync blocked: Firebase SDK not loaded');
+        if (!silent) showToast('⚠️ Firebase not ready yet', 'error');
+        return; // EXIT FUNCTION
+    }
+    
+    // ⚠️ CRITICAL FIX 1: Check Firebase Auth FIRST
+    const firebaseUser = firebase.auth().currentUser;
+    
+    if (!firebaseUser) {
+        console.error('❌ Sync blocked: User not authenticated in Firebase');
+        if (!silent) {
+            showToast('⚠️ Please log in to sync data', 'error');
+            // Show auth overlay after brief delay
+            setTimeout(() => {
+                const authOverlay = document.getElementById('auth-overlay');
+                if (authOverlay) {
+                    authOverlay.style.display = 'flex';
+                }
+            }, 500);
+        }
+        return; // EXIT FUNCTION
+    }
+    
+    // ⚠️ CRITICAL FIX 2: Check database initialization
     if (!database) {
+        console.error('❌ Sync blocked: Firestore not initialized');
         if (!silent) showToast("⚠️ Database not ready", "warning");
-        return;
+        return; // EXIT FUNCTION
     }
 
+    // ⚠️ CRITICAL FIX 3: Check currentUser is set properly
     if (!currentUser || currentUser.id === 'default_user') {
-        if (!silent) showToast("Please log in to sync", "warning");
-        return;
+        console.error('❌ Sync blocked: currentUser not properly set');
+        if (!silent) showToast("⚠️ User session invalid - please log in", "warning");
+        return; // EXIT FUNCTION
     }
 
     // CHECK COOLDOWN using optimizer
@@ -10262,6 +10329,8 @@ async function performOneClickSync(silent = false) {
         return;
     }
 
+    // ✅ ALL CHECKS PASSED - Proceed with sync
+    console.log('🔄 Starting sync for user:', currentUser.email);
     if (!silent) showToast("🔄 Syncing...", "info");
 
     try {
@@ -10285,6 +10354,21 @@ async function performOneClickSync(silent = false) {
 
         if (result.success) {
             const { results } = result;
+            
+            // CRITICAL FIX: If smartSync returned 0 records, do a full sync instead
+            if (results.recordsFetched === 0 && !silent) {
+                console.log('⚠️ SmartSync returned 0 records, attempting full sync...');
+                showToast('🔄 Performing full data sync...', 'info');
+                
+                // Perform full sync
+                const fullSyncResult = await performFullSync(database, collections);
+                if (fullSyncResult.success) {
+                    if (!silent) {
+                        showToast(`✅ Full sync complete! ${fullSyncResult.totalRecords} records downloaded`, 'success');
+                    }
+                    return;
+                }
+            }
             
             // Process and merge data
             if (results.data) {
@@ -10335,6 +10419,181 @@ async function performOneClickSync(silent = false) {
     } catch (error) {
         console.error('Sync error:', error);
         if (!silent) showToast("❌ Sync error: " + error.message, "error");
+    }
+}
+
+/**
+ * Perform a FULL sync - fetches ALL data from Firestore
+ * Used when smartSync returns 0 records or as initial sync
+ */
+async function performFullSync(db, collections) {
+    console.log('📥 Starting full sync from Firestore...');
+    let totalRecords = 0;
+    
+    try {
+        const collectionMap = {
+            'production': { varName: 'db', idbStore: 'production', displayFunc: 'displayProductions' },
+            'sales': { varName: 'customerSales', idbStore: 'sales', displayFunc: 'displaySales' },
+            'calculator_history': { varName: 'salesHistory', idbStore: 'calculator_history', displayFunc: 'displayCalculatorHistory' },
+            'rep_sales': { varName: 'repSales', idbStore: 'rep_sales', displayFunc: 'displayRepSales' },
+            'transactions': { varName: 'paymentTransactions', idbStore: 'transactions', displayFunc: 'displayTransactions' },
+            'entities': { varName: 'paymentEntities', idbStore: 'entities', displayFunc: 'displayEntities' },
+            'inventory': { varName: 'factoryInventoryData', idbStore: 'inventory', displayFunc: 'displayInventory' },
+            'factory_history': { varName: 'factoryProductionHistory', idbStore: 'factory_history', displayFunc: 'displayFactoryHistory' },
+            'returns': { varName: 'stockReturns', idbStore: 'returns', displayFunc: 'displayReturns' }
+        };
+        
+        for (const collectionPath of collections) {
+            try {
+                console.log(`📥 Fetching ${collectionPath}...`);
+                
+                // Build collection reference
+                const parts = collectionPath.split('/');
+                let ref = db;
+                
+                for (let i = 0; i < parts.length; i++) {
+                    if (i % 2 === 0) {
+                        ref = ref.collection(parts[i]);
+                    } else {
+                        ref = ref.doc(parts[i]);
+                    }
+                }
+                
+                // Fetch ALL documents from this collection
+                const snapshot = await ref.get();
+                
+                if (snapshot.size > 0) {
+                    const records = [];
+                    snapshot.forEach(doc => {
+                        records.push({ id: doc.id, ...doc.data() });
+                    });
+                    
+                    const collectionName = collectionPath.split('/').pop();
+                    const mapping = collectionMap[collectionName];
+                    
+                    if (mapping) {
+                        // Update global variable
+                        window[mapping.varName] = records;
+                        totalRecords += records.length;
+                        console.log(`✅ ${collectionName}: ${records.length} records → ${mapping.varName}`);
+                        
+                        // Save to IndexedDB
+                        if (typeof idb !== 'undefined') {
+                            try {
+                                if (typeof idb.saveAllRecords === 'function') {
+                                    await idb.saveAllRecords(mapping.idbStore, records);
+                                } else if (typeof idb.set === 'function') {
+                                    await idb.set(mapping.idbStore, records);
+                                }
+                                console.log(`💾 Saved to IndexedDB: ${mapping.idbStore}`);
+                            } catch (idbErr) {
+                                console.warn(`⚠️ IndexedDB save failed for ${mapping.idbStore}:`, idbErr);
+                            }
+                        }
+                        
+                        // Update display immediately for this collection
+                        if (typeof window[mapping.displayFunc] === 'function') {
+                            try {
+                                window[mapping.displayFunc]();
+                                console.log(`🖥️  Updated display: ${mapping.displayFunc}()`);
+                            } catch (displayErr) {
+                                console.warn(`⚠️ Display update failed for ${mapping.displayFunc}:`, displayErr);
+                            }
+                        } else {
+                            console.warn(`⚠️ Display function not found: ${mapping.displayFunc}`);
+                        }
+                    } else {
+                        console.warn(`⚠️ No mapping found for collection: ${collectionName}`);
+                    }
+                }
+            } catch (err) {
+                console.error(`❌ Error fetching ${collectionPath}:`, err);
+            }
+        }
+        
+        // Final update to all displays
+        console.log('🔄 Calling updateAllDisplays()...');
+        updateAllDisplays();
+        
+        // Call existing tab-specific refresh functions
+        console.log('🔄 Refreshing all tabs with existing functions...');
+        
+        // Production tab
+        if (typeof refreshUI === 'function') {
+            try {
+                refreshUI();
+                console.log('✅ Called refreshUI()');
+            } catch (e) {
+                console.warn('⚠️ refreshUI() failed:', e);
+            }
+        }
+        
+        // Sales tab
+        if (typeof refreshCustomerSales === 'function') {
+            try {
+                refreshCustomerSales();
+                console.log('✅ Called refreshCustomerSales()');
+            } catch (e) {
+                console.warn('⚠️ refreshCustomerSales() failed:', e);
+            }
+        }
+        
+        if (typeof updateCustomerCharts === 'function') {
+            try {
+                updateCustomerCharts();
+                console.log('✅ Called updateCustomerCharts()');
+            } catch (e) {
+                console.warn('⚠️ updateCustomerCharts() failed:', e);
+            }
+        }
+        
+        // Payments tab
+        if (typeof refreshPaymentTab === 'function') {
+            try {
+                refreshPaymentTab();
+                console.log('✅ Called refreshPaymentTab()');
+            } catch (e) {
+                console.warn('⚠️ refreshPaymentTab() failed:', e);
+            }
+        }
+        
+        // Factory tab
+        if (typeof initFactoryTab === 'function') {
+            try {
+                initFactoryTab();
+                console.log('✅ Called initFactoryTab()');
+            } catch (e) {
+                console.warn('⚠️ initFactoryTab() failed:', e);
+            }
+        }
+        
+        // Calculator tab
+        if (typeof loadSalesData === 'function') {
+            try {
+                await loadSalesData(currentCompMode || 'main');
+                console.log('✅ Called loadSalesData()');
+            } catch (e) {
+                console.warn('⚠️ loadSalesData() failed:', e);
+            }
+        }
+        
+        console.log(`✅ Full sync complete: ${totalRecords} total records`);
+        console.log('📊 Data loaded into memory:');
+        console.log('   - db (production):', window.db?.length || 0);
+        console.log('   - customerSales:', window.customerSales?.length || 0);
+        console.log('   - paymentTransactions:', window.paymentTransactions?.length || 0);
+        console.log('   - salesHistory:', window.salesHistory?.length || 0);
+        
+        return { success: true, totalRecords };
+        console.log('🖥️  Running final updateAllDisplays()...');
+        updateAllDisplays();
+        
+        console.log(`✅ Full sync complete: ${totalRecords} total records`);
+        return { success: true, totalRecords };
+        
+    } catch (error) {
+        console.error('❌ Full sync error:', error);
+        return { success: false, error };
     }
 }
 
@@ -11084,6 +11343,20 @@ function createAuthOverlay() {
 
 
 function showAuthOverlay() {
+    // Don't show if user is already authenticated
+    if (currentUser && currentUser.id !== 'default_user') {
+        console.log('⚠️ User already authenticated, not showing auth overlay');
+        return;
+    }
+    
+    // Don't show if already dismissed and user exists in localStorage
+    const authDismissed = localStorage.getItem('auth_overlay_dismissed');
+    const storedUser = localStorage.getItem('currentUser');
+    if (authDismissed === 'true' && storedUser) {
+        console.log('⚠️ Auth already completed, not showing overlay');
+        return;
+    }
+    
     let overlay = document.getElementById('auth-overlay');
     if (!overlay) {
         createAuthOverlay();
@@ -11096,7 +11369,13 @@ function hideAuthOverlay() {
     const overlay = document.getElementById('auth-overlay');
     if (overlay) {
         overlay.style.display = 'none';
+        // Also remove it from DOM to prevent any reappearance
+        overlay.remove();
+        console.log('✅ Auth overlay hidden and removed');
     }
+    
+    // Set a flag that user is authenticated
+    localStorage.setItem('auth_overlay_dismissed', 'true');
 }
 
 // --- AUTHENTICATION HANDLERS ---
@@ -18868,20 +19147,53 @@ console.log('✅ Firestore Enhancement Module Loaded');
             const diff = endY - startY;
 
             if (diff > threshold && window.scrollY === 0) {
-                // Trigger Refresh
-                refreshSpinner.querySelector('span').innerText = "Syncing...";
-                refreshSpinner.style.top = '30px'; // Lock in place
+                // CRITICAL FIX: Check Firebase SDK loaded first
+                if (typeof firebase === 'undefined') {
+                    console.error('❌ Pull-to-refresh blocked: Firebase not loaded');
+                    refreshSpinner.querySelector('span').innerText = "Loading...";
+                    refreshSpinner.style.top = '30px';
+                    setTimeout(() => {
+                        refreshSpinner.style.top = '-50px';
+                    }, 1000);
+                    isPulling = false;
+                    return;
+                }
                 
-                // Haptic feedback if available
-                if (navigator.vibrate) navigator.vibrate(50);
+                // CRITICAL FIX: Check authentication before syncing
+                const firebaseUser = firebase.auth().currentUser;
+                
+                if (!firebaseUser) {
+                    console.warn('⚠️ Pull-to-refresh blocked: User not logged in');
+                    refreshSpinner.querySelector('span').innerText = "Please log in";
+                    refreshSpinner.style.top = '30px';
+                    
+                    showToast('⚠️ Please log in to sync', 'error');
+                    
+                    // Show auth overlay after delay
+                    setTimeout(() => {
+                        const authOverlay = document.getElementById('auth-overlay');
+                        if (authOverlay) {
+                            authOverlay.style.display = 'flex';
+                        }
+                        refreshSpinner.style.top = '-50px';
+                    }, 1500);
+                    
+                } else {
+                    // ✅ User is authenticated - proceed with sync
+                    refreshSpinner.querySelector('span').innerText = "Syncing...";
+                    refreshSpinner.style.top = '30px'; // Lock in place
+                    
+                    // Haptic feedback if available
+                    if (navigator.vibrate) navigator.vibrate(50);
 
-                // Call your robust sync function
-                await performOneClickSync(false); // false = show toasts
-                
-                // Hide after small delay
-                setTimeout(() => {
-                    refreshSpinner.style.top = '-50px';
-                }, 1000);
+                    // Call your robust sync function
+                    await performOneClickSync(false); // false = show toasts
+                    
+                    // Hide after small delay
+                    setTimeout(() => {
+                        refreshSpinner.style.top = '-50px';
+                    }, 1000);
+                }
             } else {
                 // Cancel
                 refreshSpinner.style.top = '-50px';
@@ -19078,7 +19390,172 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }, 10000); // Wait 10 seconds after load
 });
+
+// ============================================
+// 🐛 DEBUG HELPERS - For Troubleshooting
+// ============================================
+
+/**
+ * Check current authentication state
+ * Usage: Open console and type: checkAuthState()
+ */
+window.checkAuthState = function() {
+    console.log('═══════════════════════════════════════');
+    console.log('🔍 AUTHENTICATION STATE CHECK');
+    console.log('═══════════════════════════════════════');
     
+    if (typeof firebase === 'undefined') {
+        console.error('❌ Firebase SDK not loaded yet');
+        console.log('═══════════════════════════════════════');
+        return { error: 'Firebase not loaded' };
+    }
+    
+    const firebaseUser = firebase.auth().currentUser;
+    console.log('Firebase Auth User:', firebaseUser ? {
+        uid: firebaseUser.uid,
+        email: firebaseUser.email,
+        emailVerified: firebaseUser.emailVerified,
+        displayName: firebaseUser.displayName
+    } : '❌ No user logged in');
+    
+    console.log('App currentUser:', currentUser);
+    console.log('Database initialized:', !!database);
+    console.log('localStorage isLoggedIn:', localStorage.getItem('isLoggedIn'));
+    console.log('localStorage currentUser:', localStorage.getItem('currentUser'));
+    console.log('═══════════════════════════════════════');
+    
+    return {
+        firebaseUser: !!firebaseUser,
+        appUser: !!currentUser,
+        database: !!database
+    };
+};
+
+/**
+ * Manually trigger sync with logging
+ * Usage: Open console and type: manualSync()
+ */
+window.manualSync = async function() {
+    console.log('═══════════════════════════════════════');
+    console.log('🔄 MANUAL SYNC TRIGGERED');
+    console.log('═══════════════════════════════════════');
+    await performOneClickSync(false);
+    console.log('═══════════════════════════════════════');
+};
+
+/**
+ * Check sync status between local and Firestore
+ * Usage: Open console and type: checkSyncStatus()
+ */
+window.checkSyncStatus = async function() {
+    if (!currentUser || currentUser.id === 'default_user' || !database) {
+        console.error('⚠️ Cannot check sync status: Not authenticated');
+        return null;
+    }
+    
+    try {
+        console.log('═══════════════════════════════════════');
+        console.log('📊 SYNC STATUS CHECK');
+        console.log('═══════════════════════════════════════');
+        
+        // Count Firestore documents
+        const firestoreCounts = {};
+        const collections = ['sales', 'production', 'transactions', 'rep_sales', 'calculator_history'];
+        
+        for (const collName of collections) {
+            const snapshot = await database
+                .collection('users')
+                .doc(currentUser.id)
+                .collection(collName)
+                .get();
+            firestoreCounts[collName] = snapshot.size;
+        }
+        
+        const totalFirestore = Object.values(firestoreCounts).reduce((a, b) => a + b, 0);
+        
+        // Count local IndexedDB documents
+        const localSales = await idb.getAllRecords('sales') || [];
+        const localProduction = await idb.getAllRecords('production') || [];
+        const localTransactions = await idb.getAllRecords('transactions') || [];
+        const totalLocal = localSales.length + localProduction.length + localTransactions.length;
+        
+        console.log(`Local Total: ${totalLocal} documents`);
+        console.log(`Firestore Total: ${totalFirestore} documents`);
+        console.log('Firestore Breakdown:', firestoreCounts);
+        console.log('═══════════════════════════════════════');
+        
+        return { local: totalLocal, firestore: totalFirestore, breakdown: firestoreCounts };
+        
+    } catch (error) {
+        console.error('❌ Error checking sync status:', error);
+        return null;
+    }
+};
+
+/**
+ * Force logout
+ * Usage: Open console and type: forceLogout()
+ */
+window.forceLogout = async function() {
+    if (typeof firebase === 'undefined') {
+        console.error('❌ Firebase not loaded');
+        return;
+    }
+    console.log('🚪 Forcing logout...');
+    await firebase.auth().signOut();
+    localStorage.clear();
+    window.location.reload();
+};
+
+/**
+ * Force a full sync of all data from Firestore
+ * Usage: Open console and type: fullSync()
+ */
+window.fullSync = async function() {
+    if (!database || !currentUser) {
+        console.error('❌ Not logged in or database not initialized');
+        return;
+    }
+    
+    console.log('═══════════════════════════════════════');
+    console.log('📥 FORCING FULL SYNC FROM FIRESTORE');
+    console.log('═══════════════════════════════════════');
+    
+    const userPath = `users/${currentUser.id}`;
+    const collections = [
+        `${userPath}/production`,
+        `${userPath}/sales`,
+        `${userPath}/calculator_history`,
+        `${userPath}/rep_sales`,
+        `${userPath}/transactions`,
+        `${userPath}/entities`,
+        `${userPath}/inventory`,
+        `${userPath}/factory_history`,
+        `${userPath}/returns`
+    ];
+    
+    const result = await performFullSync(database, collections);
+    
+    if (result.success) {
+        showToast(`✅ Full sync: ${result.totalRecords} records downloaded`, 'success');
+        console.log(`✅ SUCCESS: ${result.totalRecords} records downloaded`);
+        console.log('✅ All existing refresh functions were called automatically');
+    } else {
+        showToast('❌ Full sync failed', 'error');
+        console.error('❌ FAILED:', result.error);
+    }
+    
+    console.log('═══════════════════════════════════════');
+};
+
+console.log('✅ Debug helpers loaded. Available commands:');
+console.log('   - checkAuthState()    : Check authentication status');
+console.log('   - manualSync()        : Manually trigger sync');
+console.log('   - checkSyncStatus()   : Check local vs Firestore data counts');
+console.log('   - forceLogout()       : Force logout and clear data');
+console.log('   - fullSync()          : Download ALL data from Firestore');
+
 </script>
+
 </body>
 </html>
