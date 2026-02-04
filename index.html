@@ -73,6 +73,140 @@
 
     
     <style>
+        /* === SEARCHABLE SELECT STYLES === */
+        .searchable-select-wrapper {
+            position: relative;
+            width: 100%;
+        }
+        
+        .searchable-select-input {
+            width: 100%;
+            padding: 14px 40px 14px 16px;
+            background: var(--input-bg);
+            border: 1.5px solid var(--glass-border);
+            border-radius: 12px;
+            color: var(--text-main);
+            font-size: 0.95rem;
+            font-weight: 500;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            cursor: pointer;
+            user-select: none;
+            backdrop-filter: var(--backdrop-blur);
+            box-sizing: border-box;
+        }
+        
+        .searchable-select-input:focus {
+            outline: none;
+            border-color: var(--accent);
+            background: var(--glass);
+            box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.1);
+            cursor: text;
+        }
+        
+        .searchable-select-input.has-value {
+            color: var(--text-main);
+        }
+        
+        .searchable-select-input::placeholder {
+            color: var(--text-muted);
+        }
+        
+        .searchable-select-arrow {
+            position: absolute;
+            right: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 0;
+            height: 0;
+            border-left: 5px solid transparent;
+            border-right: 5px solid transparent;
+            border-top: 6px solid var(--text-muted);
+            pointer-events: none;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .searchable-select-wrapper.active .searchable-select-arrow {
+            transform: translateY(-50%) rotate(180deg);
+        }
+        
+        .searchable-select-dropdown {
+            position: absolute;
+            top: calc(100% + 8px);
+            left: 0;
+            right: 0;
+            background: var(--glass);
+            backdrop-filter: var(--backdrop-blur);
+            border: 1.5px solid var(--glass-border);
+            border-radius: 12px;
+            box-shadow: var(--shadow);
+            max-height: 280px;
+            overflow-y: auto;
+            z-index: 10000;
+            opacity: 0;
+            transform: translateY(-10px);
+            visibility: hidden;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .searchable-select-wrapper.active .searchable-select-dropdown {
+            opacity: 1;
+            transform: translateY(0);
+            visibility: visible;
+        }
+        
+        .searchable-select-option {
+            padding: 12px 16px;
+            cursor: pointer;
+            color: var(--text-main);
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        
+        .searchable-select-option:last-child {
+            border-bottom: none;
+        }
+        
+        .searchable-select-option:hover {
+            background: var(--card-hover);
+        }
+        
+        .searchable-select-option.selected {
+            background: var(--highlight-bg);
+            color: var(--accent);
+            font-weight: 600;
+        }
+        
+        .searchable-select-option.hidden {
+            display: none;
+        }
+        
+        .searchable-select-no-results {
+            padding: 20px 16px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+        
+        /* Smooth scrollbar for dropdown */
+        .searchable-select-dropdown::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        .searchable-select-dropdown::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        .searchable-select-dropdown::-webkit-scrollbar-thumb {
+            background: var(--glass-border);
+            border-radius: 3px;
+        }
+        
+        .searchable-select-dropdown::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
         /* === iOS 26 LIQUID GLASS THEME === */
         :root {
             /* Dark Gradient Background */
@@ -5662,24 +5796,15 @@ async function toggleDarkMode() {
 }
 
 // Check for saved theme preference on load
-async function initTheme() {
-    const savedTheme = await idb.get('theme');
-    const themeToggle = document.getElementById('themeToggle');
-    
-    if (savedTheme === 'dark') {
-        document.body.classList.add('dark-mode');
-        if (themeToggle) themeToggle.textContent = '';
-    } else {
-        if (themeToggle) themeToggle.textContent = '';
-    }
-}
+
+// DUPLICATE REMOVED: initTheme function (simpler version)
+// Enhanced version with data-theme attribute and meta tag update is at line ~18129
 
 // Call initTheme when the page loads
 window.addEventListener('DOMContentLoaded', async function() {
     // Wait a moment for scripts to finish loading, then initialize 
     
-    // Initialize theme
-    await initTheme();
+    // Initialize theme - handled by enhanced version at line ~18129
 });
 // ============================================
 // IMPROVED REAL-TIME SYNC SYSTEM (NON-BLOCKING)
@@ -5715,6 +5840,13 @@ function notifyDataChange(dataType) {
     if (typeof triggerSeamlessBackup === 'function') {
         triggerSeamlessBackup();
     }
+}
+
+// Helper function to update setting timestamp when a setting is modified locally
+async function updateSettingTimestamp(settingName) {
+    const timestamp = Date.now();
+    await idb.set(`${settingName}_timestamp`, timestamp);
+    console.log(`🕒 Updated timestamp for ${settingName}:`, timestamp);
 }
 
 
@@ -7530,12 +7662,18 @@ function updateFactoryInventoryDisplay() {
         
         // Atomic Save: Group all factory settings updates
         try {
+            const timestamp = Date.now();
             await Promise.all([
                 idb.set('factory_default_formulas', factoryDefaultFormulas),
+                idb.set('factory_default_formulas_timestamp', timestamp),
                 idb.set('factory_additional_costs', factoryAdditionalCosts),
+                idb.set('factory_additional_costs_timestamp', timestamp),
                 idb.set('factory_cost_adjustment_factor', factoryCostAdjustmentFactor),
-                idb.set('factory_sale_prices', factorySalePrices)
+                idb.set('factory_cost_adjustment_factor_timestamp', timestamp),
+                idb.set('factory_sale_prices', factorySalePrices),
+                idb.set('factory_sale_prices_timestamp', timestamp)
             ]);
+            console.log('🕒 Factory settings saved with timestamp:', timestamp);
         } catch (e) {
             console.error("Atomic settings save failed:", e);
             alert("Failed to save settings. Please try again.");
@@ -7846,29 +7984,9 @@ async function createSupplierFromMaterial(supplierData) {
 
 
 // --- UPDATED: LINK MATERIAL TO SUPPLIER FUNCTION ---
-async function linkMaterialToSupplier(materialId, supplierId, totalCost) {
-    // Find the material
-    const material = factoryInventoryData.find(m => m.id === materialId);
-    if (!material) return;
-    
-    // Find the supplier entity
-    const supplier = paymentEntities.find(e => e.id === supplierId);
-    if (!supplier) return;
-    
-    // Update material with supplier info
-    material.supplierId = supplierId;
-    material.supplierName = supplier.name;
-    material.supplierContact = supplier.phone || '';
-    material.supplierType = 'payee';
-    material.paymentStatus = 'pending';
-    material.totalPayable = totalCost;
-    
-    await idb.set('factory_inventory_data', factoryInventoryData);
-    notifyDataChange('all');
 
-    // Refresh payment tab to show updated entity list
-    refreshPaymentTab();
-}
+// DUPLICATE REMOVED: linkMaterialToSupplier (simpler version)
+// Enhanced version with unlinking capability is at line ~8032
     
     // UPDATED: renderFactoryInventory with unlink capability
 async function renderFactoryInventory() {
@@ -8012,60 +8130,8 @@ function loadExistingSuppliers() {
     }
 }
 
-async function createSupplierFromMaterial(supplierData) {
-    // Create a new entity for the supplier
-    const supplierEntity = {
-        id: Date.now(),
-        name: supplierData.name,
-        type: 'payee', // Supplier is someone we pay
-        phone: supplierData.phone || '',
-        email: supplierData.email || '',
-        contactPerson: supplierData.contact || '',
-        paymentTerms: supplierData.paymentTerms || 'cash',
-        wallet: supplierData.email || '',
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        isSupplier: true,
-        supplierId: supplierData.id || Date.now(),
-        supplierCategory: 'raw_materials'
-    };
-    
-    // Add to payment entities
-    paymentEntities.push(supplierEntity);
-    await idb.set('payment_entities', paymentEntities);
-    notifyDataChange('all');
-
-    // Create an initial payable transaction for this material purchase
-    const today = new Date().toISOString().split('T')[0];
-    const now = new Date();
-    let hours = now.getHours();
-    const minutes = now.getMinutes();
-    const seconds = now.getSeconds();
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12;
-    hours = hours ? hours : 12;
-    const timeString = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')} ${ampm}`;
-    
-    paymentTransactions.push({
-        id: Date.now(),
-        entityId: supplierEntity.id,
-        entityName: supplierEntity.name,
-        entityType: 'payee',
-        date: today,
-        time: timeString,
-        amount: supplierData.materialTotal || 0,
-        description: `Initial material purchase: ${supplierData.materialName}`,
-        type: 'OUT', // Money going out to supplier
-        materialId: supplierData.materialId,
-        supplierTransaction: true,
-        timestamp: new Date(today).getTime()
-    });
-    
-    await idb.set('payment_transactions', paymentTransactions);
-    notifyDataChange('all');
-
-    return supplierEntity;
-}
+// DUPLICATE REMOVED: createSupplierFromMaterial function
+// Original version at line ~7832 is being used
 
 // UPDATED: linkMaterialToSupplier - Enhanced with unlinking capability
 async function linkMaterialToSupplier(materialId, supplierId, totalCost) {
@@ -8470,7 +8536,10 @@ async function linkMaterialToSupplier(materialId, supplierId, totalCost) {
         
         // Save to IndexedDB
         factoryUnitTracking = tracking;
+        const timestamp = Date.now();
         await idb.set('factory_unit_tracking', factoryUnitTracking);
+        await idb.set('factory_unit_tracking_timestamp', timestamp);
+        console.log('🕒 Factory unit tracking updated with timestamp:', timestamp);
         
         return tracking;
     }
@@ -8862,18 +8931,6 @@ function calculateSalesCost(store, quantity) {
 }
 
 // Helper function to get cost per unit (already defined elsewhere, but included for completeness)
-function getCostPerUnit(storeType) {
-    const formula = factoryDefaultFormulas[storeType];
-    if (!formula || formula.length === 0) return 0;
-    
-    let totalMaterialCost = 0;
-    formula.forEach(item => {
-        totalMaterialCost += (item.cost * item.quantity);
-    });
-    
-    const additionalCost = factoryAdditionalCosts[storeType] || 0;
-    return totalMaterialCost + additionalCost;
-}
 
 // Also update the calculateCustomerSale() function to show inventory status
 function calculateCustomerSale() {
@@ -9164,6 +9221,14 @@ setInterval(checkAndAutoResetFirestoreStats, 60 * 60 * 1000);
 function initFirestoreUsageChart() {
     const ctx = document.getElementById('firestoreUsageChart');
     if (!ctx) return;
+    
+    // Destroy existing chart if it exists
+    if (firestoreUsageChart) {
+        firestoreUsageChart.destroy();
+        firestoreUsageChart = null;
+    }
+    const existingChart = Chart.getChart(ctx);
+    if (existingChart) existingChart.destroy();
     
     firestoreUsageChart = new Chart(ctx, {
         type: 'line',
@@ -10332,16 +10397,26 @@ async function performOneClickSync(silent = false) {
 
         // Merge settings (Read from incoming settingsData)
         // CRITICAL FIX: Wrap each setting merge in try-catch to prevent sync freeze
+        // TIMESTAMP CHECK: Only overwrite local settings if cloud settings are actually newer
         try {
             if (settingsData.factory_default_formulas && typeof settingsData.factory_default_formulas === 'object') {
                 // Validate structure before assigning
                 const formulas = settingsData.factory_default_formulas;
                 if (('standard' in formulas) && ('asaan' in formulas)) {
-                    factoryDefaultFormulas = {
-                        standard: Array.isArray(formulas.standard) ? formulas.standard : [],
-                        asaan: Array.isArray(formulas.asaan) ? formulas.asaan : []
-                    };
-                    console.log('✅ Loaded factory_default_formulas from cloud');
+                    // Get timestamps
+                    const cloudTimestamp = settingsData.factory_default_formulas_timestamp || 0;
+                    const localTimestamp = (await idb.get('factory_default_formulas_timestamp')) || 0;
+                    
+                    // Only update if cloud is newer
+                    if (cloudTimestamp >= localTimestamp) {
+                        factoryDefaultFormulas = {
+                            standard: Array.isArray(formulas.standard) ? formulas.standard : [],
+                            asaan: Array.isArray(formulas.asaan) ? formulas.asaan : []
+                        };
+                        console.log('✅ Loaded factory_default_formulas from cloud (timestamp:', cloudTimestamp, ')');
+                    } else {
+                        console.log('ℹ️ Keeping local factory_default_formulas (local is newer)');
+                    }
                 } else {
                     console.warn('⚠️ Invalid factory_default_formulas structure, keeping local version');
                 }
@@ -10354,11 +10429,20 @@ async function performOneClickSync(silent = false) {
             if (settingsData.factory_additional_costs && typeof settingsData.factory_additional_costs === 'object') {
                 const costs = settingsData.factory_additional_costs;
                 if (('standard' in costs) && ('asaan' in costs)) {
-                    factoryAdditionalCosts = {
-                        standard: parseFloat(costs.standard) || 0,
-                        asaan: parseFloat(costs.asaan) || 0
-                    };
-                    console.log('✅ Loaded factory_additional_costs from cloud');
+                    // Get timestamps
+                    const cloudTimestamp = settingsData.factory_additional_costs_timestamp || 0;
+                    const localTimestamp = (await idb.get('factory_additional_costs_timestamp')) || 0;
+                    
+                    // Only update if cloud is newer
+                    if (cloudTimestamp >= localTimestamp) {
+                        factoryAdditionalCosts = {
+                            standard: parseFloat(costs.standard) || 0,
+                            asaan: parseFloat(costs.asaan) || 0
+                        };
+                        console.log('✅ Loaded factory_additional_costs from cloud (timestamp:', cloudTimestamp, ')');
+                    } else {
+                        console.log('ℹ️ Keeping local factory_additional_costs (local is newer)');
+                    }
                 } else {
                     console.warn('⚠️ Invalid factory_additional_costs structure, keeping local version');
                 }
@@ -10371,11 +10455,20 @@ async function performOneClickSync(silent = false) {
             if (settingsData.factory_cost_adjustment_factor && typeof settingsData.factory_cost_adjustment_factor === 'object') {
                 const factor = settingsData.factory_cost_adjustment_factor;
                 if (('standard' in factor) && ('asaan' in factor)) {
-                    factoryCostAdjustmentFactor = {
-                        standard: parseFloat(factor.standard) || 1,
-                        asaan: parseFloat(factor.asaan) || 1
-                    };
-                    console.log('✅ Loaded factory_cost_adjustment_factor from cloud');
+                    // Get timestamps
+                    const cloudTimestamp = settingsData.factory_cost_adjustment_factor_timestamp || 0;
+                    const localTimestamp = (await idb.get('factory_cost_adjustment_factor_timestamp')) || 0;
+                    
+                    // Only update if cloud is newer
+                    if (cloudTimestamp >= localTimestamp) {
+                        factoryCostAdjustmentFactor = {
+                            standard: parseFloat(factor.standard) || 1,
+                            asaan: parseFloat(factor.asaan) || 1
+                        };
+                        console.log('✅ Loaded factory_cost_adjustment_factor from cloud (timestamp:', cloudTimestamp, ')');
+                    } else {
+                        console.log('ℹ️ Keeping local factory_cost_adjustment_factor (local is newer)');
+                    }
                 } else {
                     console.warn('⚠️ Invalid factory_cost_adjustment_factor structure, keeping local version');
                 }
@@ -10388,11 +10481,20 @@ async function performOneClickSync(silent = false) {
             if (settingsData.factory_sale_prices && typeof settingsData.factory_sale_prices === 'object') {
                 const prices = settingsData.factory_sale_prices;
                 if (('standard' in prices) && ('asaan' in prices)) {
-                    factorySalePrices = {
-                        standard: parseFloat(prices.standard) || 0,
-                        asaan: parseFloat(prices.asaan) || 0
-                    };
-                    console.log('✅ Loaded factory_sale_prices from cloud');
+                    // Get timestamps
+                    const cloudTimestamp = settingsData.factory_sale_prices_timestamp || 0;
+                    const localTimestamp = (await idb.get('factory_sale_prices_timestamp')) || 0;
+                    
+                    // Only update if cloud is newer
+                    if (cloudTimestamp >= localTimestamp) {
+                        factorySalePrices = {
+                            standard: parseFloat(prices.standard) || 0,
+                            asaan: parseFloat(prices.asaan) || 0
+                        };
+                        console.log('✅ Loaded factory_sale_prices from cloud (timestamp:', cloudTimestamp, ')');
+                    } else {
+                        console.log('ℹ️ Keeping local factory_sale_prices (local is newer)');
+                    }
                 } else {
                     console.warn('⚠️ Invalid factory_sale_prices structure, keeping local version');
                 }
@@ -10403,8 +10505,17 @@ async function performOneClickSync(silent = false) {
         
         try {
             if (settingsData.factory_unit_tracking && typeof settingsData.factory_unit_tracking === 'object') {
-                factoryUnitTracking = settingsData.factory_unit_tracking;
-                console.log('✅ Loaded factory_unit_tracking from cloud');
+                // Get timestamps
+                const cloudTimestamp = settingsData.factory_unit_tracking_timestamp || 0;
+                const localTimestamp = (await idb.get('factory_unit_tracking_timestamp')) || 0;
+                
+                // Only update if cloud is newer
+                if (cloudTimestamp >= localTimestamp) {
+                    factoryUnitTracking = settingsData.factory_unit_tracking;
+                    console.log('✅ Loaded factory_unit_tracking from cloud (timestamp:', cloudTimestamp, ')');
+                } else {
+                    console.log('ℹ️ Keeping local factory_unit_tracking (local is newer)');
+                }
             }
         } catch (e) {
             console.error('❌ Error loading factory_unit_tracking:', e);
@@ -10412,14 +10523,78 @@ async function performOneClickSync(silent = false) {
         
         try {
             if (settingsData.naswar_default_settings) {
-                defaultSettings = settingsData.naswar_default_settings;
-                console.log('✅ Loaded naswar_default_settings from cloud');
+                // Get timestamps
+                const cloudTimestamp = settingsData.naswar_default_settings_timestamp || 0;
+                const localTimestamp = (await idb.get('naswar_default_settings_timestamp')) || 0;
+                
+                // Only update if cloud is newer
+                if (cloudTimestamp >= localTimestamp) {
+                    defaultSettings = settingsData.naswar_default_settings;
+                    console.log('✅ Loaded naswar_default_settings from cloud (timestamp:', cloudTimestamp, ')');
+                } else {
+                    console.log('ℹ️ Keeping local naswar_default_settings (local is newer)');
+                }
             }
         } catch (e) {
             console.error('❌ Error loading naswar_default_settings:', e);
         }
+        
+        // Admin PIN and Rep Profile settings with timestamp check
+        try {
+            if (settingsData.adminPin !== undefined) {
+                // Get timestamps
+                const cloudTimestamp = settingsData.adminPin_timestamp || 0;
+                const localTimestamp = (await idb.get('adminPin_timestamp')) || 0;
+                
+                // Only update if cloud is newer
+                if (cloudTimestamp >= localTimestamp) {
+                    adminPin = settingsData.adminPin || '1234';
+                    console.log('✅ Loaded adminPin from cloud (timestamp:', cloudTimestamp, ')');
+                } else {
+                    console.log('ℹ️ Keeping local adminPin (local is newer)');
+                }
+            }
+        } catch (e) {
+            console.error('❌ Error loading adminPin:', e);
+        }
+        
+        try {
+            if (settingsData.repProfile !== undefined) {
+                // Get timestamps
+                const cloudTimestamp = settingsData.repProfile_timestamp || 0;
+                const localTimestamp = (await idb.get('repProfile_timestamp')) || 0;
+                
+                // Only update if cloud is newer
+                if (cloudTimestamp >= localTimestamp) {
+                    currentRepProfile = settingsData.repProfile || 'NORAN SHAH';
+                    console.log('✅ Loaded repProfile from cloud (timestamp:', cloudTimestamp, ')');
+                } else {
+                    console.log('ℹ️ Keeping local repProfile (local is newer)');
+                }
+            }
+        } catch (e) {
+            console.error('❌ Error loading repProfile:', e);
+        }
+        
+        try {
+            if (settingsData.appMode !== undefined) {
+                // Get timestamps
+                const cloudTimestamp = settingsData.appMode_timestamp || 0;
+                const localTimestamp = (await idb.get('appMode_timestamp')) || 0;
+                
+                // Only update if cloud is newer
+                if (cloudTimestamp >= localTimestamp) {
+                    appMode = settingsData.appMode || 'admin';
+                    console.log('✅ Loaded appMode from cloud (timestamp:', cloudTimestamp, ')');
+                } else {
+                    console.log('ℹ️ Keeping local appMode (local is newer)');
+                }
+            }
+        } catch (e) {
+            console.error('❌ Error loading appMode:', e);
+        }
 
-        // SAVE LOCALLY (including factory settings)
+        // SAVE LOCALLY (including factory settings and timestamps)
         await Promise.all([
             idb.set('mfg_pro_pkr', db),
             idb.set('customer_sales', customerSales),
@@ -10436,6 +10611,19 @@ async function performOneClickSync(silent = false) {
             idb.set('factory_sale_prices', factorySalePrices),
             idb.set('factory_unit_tracking', factoryUnitTracking),
             idb.set('naswar_default_settings', defaultSettings),
+            idb.set('adminPin', adminPin),
+            idb.set('repProfile', currentRepProfile),
+            idb.set('appMode', appMode),
+            // Save timestamps for settings (use cloud timestamps if we just downloaded, otherwise keep local)
+            idb.set('factory_default_formulas_timestamp', settingsData.factory_default_formulas_timestamp || await idb.get('factory_default_formulas_timestamp') || 0),
+            idb.set('factory_additional_costs_timestamp', settingsData.factory_additional_costs_timestamp || await idb.get('factory_additional_costs_timestamp') || 0),
+            idb.set('factory_cost_adjustment_factor_timestamp', settingsData.factory_cost_adjustment_factor_timestamp || await idb.get('factory_cost_adjustment_factor_timestamp') || 0),
+            idb.set('factory_sale_prices_timestamp', settingsData.factory_sale_prices_timestamp || await idb.get('factory_sale_prices_timestamp') || 0),
+            idb.set('factory_unit_tracking_timestamp', settingsData.factory_unit_tracking_timestamp || await idb.get('factory_unit_tracking_timestamp') || 0),
+            idb.set('naswar_default_settings_timestamp', settingsData.naswar_default_settings_timestamp || await idb.get('naswar_default_settings_timestamp') || 0),
+            idb.set('adminPin_timestamp', settingsData.adminPin_timestamp || await idb.get('adminPin_timestamp') || 0),
+            idb.set('repProfile_timestamp', settingsData.repProfile_timestamp || await idb.get('repProfile_timestamp') || 0),
+            idb.set('appMode_timestamp', settingsData.appMode_timestamp || await idb.get('appMode_timestamp') || 0),
             idb.set('deleted_records', Array.from(deletedRecordIds)),
             idb.set('last_synced', now)
         ]);
@@ -10576,18 +10764,27 @@ async function performOneClickSync(silent = false) {
         
         const settingsPayload = {
             factory_default_formulas: ensureFactorySettings(factoryDefaultFormulas, { standard: [], asaan: [] }),
+            factory_default_formulas_timestamp: await idb.get('factory_default_formulas_timestamp') || Date.now(),
             factory_additional_costs: ensureFactorySettings(factoryAdditionalCosts, { standard: 0, asaan: 0 }),
+            factory_additional_costs_timestamp: await idb.get('factory_additional_costs_timestamp') || Date.now(),
             factory_cost_adjustment_factor: ensureFactorySettings(factoryCostAdjustmentFactor, { standard: 1, asaan: 1 }),
+            factory_cost_adjustment_factor_timestamp: await idb.get('factory_cost_adjustment_factor_timestamp') || Date.now(),
             factory_sale_prices: ensureFactorySettings(factorySalePrices, { standard: 0, asaan: 0 }),
+            factory_sale_prices_timestamp: await idb.get('factory_sale_prices_timestamp') || Date.now(),
             factory_unit_tracking: ensureFactorySettings(factoryUnitTracking, { 
                 standard: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] },
                 asaan: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] }
             }),
+            factory_unit_tracking_timestamp: await idb.get('factory_unit_tracking_timestamp') || Date.now(),
             naswar_default_settings: defaultSettings || {},
+            naswar_default_settings_timestamp: await idb.get('naswar_default_settings_timestamp') || Date.now(),
             deleted_records: Array.from(deletedRecordIds),
             appMode: appMode || 'admin',
+            appMode_timestamp: await idb.get('appMode_timestamp') || Date.now(),
             repProfile: currentRepProfile || {},
+            repProfile_timestamp: await idb.get('repProfile_timestamp') || Date.now(),
             adminPin: adminPin || '',
+            adminPin_timestamp: await idb.get('adminPin_timestamp') || Date.now(),
             last_synced: now
         };
         
@@ -11908,7 +12105,23 @@ async function markSalesEntriesAsReceived(seller, quantityToMark) {
     const seller = document.getElementById('sellerSelect').value;
     if (seller === 'COMBINED') return;
     
-    if(indPerformanceChart) indPerformanceChart.destroy();
+    // Properly destroy existing chart and clear canvas
+    const chartElement = document.getElementById('indPerformanceChart');
+    if (!chartElement) {
+        console.warn('indPerformanceChart canvas not found');
+        return;
+    }
+    
+    if (indPerformanceChart) {
+        indPerformanceChart.destroy();
+        indPerformanceChart = null;
+    }
+    
+    // Clear any existing Chart.js instance associated with this canvas
+    const chartInstance = Chart.getChart(chartElement);
+    if (chartInstance) {
+        chartInstance.destroy();
+    }
         
         let history; history = await idb.get('noman_history', []);
         const sellerHistory = history.filter(h => h.seller === seller);
@@ -11993,12 +12206,6 @@ async function markSalesEntriesAsReceived(seller, quantityToMark) {
         };
         
         const sellerColor = seller === 'NORAN SHAH' ? '#2563eb' : '#059669';
-        
-        const chartElement = document.getElementById('indPerformanceChart');
-        if (!chartElement) {
-            console.warn('indPerformanceChart canvas not found');
-            return;
-        }
         
         indPerformanceChart = new Chart(chartElement, {
             type: 'bar',
@@ -12092,7 +12299,24 @@ async function markSalesEntriesAsReceived(seller, quantityToMark) {
     if (typeof Chart === 'undefined') return;
     // --- SAFETY CHECK END ---
 
-    if(storeComparisonChart) storeComparisonChart.destroy();
+    // Properly destroy existing chart first
+    const storeChartElement = document.getElementById('storeComparisonChart');
+    if (!storeChartElement) {
+        console.warn('storeComparisonChart canvas not found');
+        return;
+    }
+    
+    if (storeComparisonChart) {
+        storeComparisonChart.destroy();
+        storeComparisonChart = null;
+    }
+    
+    // Clear any existing Chart.js instance
+    const existingStoreChart = Chart.getChart(storeChartElement);
+    if (existingStoreChart) {
+        existingStoreChart.destroy();
+    }
+    
         const selectedDate = document.getElementById('sys-date').value;
         const selectedDateObj = new Date(selectedDate);
         const selectedYear = selectedDateObj.getFullYear();
@@ -12160,12 +12384,6 @@ async function markSalesEntriesAsReceived(seller, quantityToMark) {
             text: '#1e3a8a',
             grid: 'rgba(37, 99, 235, 0.1)'
         };
-        
-        const storeChartElement = document.getElementById('storeComparisonChart');
-        if (!storeChartElement) {
-            console.warn('storeComparisonChart canvas not found');
-            return;
-        }
         
         storeComparisonChart = new Chart(storeChartElement, {
             type: 'bar',
@@ -12908,8 +13126,28 @@ function adminSwitchRepProfile(newProfile) {
     }
     // --- SAFETY CHECK END ---
 
-    if(mfgBarChart) mfgBarChart.destroy();
-    if(mfgPieChart) mfgPieChart.destroy();
+    // Properly destroy existing charts
+    const mfgBarCanvas = document.getElementById('mfgBarChart');
+    const mfgPieCanvas = document.getElementById('mfgPieChart');
+    
+    if (mfgBarChart) {
+        mfgBarChart.destroy();
+        mfgBarChart = null;
+    }
+    if (mfgPieChart) {
+        mfgPieChart.destroy();
+        mfgPieChart = null;
+    }
+    
+    // Clear any existing Chart.js instances
+    if (mfgBarCanvas) {
+        const existingBarChart = Chart.getChart(mfgBarCanvas);
+        if (existingBarChart) existingBarChart.destroy();
+    }
+    if (mfgPieCanvas) {
+        const existingPieChart = Chart.getChart(mfgPieCanvas);
+        if (existingPieChart) existingPieChart.destroy();
+    }
 
         let filteredData = currentProductionView === 'combined' ? db : db.filter(item => item.store === currentStore);
 
@@ -13012,9 +13250,8 @@ function adminSwitchRepProfile(newProfile) {
             }
         });
 
-        const mfgBarCanvas = document.getElementById('mfgBarChart');
-        if (!mfgBarCanvas) {
-            console.warn('mfgBarChart canvas not found');
+        if (!mfgBarCanvas || !mfgPieCanvas) {
+            console.warn('Manufacturing chart canvases not found');
             return;
         }
         
@@ -13052,12 +13289,6 @@ function adminSwitchRepProfile(newProfile) {
 
         const pieData = [totalCost, totalProfit];
         const pieLabels = ['Total Cost', 'Net Profit'];
-        
-        const mfgPieCanvas = document.getElementById('mfgPieChart');
-        if (!mfgPieCanvas) {
-            console.warn('mfgPieChart canvas not found');
-            return;
-        }
         
         mfgPieChart = new Chart(mfgPieCanvas, {
             type: 'pie',
@@ -13104,18 +13335,6 @@ function adminSwitchRepProfile(newProfile) {
         }
     }
         // --- HELPER FUNCTIONS ---
-function getCostPerUnit(storeType) {
-    const formula = factoryDefaultFormulas[storeType];
-    if (!formula || formula.length === 0) return 0;
-    
-    let totalMaterialCost = 0;
-    formula.forEach(item => {
-        totalMaterialCost += (item.cost * item.quantity);
-    });
-    
-    const additionalCost = factoryAdditionalCosts[storeType] || 0;
-    return totalMaterialCost + additionalCost;
-}
 
 function getWeightPerUnit(storeType) {
     const formula = factoryDefaultFormulas[storeType];
@@ -13641,8 +13860,29 @@ function updateAllStoresOverview(mode = 'day') {
     if (typeof Chart === 'undefined') return;
     // --- SAFETY CHECK END ---
 
-    if(custSalesChart) custSalesChart.destroy();
-    if(custPaymentChart) custPaymentChart.destroy();
+    // Properly destroy existing charts
+    const custSalesCanvas = document.getElementById('custSalesChart');
+    const custPaymentCanvas = document.getElementById('custPaymentChart');
+    
+    if (custSalesChart) {
+        custSalesChart.destroy();
+        custSalesChart = null;
+    }
+    if (custPaymentChart) {
+        custPaymentChart.destroy();
+        custPaymentChart = null;
+    }
+    
+    // Clear any existing Chart.js instances
+    if (custSalesCanvas) {
+        const existingSalesChart = Chart.getChart(custSalesCanvas);
+        if (existingSalesChart) existingSalesChart.destroy();
+    }
+    if (custPaymentCanvas) {
+        const existingPaymentChart = Chart.getChart(custPaymentCanvas);
+        if (existingPaymentChart) existingPaymentChart.destroy();
+    }
+    
         const selectedDate = document.getElementById('cust-date').value;
         if (!selectedDate) return;
         
@@ -13772,9 +14012,8 @@ function updateAllStoresOverview(mode = 'day') {
             }
         });
 
-        const custSalesCanvas = document.getElementById('custSalesChart');
-        if (!custSalesCanvas) {
-            console.warn('custSalesChart canvas not found');
+        if (!custSalesCanvas || !custPaymentCanvas) {
+            console.warn('Customer chart canvases not found');
             return;
         }
         
@@ -13830,12 +14069,6 @@ function updateAllStoresOverview(mode = 'day') {
 
         const pieData = [totalCash, totalCredit];
         const pieLabels = ['Cash Sales (Inc. Received Credits)', 'Pending Credits'];
-        
-        const custPaymentCanvas = document.getElementById('custPaymentChart');
-        if (!custPaymentCanvas) {
-            console.warn('custPaymentChart canvas not found');
-            return;
-        }
         
         custPaymentChart = new Chart(custPaymentCanvas, {
             type: 'pie',
@@ -14091,14 +14324,9 @@ function updateAllStoresOverview(mode = 'day') {
         }
     }
 
-    async function deleteCustomerSale(id) {
-        if(confirm("Delete this sale transaction permanently?")) {
-            customerSales = customerSales.filter(item => item.id !== id);
-            await idb.set('customer_sales', customerSales);
-            refreshCustomerSales();
-            alert("Transaction deleted!");
-        }
-    }
+    
+    // DUPLICATE REMOVED: deleteCustomerSale function
+    // Enhanced version with registerDeletion and inventory update is at line ~8942
 
     // --- CALCULATOR TAB FUNCTIONS (UPDATED WITH ALL TIMES) ---
     async function calculateComparisonData() {
@@ -14472,7 +14700,14 @@ async function loadSalesData(compMode = 'all') {
             return;
         }
 
-        if(salesPerfChart) salesPerfChart.destroy();
+        // Destroy existing charts properly
+        if (salesPerfChart) {
+            salesPerfChart.destroy();
+            salesPerfChart = null;
+        }
+        const existingPerfChart = Chart.getChart(perfChartElement);
+        if (existingPerfChart) existingPerfChart.destroy();
+        
         salesPerfChart = new Chart(perfChartElement, {
             type: 'bar',
             data: { 
@@ -14513,7 +14748,14 @@ async function loadSalesData(compMode = 'all') {
             return;
         }
         
-        if(salesCompChart) salesCompChart.destroy();
+        // Destroy existing chart properly
+        if (salesCompChart) {
+            salesCompChart.destroy();
+            salesCompChart = null;
+        }
+        const existingCompChart = Chart.getChart(compChartElement);
+        if (existingCompChart) existingCompChart.destroy();
+        
         salesCompChart = new Chart(compChartElement, {
             type: 'pie',
             data: {
@@ -14855,18 +15097,10 @@ document.addEventListener('DOMContentLoaded', async function() {
 });
 
     // Ensure your deleteCustomerSale looks like this to keep dashboard sync:
-async function deleteCustomerSale(id) {
-    if(confirm("Delete this sale transaction permanently?")) {
-        customerSales = customerSales.filter(item => item.id !== id);
-        await idb.set('customer_sales', customerSales);
-        
-        refreshCustomerSales(); // Refreshes the list
-        calculateNetCash();     // Syncs the Economic Dashboard
-        calculateCashTracker(); // Syncs the Cash Tracker
-        renderCustomersTable();
-        alert("Transaction deleted!");
-    }
-}
+
+// DUPLICATE REMOVED: deleteCustomerSale function
+// Enhanced version with registerDeletion and inventory update is at line ~8942
+
 // Close search dropdown when clicking outside
 document.addEventListener('click', function(e) {
     const searchContainer = document.getElementById('cust-name').parentElement;
@@ -15413,11 +15647,9 @@ function safeValue(value) {
 }
 
 // FIND THIS FUNCTION (usually at the bottom of your script) AND REPLACE IT
-function formatCurrency(value) {
-    // Removed 'async' keyword to return string immediately
-    if (typeof value !== 'number') value = parseFloat(value) || 0;
-    return 'PKR ' + value.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
-}
+
+// DUPLICATE REMOVED: formatCurrency function (non-async version)
+// Async version is at line ~14699 and is being used throughout the code
 
 // Add validation and error handling for payment data
 async function initPaymentData() {
@@ -15668,7 +15900,7 @@ async function renderCustomerTransactions(name) {
     
     // Determine Phone & Address to display
     const phone = entity?.phone || transactions.find(t => t && t.customerPhone)?.customerPhone || '';
-    const address = entity?.address || ''; // New field
+    const address = entity?.address || ''; 
 
     // Update Header with Edit Button
     const headerTitle = document.getElementById('manageCustomerTitle');
@@ -15691,7 +15923,8 @@ async function renderCustomerTransactions(name) {
         if(t.paymentType === 'CREDIT' && !t.creditReceived) currentDebt += t.totalValue;
     });
     
-    document.getElementById('manageCustomerStats').innerText = `Current Debt: ${formatCurrency(currentDebt)}`;
+    // --- FIX: Added 'await' here ---
+    document.getElementById('manageCustomerStats').innerText = `Current Debt: ${await formatCurrency(currentDebt)}`;
 
     // Sort: Pending Credits First, then Newest Date
     transactions.sort((a,b) => {
@@ -15716,7 +15949,6 @@ async function renderCustomerTransactions(name) {
         let toggleBtnHtml = '';
         
         if(isCredit) {
-            // FIX IS HERE: Added single quotes around ${t.id}
             toggleBtnHtml = `<button class="status-toggle-btn ${statusClass}" onclick="toggleSingleTransactionStatus('${t.id}')">${btnText}</button>`;
         } else {
             toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(37, 99, 235, 0.1); color:var(--accent);">CASH SALE</span>`;
@@ -15726,7 +15958,7 @@ async function renderCustomerTransactions(name) {
             <div class="cust-history-info">
                 <div style="font-weight:700; font-size:0.85rem; color:var(--text-main);">${t.date}</div>
                 <div style="font-size:0.75rem; color:var(--text-muted);">
-                    ${t.quantity.toFixed(2)} kg @ ${formatCurrency(t.totalValue)}
+                    ${t.quantity.toFixed(2)} kg @ ${await formatCurrency(t.totalValue)}
                 </div>
                 <div style="font-size:0.7rem; color:var(--text-muted); margin-top:2px;">
                     ${getStoreLabel(t.supplyStore)}
@@ -15740,8 +15972,6 @@ async function renderCustomerTransactions(name) {
         list.appendChild(item);
     }
 }
-
-
 
 async function toggleSingleTransactionStatus(id) {
     const index = customerSales.findIndex(s => s.id === id);
@@ -17366,7 +17596,8 @@ async function renderRepCustomerTransactions(name) {
         if(t.paymentType === 'COLLECTION') currentDebt -= t.totalValue;
     });
     
-    document.getElementById('manageCustomerStats').innerText = `Current Debt: ${formatCurrency(currentDebt)}`;
+    // --- FIX: Added 'await' here ---
+    document.getElementById('manageCustomerStats').innerText = `Current Debt: ${await formatCurrency(currentDebt)}`;
 
     // Sort: Pending Credits First, then Newest Date
     transactions.sort((a,b) => {
@@ -17392,7 +17623,6 @@ async function renderRepCustomerTransactions(name) {
         let toggleBtnHtml = '';
         
         if(isCredit) {
-            // FIXED: Added quotes around t.id
             toggleBtnHtml = `<button class="status-toggle-btn ${statusClass}" onclick="toggleSingleTransactionStatus('${t.id}')">${btnText}</button>`;
         } else if(isCollection) {
             toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(5, 150, 105, 0.1); color:var(--accent-emerald);"> COLLECTION</span>`;
@@ -17404,7 +17634,7 @@ async function renderRepCustomerTransactions(name) {
             <div class="cust-history-info">
                 <div style="font-weight:700; font-size:0.85rem; color:var(--text-main);">${t.date}</div>
                 <div style="font-size:0.75rem; color:var(--text-muted);">
-                    ${isCollection ? `Collection: ${formatCurrency(t.totalValue)}` : `${t.quantity.toFixed(2)} kg @ ${formatCurrency(t.totalValue)}`}
+                    ${isCollection ? `Collection: ${await formatCurrency(t.totalValue)}` : `${t.quantity.toFixed(2)} kg @ ${await formatCurrency(t.totalValue)}`}
                 </div>
                 <div style="font-size:0.7rem; color:var(--text-muted); margin-top:2px;">
                     ${getStoreLabel(t.supplyStore)}
@@ -17785,9 +18015,14 @@ async function activateRepMode() {
         currentRepProfile = selectedRep;
         appMode = 'rep';
         
+        const timestamp = Date.now();
         await idb.set('adminPin', adminPin);
+        await idb.set('adminPin_timestamp', timestamp);
         await idb.set('repProfile', currentRepProfile);
+        await idb.set('repProfile_timestamp', timestamp);
         await idb.set('appMode', appMode);
+        await idb.set('appMode_timestamp', timestamp);
+        console.log('🕒 Admin settings saved with timestamp:', timestamp);
         notifyDataChange('all');
 
         lockToRepMode();
@@ -17930,7 +18165,10 @@ function preventAdminAccess() {
 // --- 3. ENHANCED UNLOCK FUNCTION ---
 async function unlockAdminMode() {
     appMode = 'admin';
+    const timestamp = Date.now();
     await idb.set('appMode', 'admin');
+    await idb.set('appMode_timestamp', timestamp);
+    console.log('🕒 App mode changed to admin with timestamp:', timestamp);
     notifyDataChange('all');
 
     // Restore navigation
@@ -19081,6 +19319,406 @@ console.log('✅ Firestore Enhancement Module Loaded');
             isPulling = false;
         });
     })();
+
+    // ==========================================
+    // SEARCHABLE SELECT FUNCTIONALITY
+    // ==========================================
+    
+    /**
+     * Converts a standard <select> element into a searchable dropdown
+     * Maintains all existing functionality and event handlers
+     */
+    class SearchableSelect {
+        constructor(selectElement) {
+            this.originalSelect = selectElement;
+            this.selectedValue = selectElement.value;
+            this.selectedText = selectElement.options[selectElement.selectedIndex]?.text || '';
+            this.onChangeHandler = null;
+            
+            // Store original onchange attribute
+            const onchangeAttr = selectElement.getAttribute('onchange');
+            if (onchangeAttr) {
+                try {
+                    this.onChangeHandler = new Function('event', onchangeAttr);
+                } catch (e) {
+                    console.error('Error parsing onchange handler:', e);
+                }
+            }
+            
+            this.createSearchableSelect();
+            this.attachEventListeners();
+        }
+        
+        createSearchableSelect() {
+            // Create wrapper
+            const wrapper = document.createElement('div');
+            wrapper.className = 'searchable-select-wrapper';
+            
+            // Copy classes from original select
+            if (this.originalSelect.className) {
+                const classes = this.originalSelect.className.split(' ');
+                classes.forEach(cls => {
+                    if (cls && !cls.includes('store-selector') && !cls.includes('sales-rep')) {
+                        wrapper.classList.add(cls);
+                    }
+                });
+            }
+            
+            // Create input field
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'searchable-select-input';
+            input.placeholder = this.originalSelect.options[0]?.text || 'Select an option';
+            input.autocomplete = 'off';
+            
+            // Set initial value
+            if (this.selectedText && this.selectedValue) {
+                input.value = this.selectedText;
+                input.classList.add('has-value');
+            }
+            
+            // Create arrow indicator
+            const arrow = document.createElement('div');
+            arrow.className = 'searchable-select-arrow';
+            
+            // Create dropdown
+            const dropdown = document.createElement('div');
+            dropdown.className = 'searchable-select-dropdown';
+            
+            // Populate dropdown with options
+            this.populateDropdown(dropdown);
+            
+            // Assemble components
+            wrapper.appendChild(input);
+            wrapper.appendChild(arrow);
+            wrapper.appendChild(dropdown);
+            
+            // Replace original select
+            this.originalSelect.style.display = 'none';
+            this.originalSelect.parentNode.insertBefore(wrapper, this.originalSelect);
+            
+            // Store references
+            this.wrapper = wrapper;
+            this.input = input;
+            this.dropdown = dropdown;
+            this.arrow = arrow;
+        }
+        
+        populateDropdown(dropdown) {
+            dropdown.innerHTML = '';
+            const options = Array.from(this.originalSelect.options);
+            
+            options.forEach(option => {
+                if (option.value === '' && option.text.match(/choose|select/i)) {
+                    // Skip placeholder options
+                    return;
+                }
+                
+                const optionDiv = document.createElement('div');
+                optionDiv.className = 'searchable-select-option';
+                optionDiv.textContent = option.text;
+                optionDiv.dataset.value = option.value;
+                
+                // Copy data attributes from original option
+                for (let i = 0; i < option.attributes.length; i++) {
+                    const attr = option.attributes[i];
+                    if (attr.name.startsWith('data-')) {
+                        optionDiv.setAttribute(attr.name, attr.value);
+                    }
+                }
+                
+                if (option.value === this.selectedValue) {
+                    optionDiv.classList.add('selected');
+                }
+                
+                dropdown.appendChild(optionDiv);
+            });
+            
+            // Add "no results" message (hidden by default)
+            const noResults = document.createElement('div');
+            noResults.className = 'searchable-select-no-results hidden';
+            noResults.textContent = 'No matching options';
+            dropdown.appendChild(noResults);
+        }
+        
+        attachEventListeners() {
+            // Click on input to toggle dropdown
+            this.input.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.toggleDropdown();
+            });
+            
+            // Input for search
+            this.input.addEventListener('input', (e) => {
+                this.filterOptions(e.target.value);
+            });
+            
+            // Prevent input from losing focus when clicking in dropdown
+            this.dropdown.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+            });
+            
+            // Click on option
+            this.dropdown.addEventListener('click', (e) => {
+                if (e.target.classList.contains('searchable-select-option')) {
+                    this.selectOption(e.target);
+                }
+            });
+            
+            // Click outside to close
+            document.addEventListener('click', (e) => {
+                if (!this.wrapper.contains(e.target)) {
+                    this.closeDropdown();
+                }
+            });
+            
+            // Keyboard navigation
+            this.input.addEventListener('keydown', (e) => {
+                this.handleKeyboard(e);
+            });
+            
+            // Update when original select changes (for dynamic updates)
+            const observer = new MutationObserver(() => {
+                this.updateOptions();
+            });
+            observer.observe(this.originalSelect, { childList: true, subtree: true });
+        }
+        
+        toggleDropdown() {
+            if (this.wrapper.classList.contains('active')) {
+                this.closeDropdown();
+            } else {
+                this.openDropdown();
+            }
+        }
+        
+        openDropdown() {
+            // Close all other dropdowns first
+            document.querySelectorAll('.searchable-select-wrapper.active').forEach(w => {
+                if (w !== this.wrapper) {
+                    w.classList.remove('active');
+                }
+            });
+            
+            this.wrapper.classList.add('active');
+            this.input.focus();
+            
+            // Clear search when opening
+            if (!this.input.classList.contains('has-value')) {
+                this.input.value = '';
+            }
+        }
+        
+        closeDropdown() {
+            this.wrapper.classList.remove('active');
+            
+            // Restore selected value text
+            if (this.selectedText) {
+                this.input.value = this.selectedText;
+            } else {
+                this.input.value = '';
+            }
+            
+            // Clear filter
+            this.filterOptions('');
+        }
+        
+        filterOptions(searchTerm) {
+            const options = this.dropdown.querySelectorAll('.searchable-select-option');
+            const noResults = this.dropdown.querySelector('.searchable-select-no-results');
+            let hasVisibleOptions = false;
+            
+            const term = searchTerm.toLowerCase().trim();
+            
+            options.forEach(option => {
+                const text = option.textContent.toLowerCase();
+                if (text.includes(term)) {
+                    option.classList.remove('hidden');
+                    hasVisibleOptions = true;
+                } else {
+                    option.classList.add('hidden');
+                }
+            });
+            
+            // Show/hide no results message
+            if (hasVisibleOptions) {
+                noResults.classList.add('hidden');
+            } else {
+                noResults.classList.remove('hidden');
+            }
+        }
+        
+        selectOption(optionElement) {
+            const value = optionElement.dataset.value;
+            const text = optionElement.textContent;
+            
+            // Update selected state
+            this.dropdown.querySelectorAll('.searchable-select-option').forEach(opt => {
+                opt.classList.remove('selected');
+            });
+            optionElement.classList.add('selected');
+            
+            // Update values
+            this.selectedValue = value;
+            this.selectedText = text;
+            this.input.value = text;
+            this.input.classList.add('has-value');
+            
+            // Update original select
+            this.originalSelect.value = value;
+            
+            // Trigger change event on original select
+            const changeEvent = new Event('change', { bubbles: true });
+            this.originalSelect.dispatchEvent(changeEvent);
+            
+            // Call original onchange handler if exists
+            if (this.onChangeHandler) {
+                try {
+                    this.onChangeHandler.call(this.originalSelect, changeEvent);
+                } catch (e) {
+                    console.error('Error in onchange handler:', e);
+                }
+            }
+            
+            // Close dropdown
+            this.closeDropdown();
+        }
+        
+        handleKeyboard(e) {
+            if (!this.wrapper.classList.contains('active')) {
+                if (e.key === 'Enter' || e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    this.openDropdown();
+                }
+                return;
+            }
+            
+            const options = Array.from(this.dropdown.querySelectorAll('.searchable-select-option:not(.hidden)'));
+            const currentSelected = this.dropdown.querySelector('.searchable-select-option.selected:not(.hidden)');
+            let currentIndex = options.indexOf(currentSelected);
+            
+            switch (e.key) {
+                case 'ArrowDown':
+                    e.preventDefault();
+                    currentIndex = currentIndex < options.length - 1 ? currentIndex + 1 : 0;
+                    this.highlightOption(options[currentIndex]);
+                    break;
+                    
+                case 'ArrowUp':
+                    e.preventDefault();
+                    currentIndex = currentIndex > 0 ? currentIndex - 1 : options.length - 1;
+                    this.highlightOption(options[currentIndex]);
+                    break;
+                    
+                case 'Enter':
+                    e.preventDefault();
+                    if (currentSelected && !currentSelected.classList.contains('hidden')) {
+                        this.selectOption(currentSelected);
+                    } else if (options.length > 0) {
+                        this.selectOption(options[0]);
+                    }
+                    break;
+                    
+                case 'Escape':
+                    e.preventDefault();
+                    this.closeDropdown();
+                    break;
+            }
+        }
+        
+        highlightOption(optionElement) {
+            if (!optionElement) return;
+            
+            // Remove previous selection visual
+            this.dropdown.querySelectorAll('.searchable-select-option').forEach(opt => {
+                opt.style.background = '';
+            });
+            
+            // Highlight current
+            optionElement.style.background = 'var(--card-hover)';
+            
+            // Scroll into view
+            optionElement.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+        
+        updateOptions() {
+            // Refresh dropdown when options change dynamically
+            this.populateDropdown(this.dropdown);
+        }
+        
+        // Public method to get current value
+        getValue() {
+            return this.selectedValue;
+        }
+        
+        // Public method to set value programmatically
+        setValue(value) {
+            const option = Array.from(this.originalSelect.options).find(opt => opt.value === value);
+            if (option) {
+                this.selectedValue = value;
+                this.selectedText = option.text;
+                this.input.value = option.text;
+                this.input.classList.add('has-value');
+                this.originalSelect.value = value;
+                
+                // Update selected state in dropdown
+                this.dropdown.querySelectorAll('.searchable-select-option').forEach(opt => {
+                    opt.classList.remove('selected');
+                    if (opt.dataset.value === value) {
+                        opt.classList.add('selected');
+                    }
+                });
+            }
+        }
+    }
+    
+    // Store all searchable select instances
+    window.searchableSelectInstances = new Map();
+    
+    // Initialize all select elements as searchable selects
+    function initializeSearchableSelects() {
+        const selects = document.querySelectorAll('select');
+        let newInstancesCount = 0;
+        
+        selects.forEach(select => {
+            // Skip if already converted
+            if (select.style.display === 'none' && select.previousElementSibling?.classList.contains('searchable-select-wrapper')) {
+                return;
+            }
+            
+            // Skip if it's in the instances map
+            if (window.searchableSelectInstances.has(select)) {
+                return;
+            }
+            
+            const instance = new SearchableSelect(select);
+            window.searchableSelectInstances.set(select, instance);
+            newInstancesCount++;
+        });
+        
+        if (newInstancesCount > 0) {
+            console.log(`✅ Initialized ${newInstancesCount} new searchable select dropdown(s)`);
+        }
+        
+        return newInstancesCount;
+    }
+    
+    // Auto-initialize when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initializeSearchableSelects);
+    } else {
+        // DOM already loaded
+        setTimeout(initializeSearchableSelects, 100);
+    }
+    
+    // Re-initialize periodically to catch dynamically added selects
+    setInterval(() => {
+        initializeSearchableSelects();
+    }, 2000);
+    
+    // Expose to global scope for manual initialization if needed
+    window.SearchableSelect = SearchableSelect;
+    window.initializeSearchableSelects = initializeSearchableSelects;
 
 
 </script>
