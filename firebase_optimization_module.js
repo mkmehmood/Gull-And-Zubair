@@ -220,10 +220,10 @@
                             const timestamp = parseInt(lastSyncTime);
                             query = ref.where('lastModified', '>', timestamp)
                                        .orderBy('lastModified', 'desc')
-                                       .limit(100); // Limit to prevent huge queries
+                                       .limit(20); // REDUCED: Limit to 20 to prevent quota issues
                         } else {
-                            // First sync - get recent documents only
-                            query = ref.orderBy('lastModified', 'desc').limit(50);
+                            // First sync - get very limited recent documents
+                            query = ref.orderBy('lastModified', 'desc').limit(10); // REDUCED: Only 10 on first sync
                         }
                         
                         snapshot = await query.get();
@@ -231,7 +231,7 @@
                         // If index doesn't exist or lastModified field missing, fall back
                         if (indexError.code === 9 || indexError.message.includes('index') || indexError.message.includes('requires an index')) {
                             console.warn(`⚠️ Index not found for ${collectionPath}, fetching limited documents (run migration to optimize)`);
-                            snapshot = await ref.limit(100).get();
+                            snapshot = await ref.limit(20).get(); // REDUCED: Only 20 documents max
                         } else {
                             throw indexError;
                         }
