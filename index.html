@@ -25,6 +25,23 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
  <script>
+  /* ========================================
+     LIGHTWEIGHT PERFORMANCE MODE ENABLED
+     ========================================
+     Background processes disabled:
+     - Auto-save timer (5-min background sync)
+     - Firestore stats hourly check
+     - Connection status 5-sec polling  
+     - Auto-reload on visibility change
+     - Auto-sync on tab focus
+     
+     Active features:
+     ✅ Manual sync button
+     ✅ Event-based connection updates
+     ✅ User-triggered seamless backup
+     ✅ Network reconnection logic
+     ======================================== */
+  
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('./sw.js').then(reg => {
@@ -73,140 +90,6 @@
 
     
     <style>
-        /* === SEARCHABLE SELECT STYLES === */
-        .searchable-select-wrapper {
-            position: relative;
-            width: 100%;
-        }
-        
-        .searchable-select-input {
-            width: 100%;
-            padding: 14px 40px 14px 16px;
-            background: var(--input-bg);
-            border: 1.5px solid var(--glass-border);
-            border-radius: 12px;
-            color: var(--text-main);
-            font-size: 0.95rem;
-            font-weight: 500;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            cursor: pointer;
-            user-select: none;
-            backdrop-filter: var(--backdrop-blur);
-            box-sizing: border-box;
-        }
-        
-        .searchable-select-input:focus {
-            outline: none;
-            border-color: var(--accent);
-            background: var(--glass);
-            box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.1);
-            cursor: text;
-        }
-        
-        .searchable-select-input.has-value {
-            color: var(--text-main);
-        }
-        
-        .searchable-select-input::placeholder {
-            color: var(--text-muted);
-        }
-        
-        .searchable-select-arrow {
-            position: absolute;
-            right: 16px;
-            top: 50%;
-            transform: translateY(-50%);
-            width: 0;
-            height: 0;
-            border-left: 5px solid transparent;
-            border-right: 5px solid transparent;
-            border-top: 6px solid var(--text-muted);
-            pointer-events: none;
-            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        
-        .searchable-select-wrapper.active .searchable-select-arrow {
-            transform: translateY(-50%) rotate(180deg);
-        }
-        
-        .searchable-select-dropdown {
-            position: absolute;
-            top: calc(100% + 8px);
-            left: 0;
-            right: 0;
-            background: var(--glass);
-            backdrop-filter: var(--backdrop-blur);
-            border: 1.5px solid var(--glass-border);
-            border-radius: 12px;
-            box-shadow: var(--shadow);
-            max-height: 280px;
-            overflow-y: auto;
-            z-index: 10000;
-            opacity: 0;
-            transform: translateY(-10px);
-            visibility: hidden;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        
-        .searchable-select-wrapper.active .searchable-select-dropdown {
-            opacity: 1;
-            transform: translateY(0);
-            visibility: visible;
-        }
-        
-        .searchable-select-option {
-            padding: 12px 16px;
-            cursor: pointer;
-            color: var(--text-main);
-            font-size: 0.9rem;
-            font-weight: 500;
-            transition: all 0.2s ease;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-        }
-        
-        .searchable-select-option:last-child {
-            border-bottom: none;
-        }
-        
-        .searchable-select-option:hover {
-            background: var(--card-hover);
-        }
-        
-        .searchable-select-option.selected {
-            background: var(--highlight-bg);
-            color: var(--accent);
-            font-weight: 600;
-        }
-        
-        .searchable-select-option.hidden {
-            display: none;
-        }
-        
-        .searchable-select-no-results {
-            padding: 20px 16px;
-            text-align: center;
-            color: var(--text-muted);
-            font-size: 0.85rem;
-        }
-        
-        /* Smooth scrollbar for dropdown */
-        .searchable-select-dropdown::-webkit-scrollbar {
-            width: 6px;
-        }
-        
-        .searchable-select-dropdown::-webkit-scrollbar-track {
-            background: transparent;
-        }
-        
-        .searchable-select-dropdown::-webkit-scrollbar-thumb {
-            background: var(--glass-border);
-            border-radius: 3px;
-        }
-        
-        .searchable-select-dropdown::-webkit-scrollbar-thumb:hover {
-            background: rgba(255, 255, 255, 0.2);
-        }
-        
         /* === iOS 26 LIQUID GLASS THEME === */
         :root {
             /* Dark Gradient Background */
@@ -3669,9 +3552,10 @@ body.dark-mode .units-available-danger {
             <div id="existingSupplierSection" class="hidden">
                 <div class="field">
                     <label>Select Supplier (Payee)</label>
-                    <select id="factoryExistingSupplier" class="store-selector">
-                        <option value="">Choose Supplier</option>
-                    </select>
+                    <input type="text" id="factoryExistingSupplier" list="supplier-list" placeholder="Search or select supplier..." 
+                           oninput="handleUniversalSearch('factoryExistingSupplier', 'factory-supplier-search-results', 'suppliers')" autocomplete="off" class="store-selector">
+                    <div id="factory-supplier-search-results" class="hidden" style="position: absolute; z-index: 1000; width: 100%; max-height: 200px; overflow-y: auto; background: var(--glass); border: 1px solid var(--glass-border); border-radius: 10px; margin-top: 5px; box-shadow: var(--shadow);"></div>
+                    <datalist id="supplier-list"></datalist>
                 </div>
             </div>
             
@@ -4063,7 +3947,7 @@ body.dark-mode .units-available-danger {
             <div class="field">
                 <label>Customer Name</label>
                 <input type="text" id="rep-cust-name" placeholder="Search customer..." 
-                       oninput="handleCustomerInput(this.value, 'rep')" autocomplete="off">
+                       oninput="handleUniversalSearch('rep-cust-name', 'rep-customer-search-results', 'repCustomers'); handleCustomerInput(this.value, 'rep')" autocomplete="off">
                 <div id="rep-customer-search-results" class="hidden" style="position: absolute; z-index: 1000; width: 100%; max-height: 200px; overflow-y: auto; background: var(--glass); border: 1px solid var(--glass-border); border-radius: 10px; margin-top: 60px; box-shadow: var(--shadow);"></div>
             </div>
         </div>
@@ -4420,7 +4304,7 @@ body.dark-mode .units-available-danger {
         <div class="field">
     <label>Customer Name</label>
     <input type="text" id="cust-name" list="customer-list" placeholder="Search or type new..." 
-           oninput="handleCustomerInput(this.value, 'admin')" autocomplete="off">
+           oninput="handleUniversalSearch('cust-name', 'customer-search-results', 'customers'); handleCustomerInput(this.value, 'admin')" autocomplete="off">
     <div id="customer-search-results" class="hidden" style="position: absolute; z-index: 1000; width: 100%; max-height: 200px; overflow-y: auto; background: var(--glass); border: 1px solid var(--glass-border); border-radius: 10px; margin-top: 5px; box-shadow: var(--shadow);"></div>
 </div>
 
@@ -5306,9 +5190,10 @@ body.dark-mode .units-available-danger {
             <div class="grid-inputs">
                 <div class="field">
                     <label>Entity</label>
-                    <select id="paymentEntity" class="store-selector">
-                        <option value="">Select Entity</option>
-                    </select>
+                    <input type="text" id="paymentEntity" list="entity-list" placeholder="Search or select entity..." 
+                           oninput="handleUniversalSearch('paymentEntity', 'payment-entity-search-results', 'entities')" autocomplete="off" class="store-selector">
+                    <div id="payment-entity-search-results" class="hidden" style="position: absolute; z-index: 1000; width: 100%; max-height: 200px; overflow-y: auto; background: var(--glass); border: 1px solid var(--glass-border); border-radius: 10px; margin-top: 5px; box-shadow: var(--shadow);"></div>
+                    <datalist id="entity-list"></datalist>
                 </div>
                 <div class="field">
                     <label>Date</label>
@@ -6015,12 +5900,13 @@ window.forceSync = async function() {
 };
 
 // Tab visibility change sync
-document.addEventListener('visibilitychange', async function() {
-    if (!document.hidden) {
-        await reloadDataFromStorage();
-        notifyDataChange('all');
-    }
-});
+// DISABLED FOR PERFORMANCE - Manual refresh only
+// document.addEventListener('visibilitychange', async function() {
+//     if (!document.hidden) {
+//         await reloadDataFromStorage();
+//         notifyDataChange('all');
+//     }
+// });
 
 // Enhanced showTab with sync
 const originalShowTab = window.showTab;
@@ -6031,12 +5917,13 @@ if (typeof originalShowTab === 'function') {
     };
 }
 
-// Initialize on page load
+// Initialize on page load - DISABLED FOR PERFORMANCE
 document.addEventListener('DOMContentLoaded', function() {
-    setTimeout(() => {
-        startPeriodicSync();
-        console.log(' Non-blocking sync system active');
-    }, 1000);
+    // setTimeout(() => {
+    //     startPeriodicSync();
+    //     console.log('✅ Non-blocking sync system active');
+    // }, 1000);
+    console.log('⚡ Lightweight mode: Background sync disabled. Use manual sync button.');
 });
 
 // Cleanup on page unload
@@ -6814,7 +6701,8 @@ function closeEntityTransactions() {
 // ============================================
 
 async function savePaymentTransaction() {
-    const entityId = parseInt(document.getElementById('paymentEntity').value);
+    const entityInput = document.getElementById('paymentEntity');
+    const entityId = parseInt(entityInput.getAttribute('data-entity-id') || entityInput.value);
     const date = document.getElementById('paymentDate').value;
     const amount = parseFloat(document.getElementById('paymentAmount').value) || 0;
     const description = document.getElementById('paymentDescription').value.trim();
@@ -7731,8 +7619,13 @@ function editFactoryInventoryItem(id) {
             existingSupplierSection.classList.remove('hidden');
             newSupplierSection.classList.add('hidden');
             
-            loadExistingSuppliers();
-            document.getElementById('factoryExistingSupplier').value = item.supplierId;
+            // Set the supplier input value and data attribute
+            const supplierInput = document.getElementById('factoryExistingSupplier');
+            const supplier = paymentEntities.find(e => e.id === item.supplierId);
+            if (supplier && supplierInput) {
+                supplierInput.value = supplier.name;
+                supplierInput.setAttribute('data-supplier-id', item.supplierId);
+            }
             
             // Show unlink option
             showSupplierUnlinkOption(item);
@@ -7827,8 +7720,10 @@ async function saveFactoryInventoryItem() {
             
             // Check if supplier is being changed or removed
             const oldSupplierId = existingMaterial.supplierId;
+            const supplierInput = document.getElementById('factoryExistingSupplier');
+            const newSupplierId = parseInt(supplierInput.getAttribute('data-supplier-id') || supplierInput.value);
             const isSupplierChanging = (supplierType === 'none' && oldSupplierId) || 
-                                      (supplierType === 'existing' && oldSupplierId !== parseInt(document.getElementById('factoryExistingSupplier').value));
+                                      (supplierType === 'existing' && oldSupplierId !== newSupplierId);
             
             // If supplier is changing, unlink the old one first
             if (isSupplierChanging) {
@@ -7873,7 +7768,8 @@ async function saveFactoryInventoryItem() {
         }
     } 
     else if (supplierType === 'existing') {
-        const existingSupplierId = parseInt(document.getElementById('factoryExistingSupplier').value);
+        const supplierInput = document.getElementById('factoryExistingSupplier');
+        const existingSupplierId = parseInt(supplierInput.getAttribute('data-supplier-id') || supplierInput.value);
         if (existingSupplierId) {
             await linkMaterialToSupplier(materialId, existingSupplierId, totalValue);
         }
@@ -8098,7 +7994,6 @@ function toggleSupplierFields() {
     if (supplierType === 'existing') {
         if (existingSection) {
             existingSection.classList.remove('hidden');
-            loadExistingSuppliers();
         }
     } else if (supplierType === 'new') {
         if (newSection) newSection.classList.remove('hidden');
@@ -9214,21 +9109,13 @@ function checkAndAutoResetFirestoreStats() {
     }
 }
 
-// Run auto-reset check every hour
-setInterval(checkAndAutoResetFirestoreStats, 60 * 60 * 1000);
+// Run auto-reset check every hour - DISABLED FOR PERFORMANCE
+// setInterval(checkAndAutoResetFirestoreStats, 60 * 60 * 1000);
 
 // Initialize chart when DOM is ready
 function initFirestoreUsageChart() {
     const ctx = document.getElementById('firestoreUsageChart');
     if (!ctx) return;
-    
-    // Destroy existing chart if it exists
-    if (firestoreUsageChart) {
-        firestoreUsageChart.destroy();
-        firestoreUsageChart = null;
-    }
-    const existingChart = Chart.getChart(ctx);
-    if (existingChart) existingChart.destroy();
     
     firestoreUsageChart = new Chart(ctx, {
         type: 'line',
@@ -9852,12 +9739,12 @@ function initFirebase() {
             updateSignal('offline');
         });
         
-        // Tab Visibility Listener
-        document.addEventListener('visibilitychange', async () => {
-            if (document.visibilityState === 'visible' && currentUser) {
-                await subscribeToRealtime();
-            }
-        });
+        // Tab Visibility Listener - DISABLED FOR PERFORMANCE
+        // document.addEventListener('visibilitychange', async () => {
+        //     if (document.visibilityState === 'visible' && currentUser) {
+        //         await subscribeToRealtime();
+        //     }
+        // });
 
     } catch (e) {
         console.error('Firebase Init Error:', e);
@@ -11258,6 +11145,10 @@ const AUTO_BACKUP_INTERVAL = 300000; // 5 minutes (in milliseconds)
 
 function scheduleAutoBackup() {
     clearAutoBackup();
+    // DISABLED FOR PERFORMANCE - Manual sync only
+    console.log("⚠️ Auto-backup disabled for lightweight performance. Use manual sync.");
+    return;
+    
     // Only schedule if user is logged in
     if (!currentUser) return;
 
@@ -12105,23 +11996,7 @@ async function markSalesEntriesAsReceived(seller, quantityToMark) {
     const seller = document.getElementById('sellerSelect').value;
     if (seller === 'COMBINED') return;
     
-    // Properly destroy existing chart and clear canvas
-    const chartElement = document.getElementById('indPerformanceChart');
-    if (!chartElement) {
-        console.warn('indPerformanceChart canvas not found');
-        return;
-    }
-    
-    if (indPerformanceChart) {
-        indPerformanceChart.destroy();
-        indPerformanceChart = null;
-    }
-    
-    // Clear any existing Chart.js instance associated with this canvas
-    const chartInstance = Chart.getChart(chartElement);
-    if (chartInstance) {
-        chartInstance.destroy();
-    }
+    if(indPerformanceChart) indPerformanceChart.destroy();
         
         let history; history = await idb.get('noman_history', []);
         const sellerHistory = history.filter(h => h.seller === seller);
@@ -12206,6 +12081,12 @@ async function markSalesEntriesAsReceived(seller, quantityToMark) {
         };
         
         const sellerColor = seller === 'NORAN SHAH' ? '#2563eb' : '#059669';
+        
+        const chartElement = document.getElementById('indPerformanceChart');
+        if (!chartElement) {
+            console.warn('indPerformanceChart canvas not found');
+            return;
+        }
         
         indPerformanceChart = new Chart(chartElement, {
             type: 'bar',
@@ -12299,24 +12180,7 @@ async function markSalesEntriesAsReceived(seller, quantityToMark) {
     if (typeof Chart === 'undefined') return;
     // --- SAFETY CHECK END ---
 
-    // Properly destroy existing chart first
-    const storeChartElement = document.getElementById('storeComparisonChart');
-    if (!storeChartElement) {
-        console.warn('storeComparisonChart canvas not found');
-        return;
-    }
-    
-    if (storeComparisonChart) {
-        storeComparisonChart.destroy();
-        storeComparisonChart = null;
-    }
-    
-    // Clear any existing Chart.js instance
-    const existingStoreChart = Chart.getChart(storeChartElement);
-    if (existingStoreChart) {
-        existingStoreChart.destroy();
-    }
-    
+    if(storeComparisonChart) storeComparisonChart.destroy();
         const selectedDate = document.getElementById('sys-date').value;
         const selectedDateObj = new Date(selectedDate);
         const selectedYear = selectedDateObj.getFullYear();
@@ -12384,6 +12248,12 @@ async function markSalesEntriesAsReceived(seller, quantityToMark) {
             text: '#1e3a8a',
             grid: 'rgba(37, 99, 235, 0.1)'
         };
+        
+        const storeChartElement = document.getElementById('storeComparisonChart');
+        if (!storeChartElement) {
+            console.warn('storeComparisonChart canvas not found');
+            return;
+        }
         
         storeComparisonChart = new Chart(storeChartElement, {
             type: 'bar',
@@ -13126,28 +12996,8 @@ function adminSwitchRepProfile(newProfile) {
     }
     // --- SAFETY CHECK END ---
 
-    // Properly destroy existing charts
-    const mfgBarCanvas = document.getElementById('mfgBarChart');
-    const mfgPieCanvas = document.getElementById('mfgPieChart');
-    
-    if (mfgBarChart) {
-        mfgBarChart.destroy();
-        mfgBarChart = null;
-    }
-    if (mfgPieChart) {
-        mfgPieChart.destroy();
-        mfgPieChart = null;
-    }
-    
-    // Clear any existing Chart.js instances
-    if (mfgBarCanvas) {
-        const existingBarChart = Chart.getChart(mfgBarCanvas);
-        if (existingBarChart) existingBarChart.destroy();
-    }
-    if (mfgPieCanvas) {
-        const existingPieChart = Chart.getChart(mfgPieCanvas);
-        if (existingPieChart) existingPieChart.destroy();
-    }
+    if(mfgBarChart) mfgBarChart.destroy();
+    if(mfgPieChart) mfgPieChart.destroy();
 
         let filteredData = currentProductionView === 'combined' ? db : db.filter(item => item.store === currentStore);
 
@@ -13250,8 +13100,9 @@ function adminSwitchRepProfile(newProfile) {
             }
         });
 
-        if (!mfgBarCanvas || !mfgPieCanvas) {
-            console.warn('Manufacturing chart canvases not found');
+        const mfgBarCanvas = document.getElementById('mfgBarChart');
+        if (!mfgBarCanvas) {
+            console.warn('mfgBarChart canvas not found');
             return;
         }
         
@@ -13289,6 +13140,12 @@ function adminSwitchRepProfile(newProfile) {
 
         const pieData = [totalCost, totalProfit];
         const pieLabels = ['Total Cost', 'Net Profit'];
+        
+        const mfgPieCanvas = document.getElementById('mfgPieChart');
+        if (!mfgPieCanvas) {
+            console.warn('mfgPieChart canvas not found');
+            return;
+        }
         
         mfgPieChart = new Chart(mfgPieCanvas, {
             type: 'pie',
@@ -13860,29 +13717,8 @@ function updateAllStoresOverview(mode = 'day') {
     if (typeof Chart === 'undefined') return;
     // --- SAFETY CHECK END ---
 
-    // Properly destroy existing charts
-    const custSalesCanvas = document.getElementById('custSalesChart');
-    const custPaymentCanvas = document.getElementById('custPaymentChart');
-    
-    if (custSalesChart) {
-        custSalesChart.destroy();
-        custSalesChart = null;
-    }
-    if (custPaymentChart) {
-        custPaymentChart.destroy();
-        custPaymentChart = null;
-    }
-    
-    // Clear any existing Chart.js instances
-    if (custSalesCanvas) {
-        const existingSalesChart = Chart.getChart(custSalesCanvas);
-        if (existingSalesChart) existingSalesChart.destroy();
-    }
-    if (custPaymentCanvas) {
-        const existingPaymentChart = Chart.getChart(custPaymentCanvas);
-        if (existingPaymentChart) existingPaymentChart.destroy();
-    }
-    
+    if(custSalesChart) custSalesChart.destroy();
+    if(custPaymentChart) custPaymentChart.destroy();
         const selectedDate = document.getElementById('cust-date').value;
         if (!selectedDate) return;
         
@@ -14012,8 +13848,9 @@ function updateAllStoresOverview(mode = 'day') {
             }
         });
 
-        if (!custSalesCanvas || !custPaymentCanvas) {
-            console.warn('Customer chart canvases not found');
+        const custSalesCanvas = document.getElementById('custSalesChart');
+        if (!custSalesCanvas) {
+            console.warn('custSalesChart canvas not found');
             return;
         }
         
@@ -14069,6 +13906,12 @@ function updateAllStoresOverview(mode = 'day') {
 
         const pieData = [totalCash, totalCredit];
         const pieLabels = ['Cash Sales (Inc. Received Credits)', 'Pending Credits'];
+        
+        const custPaymentCanvas = document.getElementById('custPaymentChart');
+        if (!custPaymentCanvas) {
+            console.warn('custPaymentChart canvas not found');
+            return;
+        }
         
         custPaymentChart = new Chart(custPaymentCanvas, {
             type: 'pie',
@@ -14700,14 +14543,7 @@ async function loadSalesData(compMode = 'all') {
             return;
         }
 
-        // Destroy existing charts properly
-        if (salesPerfChart) {
-            salesPerfChart.destroy();
-            salesPerfChart = null;
-        }
-        const existingPerfChart = Chart.getChart(perfChartElement);
-        if (existingPerfChart) existingPerfChart.destroy();
-        
+        if(salesPerfChart) salesPerfChart.destroy();
         salesPerfChart = new Chart(perfChartElement, {
             type: 'bar',
             data: { 
@@ -14748,14 +14584,7 @@ async function loadSalesData(compMode = 'all') {
             return;
         }
         
-        // Destroy existing chart properly
-        if (salesCompChart) {
-            salesCompChart.destroy();
-            salesCompChart = null;
-        }
-        const existingCompChart = Chart.getChart(compChartElement);
-        if (existingCompChart) existingCompChart.destroy();
-        
+        if(salesCompChart) salesCompChart.destroy();
         salesCompChart = new Chart(compChartElement, {
             type: 'pie',
             data: {
@@ -15102,13 +14931,6 @@ document.addEventListener('DOMContentLoaded', async function() {
 // Enhanced version with registerDeletion and inventory update is at line ~8942
 
 // Close search dropdown when clicking outside
-document.addEventListener('click', function(e) {
-    const searchContainer = document.getElementById('cust-name').parentElement;
-    const resultsDiv = document.getElementById('customer-search-results');
-    if (!searchContainer.contains(e.target)) {
-        resultsDiv.classList.add('hidden');
-    }
-});
 // --- FIX: MISSING OVERVIEW MODE FUNCTION ---
 function setOverviewMode(mode) {
     currentOverviewMode = mode;
@@ -15554,8 +15376,13 @@ async function refreshPaymentTab() {
 // Also update the selectEntity function to highlight the selected card
 function selectEntity(id) {
     selectedEntityId = id;
-    const entitySelect = document.getElementById('paymentEntity');
-    entitySelect.value = id;
+    const entity = paymentEntities.find(e => e.id === id);
+    const entityInput = document.getElementById('paymentEntity');
+    
+    if (entity && entityInput) {
+        entityInput.value = entity.name;
+        entityInput.setAttribute('data-entity-id', id);
+    }
     
     // Update card selection
     document.querySelectorAll('#entityCardsGrid .entity-card-compact').forEach(card => {
@@ -15682,48 +15509,6 @@ initPaymentData();
 // --- FIX: Advanced Customer Search & Selection ---
 
 // 1. Enhanced Search Function
-function searchCustomers(query) {
-    const resultsDiv = document.getElementById('customer-search-results');
-    if (!query || query.length < 1) {
-        resultsDiv.classList.add('hidden');
-        return;
-    }
-
-    // ISOLATION: Only show customers from Admin entries (isRepModeEntry !== true)
-    const uniqueCustomers = [...new Set(customerSales
-        .filter(s => s && s.isRepModeEntry !== true) 
-        .map(s => s.customerName)
-        .filter(n => n && typeof n === 'string'))];
-
-    const matches = uniqueCustomers.filter(name => 
-        name && typeof name === 'string' && name.toLowerCase().includes(query.toLowerCase())
-    );
-
-    // Render Dropdown
-    if (matches.length > 0) {
-        let html = '';
-        matches.forEach(name => {
-            const safeName = String(name).replace(/'/g, "\\'").replace(/"/g, '&quot;');
-            html += `
-                <div style="padding: 10px; cursor: pointer; border-bottom: 1px solid var(--glass-border); font-size: 0.85rem; color: var(--text-main); background: var(--input-bg);" 
-                     onmousedown="selectCustomer('${safeName}')"
-                     onmouseover="this.style.background='var(--highlight-bg)'" 
-                     onmouseout="this.style.background='var(--input-bg)'">
-                    <strong>${name}</strong>
-                </div>`;
-        });
-        resultsDiv.innerHTML = html;
-        resultsDiv.classList.remove('hidden');
-    } else {
-        resultsDiv.innerHTML = `
-            <div style="padding: 10px; font-size: 0.8rem; color: var(--text-muted); background: var(--input-bg);">
-                No match in Admin records. "${query}" will be created.
-            </div>`;
-        resultsDiv.classList.remove('hidden');
-    }
-}
-
-
 // --- FIX: Corrected Selection Function (No Infinite Loop) ---
 function selectCustomer(name) {
     console.log("Selecting customer:", name); 
@@ -17029,43 +16814,14 @@ async function setRepMode(mode) {
 }
 
 // --- 2. ISOLATED CUSTOMER SEARCH ---
-function searchRepCustomers(query) {
-    const resultsDiv = document.getElementById('rep-customer-search-results');
-    if (!query || query.length < 1) { resultsDiv.classList.add('hidden'); return; }
-
-    // ISOLATION: Only show customers for THIS Rep created in Rep Mode
-    const myCustomers = repSales.filter(s => 
-        s && s.salesRep === currentRepProfile
-    );
-    
-    const uniqueNames = [...new Set(myCustomers.map(s => s && s.customerName).filter(n => n && typeof n === 'string'))];
-    const matches = uniqueNames.filter(name => name && typeof name === 'string' && name.toLowerCase().includes(query.toLowerCase()));
-
-    let html = '';
-    if (matches.length > 0) {
-        matches.forEach(name => {
-            const safeName = String(name).replace(/'/g, "\\'");
-            html += `<div style="padding:10px; cursor:pointer; border-bottom:1px solid var(--glass-border); font-size:0.85rem; background: var(--input-bg);" 
-                     onmousedown="selectRepCustomer('${safeName}')"
-                     onmouseover="this.style.background='var(--highlight-bg)'" 
-                     onmouseout="this.style.background='var(--input-bg)'">
-                    <strong>${name}</strong>
-                </div>`;
-        });
-    } else {
-        html = `<div style="padding:10px; color:var(--text-muted); font-size:0.8rem; background: var(--input-bg);">
-                New customer "${query}" will be created
-            </div>`;
-    }
-    
-    resultsDiv.innerHTML = html;
-    resultsDiv.classList.remove('hidden');
-}
-
-
 function selectRepCustomer(name) {
     document.getElementById('rep-cust-name').value = name;
     document.getElementById('rep-customer-search-results').classList.add('hidden');
+    calculateRepCustomerStats(name);
+}
+
+// Alias for universal search compatibility
+function calculateRepCustomerStatsForDisplay(name) {
     calculateRepCustomerStats(name);
 }
 
@@ -18249,14 +18005,7 @@ function handleCustomerInput(query, mode) {
     if (typeof query !== 'string') query = String(query);
     
     const isRep = mode === 'rep';
-    const listId = isRep ? 'rep-customer-search-results' : 'customer-search-results';
     const phoneContainerId = isRep ? 'rep-new-customer-phone-container' : 'new-customer-phone-container';
-    
-    if (isRep) {
-        if(typeof searchRepCustomers === 'function') searchRepCustomers(query); 
-    } else {
-        if(typeof searchCustomers === 'function') searchCustomers(query);
-    }
 
     const phoneContainer = document.getElementById(phoneContainerId);
     if (!phoneContainer) return; // Guard clause if element missing
@@ -18294,6 +18043,220 @@ function handleCustomerInput(query, mode) {
         phoneContainer.classList.add('hidden');
     }
 }
+
+// ==========================================
+// UNIFIED SEARCHABLE DROPDOWN SYSTEM
+// ==========================================
+
+/**
+ * Universal search handler for all dropdown inputs
+ * @param {string} inputId - ID of the input element
+ * @param {string} resultsId - ID of the results dropdown div
+ * @param {string} dataSource - Type of data to search ('customers', 'entities', 'suppliers', 'repCustomers')
+ */
+function handleUniversalSearch(inputId, resultsId, dataSource) {
+    const input = document.getElementById(inputId);
+    const resultsDiv = document.getElementById(resultsId);
+    
+    if (!input || !resultsDiv) return;
+    
+    const query = input.value || '';
+    
+    if (!query || query.length < 1) {
+        resultsDiv.classList.add('hidden');
+        return;
+    }
+    
+    let matches = [];
+    let html = '';
+    
+    switch(dataSource) {
+        case 'customers':
+            // Get unique customers from admin sales
+            const uniqueCustomers = [...new Set(customerSales
+                .filter(s => s && s.isRepModeEntry !== true) 
+                .map(s => s.customerName)
+                .filter(n => n && typeof n === 'string'))];
+            
+            matches = uniqueCustomers.filter(name => 
+                name && typeof name === 'string' && name.toLowerCase().includes(query.toLowerCase())
+            );
+            
+            if (matches.length > 0) {
+                matches.forEach(name => {
+                    const safeName = String(name).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                    html += `
+                        <div style="padding: 10px; cursor: pointer; border-bottom: 1px solid var(--glass-border); font-size: 0.85rem; color: var(--text-main); background: var(--input-bg);" 
+                             onmousedown="selectFromUniversalSearch('${inputId}', '${resultsId}', '${safeName}', 'name')"
+                             onmouseover="this.style.background='var(--highlight-bg)'" 
+                             onmouseout="this.style.background='var(--input-bg)'">
+                            <strong>${name}</strong>
+                        </div>`;
+                });
+            } else {
+                html = `<div style="padding: 10px; font-size: 0.8rem; color: var(--text-muted); background: var(--input-bg);">
+                    No match found. "${query}" will be created as new customer.
+                </div>`;
+            }
+            break;
+            
+        case 'entities':
+            // Get all entities
+            if (Array.isArray(paymentEntities)) {
+                matches = paymentEntities.filter(entity => 
+                    entity && entity.name && typeof entity.name === 'string' && 
+                    entity.name.toLowerCase().includes(query.toLowerCase())
+                );
+            }
+            
+            if (matches.length > 0) {
+                matches.forEach(entity => {
+                    const safeName = String(entity.name).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                    const typeColor = entity.type === 'payee' ? 'var(--danger)' : 'var(--accent-emerald)';
+                    html += `
+                        <div style="padding: 10px; cursor: pointer; border-bottom: 1px solid var(--glass-border); font-size: 0.85rem; color: var(--text-main); background: var(--input-bg);" 
+                             onmousedown="selectFromUniversalSearch('${inputId}', '${resultsId}', '${safeName}', 'entity', ${entity.id})"
+                             onmouseover="this.style.background='var(--highlight-bg)'" 
+                             onmouseout="this.style.background='var(--input-bg)'">
+                            <strong>${entity.name}</strong>
+                            <span style="font-size: 0.7rem; color: ${typeColor}; margin-left: 8px;">(${entity.type === 'payee' ? 'Payee' : 'Payor'})</span>
+                        </div>`;
+                });
+            } else {
+                html = `<div style="padding: 10px; font-size: 0.8rem; color: var(--text-muted); background: var(--input-bg);">
+                    No matching entities found
+                </div>`;
+            }
+            break;
+            
+        case 'suppliers':
+            // Get payee entities only (suppliers)
+            if (Array.isArray(paymentEntities)) {
+                matches = paymentEntities.filter(entity => 
+                    entity && entity.name && typeof entity.name === 'string' && 
+                    entity.type === 'payee' &&
+                    entity.name.toLowerCase().includes(query.toLowerCase())
+                );
+            }
+            
+            if (matches.length > 0) {
+                matches.forEach(supplier => {
+                    const safeName = String(supplier.name).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                    html += `
+                        <div style="padding: 10px; cursor: pointer; border-bottom: 1px solid var(--glass-border); font-size: 0.85rem; color: var(--text-main); background: var(--input-bg);" 
+                             onmousedown="selectFromUniversalSearch('${inputId}', '${resultsId}', '${safeName}', 'supplier', ${supplier.id})"
+                             onmouseover="this.style.background='var(--highlight-bg)'" 
+                             onmouseout="this.style.background='var(--input-bg)'">
+                            <strong>${supplier.name}</strong>
+                            ${supplier.phone ? `<span style="font-size: 0.7rem; color: var(--text-muted); margin-left: 8px;">${supplier.phone}</span>` : ''}
+                        </div>`;
+                });
+            } else {
+                html = `<div style="padding: 10px; font-size: 0.8rem; color: var(--text-muted); background: var(--input-bg);">
+                    No matching suppliers found
+                </div>`;
+            }
+            break;
+            
+        case 'repCustomers':
+            // Get unique customers from rep sales
+            const repUniqueCustomers = [...new Set(repSales
+                .filter(s => s && s.salesRep === currentRepProfile) 
+                .map(s => s.customerName)
+                .filter(n => n && typeof n === 'string'))];
+            
+            matches = repUniqueCustomers.filter(name => 
+                name && typeof name === 'string' && name.toLowerCase().includes(query.toLowerCase())
+            );
+            
+            if (matches.length > 0) {
+                matches.forEach(name => {
+                    const safeName = String(name).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                    html += `
+                        <div style="padding: 10px; cursor: pointer; border-bottom: 1px solid var(--glass-border); font-size: 0.85rem; color: var(--text-main); background: var(--input-bg);" 
+                             onmousedown="selectFromUniversalSearch('${inputId}', '${resultsId}', '${safeName}', 'repName')"
+                             onmouseover="this.style.background='var(--highlight-bg)'" 
+                             onmouseout="this.style.background='var(--input-bg)'">
+                            <strong>${name}</strong>
+                        </div>`;
+                });
+            } else {
+                html = `<div style="padding: 10px; font-size: 0.8rem; color: var(--text-muted); background: var(--input-bg);">
+                    No match found. "${query}" will be created.
+                </div>`;
+            }
+            break;
+    }
+    
+    resultsDiv.innerHTML = html;
+    resultsDiv.classList.remove('hidden');
+}
+
+/**
+ * Universal selection handler for search results
+ * @param {string} inputId - ID of the input element
+ * @param {string} resultsId - ID of the results dropdown div
+ * @param {string} value - The selected value (name)
+ * @param {string} type - Type of selection ('name', 'entity', 'supplier', 'repName')
+ * @param {number} id - Optional ID for entities/suppliers
+ */
+function selectFromUniversalSearch(inputId, resultsId, value, type, id) {
+    const input = document.getElementById(inputId);
+    const resultsDiv = document.getElementById(resultsId);
+    
+    if (input) {
+        input.value = value;
+        
+        // Store ID in data attribute if provided
+        if (id) {
+            input.setAttribute('data-entity-id', id);
+            input.setAttribute('data-supplier-id', id);
+        }
+    }
+    
+    if (resultsDiv) {
+        resultsDiv.classList.add('hidden');
+    }
+    
+    // Handle special cases based on type
+    if (type === 'name' && inputId === 'cust-name') {
+        // Customer selected in sales tab
+        if (typeof calculateCustomerStatsForDisplay === 'function') {
+            calculateCustomerStatsForDisplay(value);
+        }
+    } else if (type === 'repName' && inputId === 'rep-cust-name') {
+        // Rep customer selected
+        if (typeof calculateRepCustomerStatsForDisplay === 'function') {
+            calculateRepCustomerStatsForDisplay(value);
+        }
+    }
+}
+
+/**
+ * Universal click-outside handler to close all search dropdowns
+ */
+document.addEventListener('click', function(e) {
+    // Array of all searchable inputs and their result divs
+    const searchables = [
+        { input: 'cust-name', results: 'customer-search-results' },
+        { input: 'rep-cust-name', results: 'rep-customer-search-results' },
+        { input: 'paymentEntity', results: 'payment-entity-search-results' },
+        { input: 'factoryExistingSupplier', results: 'factory-supplier-search-results' }
+    ];
+    
+    searchables.forEach(item => {
+        const input = document.getElementById(item.input);
+        const resultsDiv = document.getElementById(item.results);
+        
+        if (input && resultsDiv) {
+            const container = input.parentElement;
+            if (container && !container.contains(e.target)) {
+                resultsDiv.classList.add('hidden');
+            }
+        }
+    });
+});
+
 
 
 // Update the selection function to hide phone field if existing customer selected
@@ -19197,8 +19160,8 @@ console.log('✅ Firestore Enhancement Module Loaded');
     // Initial check
     document.addEventListener('DOMContentLoaded', () => {
         updateConnectionStatus();
-        // Check every 5 seconds just in case state gets desynced
-        setInterval(updateConnectionStatus, 5000); 
+        // DISABLED FOR PERFORMANCE - Only update on events, not polling
+        // setInterval(updateConnectionStatus, 5000); 
     });
 
 
@@ -19319,406 +19282,6 @@ console.log('✅ Firestore Enhancement Module Loaded');
             isPulling = false;
         });
     })();
-
-    // ==========================================
-    // SEARCHABLE SELECT FUNCTIONALITY
-    // ==========================================
-    
-    /**
-     * Converts a standard <select> element into a searchable dropdown
-     * Maintains all existing functionality and event handlers
-     */
-    class SearchableSelect {
-        constructor(selectElement) {
-            this.originalSelect = selectElement;
-            this.selectedValue = selectElement.value;
-            this.selectedText = selectElement.options[selectElement.selectedIndex]?.text || '';
-            this.onChangeHandler = null;
-            
-            // Store original onchange attribute
-            const onchangeAttr = selectElement.getAttribute('onchange');
-            if (onchangeAttr) {
-                try {
-                    this.onChangeHandler = new Function('event', onchangeAttr);
-                } catch (e) {
-                    console.error('Error parsing onchange handler:', e);
-                }
-            }
-            
-            this.createSearchableSelect();
-            this.attachEventListeners();
-        }
-        
-        createSearchableSelect() {
-            // Create wrapper
-            const wrapper = document.createElement('div');
-            wrapper.className = 'searchable-select-wrapper';
-            
-            // Copy classes from original select
-            if (this.originalSelect.className) {
-                const classes = this.originalSelect.className.split(' ');
-                classes.forEach(cls => {
-                    if (cls && !cls.includes('store-selector') && !cls.includes('sales-rep')) {
-                        wrapper.classList.add(cls);
-                    }
-                });
-            }
-            
-            // Create input field
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.className = 'searchable-select-input';
-            input.placeholder = this.originalSelect.options[0]?.text || 'Select an option';
-            input.autocomplete = 'off';
-            
-            // Set initial value
-            if (this.selectedText && this.selectedValue) {
-                input.value = this.selectedText;
-                input.classList.add('has-value');
-            }
-            
-            // Create arrow indicator
-            const arrow = document.createElement('div');
-            arrow.className = 'searchable-select-arrow';
-            
-            // Create dropdown
-            const dropdown = document.createElement('div');
-            dropdown.className = 'searchable-select-dropdown';
-            
-            // Populate dropdown with options
-            this.populateDropdown(dropdown);
-            
-            // Assemble components
-            wrapper.appendChild(input);
-            wrapper.appendChild(arrow);
-            wrapper.appendChild(dropdown);
-            
-            // Replace original select
-            this.originalSelect.style.display = 'none';
-            this.originalSelect.parentNode.insertBefore(wrapper, this.originalSelect);
-            
-            // Store references
-            this.wrapper = wrapper;
-            this.input = input;
-            this.dropdown = dropdown;
-            this.arrow = arrow;
-        }
-        
-        populateDropdown(dropdown) {
-            dropdown.innerHTML = '';
-            const options = Array.from(this.originalSelect.options);
-            
-            options.forEach(option => {
-                if (option.value === '' && option.text.match(/choose|select/i)) {
-                    // Skip placeholder options
-                    return;
-                }
-                
-                const optionDiv = document.createElement('div');
-                optionDiv.className = 'searchable-select-option';
-                optionDiv.textContent = option.text;
-                optionDiv.dataset.value = option.value;
-                
-                // Copy data attributes from original option
-                for (let i = 0; i < option.attributes.length; i++) {
-                    const attr = option.attributes[i];
-                    if (attr.name.startsWith('data-')) {
-                        optionDiv.setAttribute(attr.name, attr.value);
-                    }
-                }
-                
-                if (option.value === this.selectedValue) {
-                    optionDiv.classList.add('selected');
-                }
-                
-                dropdown.appendChild(optionDiv);
-            });
-            
-            // Add "no results" message (hidden by default)
-            const noResults = document.createElement('div');
-            noResults.className = 'searchable-select-no-results hidden';
-            noResults.textContent = 'No matching options';
-            dropdown.appendChild(noResults);
-        }
-        
-        attachEventListeners() {
-            // Click on input to toggle dropdown
-            this.input.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.toggleDropdown();
-            });
-            
-            // Input for search
-            this.input.addEventListener('input', (e) => {
-                this.filterOptions(e.target.value);
-            });
-            
-            // Prevent input from losing focus when clicking in dropdown
-            this.dropdown.addEventListener('mousedown', (e) => {
-                e.preventDefault();
-            });
-            
-            // Click on option
-            this.dropdown.addEventListener('click', (e) => {
-                if (e.target.classList.contains('searchable-select-option')) {
-                    this.selectOption(e.target);
-                }
-            });
-            
-            // Click outside to close
-            document.addEventListener('click', (e) => {
-                if (!this.wrapper.contains(e.target)) {
-                    this.closeDropdown();
-                }
-            });
-            
-            // Keyboard navigation
-            this.input.addEventListener('keydown', (e) => {
-                this.handleKeyboard(e);
-            });
-            
-            // Update when original select changes (for dynamic updates)
-            const observer = new MutationObserver(() => {
-                this.updateOptions();
-            });
-            observer.observe(this.originalSelect, { childList: true, subtree: true });
-        }
-        
-        toggleDropdown() {
-            if (this.wrapper.classList.contains('active')) {
-                this.closeDropdown();
-            } else {
-                this.openDropdown();
-            }
-        }
-        
-        openDropdown() {
-            // Close all other dropdowns first
-            document.querySelectorAll('.searchable-select-wrapper.active').forEach(w => {
-                if (w !== this.wrapper) {
-                    w.classList.remove('active');
-                }
-            });
-            
-            this.wrapper.classList.add('active');
-            this.input.focus();
-            
-            // Clear search when opening
-            if (!this.input.classList.contains('has-value')) {
-                this.input.value = '';
-            }
-        }
-        
-        closeDropdown() {
-            this.wrapper.classList.remove('active');
-            
-            // Restore selected value text
-            if (this.selectedText) {
-                this.input.value = this.selectedText;
-            } else {
-                this.input.value = '';
-            }
-            
-            // Clear filter
-            this.filterOptions('');
-        }
-        
-        filterOptions(searchTerm) {
-            const options = this.dropdown.querySelectorAll('.searchable-select-option');
-            const noResults = this.dropdown.querySelector('.searchable-select-no-results');
-            let hasVisibleOptions = false;
-            
-            const term = searchTerm.toLowerCase().trim();
-            
-            options.forEach(option => {
-                const text = option.textContent.toLowerCase();
-                if (text.includes(term)) {
-                    option.classList.remove('hidden');
-                    hasVisibleOptions = true;
-                } else {
-                    option.classList.add('hidden');
-                }
-            });
-            
-            // Show/hide no results message
-            if (hasVisibleOptions) {
-                noResults.classList.add('hidden');
-            } else {
-                noResults.classList.remove('hidden');
-            }
-        }
-        
-        selectOption(optionElement) {
-            const value = optionElement.dataset.value;
-            const text = optionElement.textContent;
-            
-            // Update selected state
-            this.dropdown.querySelectorAll('.searchable-select-option').forEach(opt => {
-                opt.classList.remove('selected');
-            });
-            optionElement.classList.add('selected');
-            
-            // Update values
-            this.selectedValue = value;
-            this.selectedText = text;
-            this.input.value = text;
-            this.input.classList.add('has-value');
-            
-            // Update original select
-            this.originalSelect.value = value;
-            
-            // Trigger change event on original select
-            const changeEvent = new Event('change', { bubbles: true });
-            this.originalSelect.dispatchEvent(changeEvent);
-            
-            // Call original onchange handler if exists
-            if (this.onChangeHandler) {
-                try {
-                    this.onChangeHandler.call(this.originalSelect, changeEvent);
-                } catch (e) {
-                    console.error('Error in onchange handler:', e);
-                }
-            }
-            
-            // Close dropdown
-            this.closeDropdown();
-        }
-        
-        handleKeyboard(e) {
-            if (!this.wrapper.classList.contains('active')) {
-                if (e.key === 'Enter' || e.key === 'ArrowDown') {
-                    e.preventDefault();
-                    this.openDropdown();
-                }
-                return;
-            }
-            
-            const options = Array.from(this.dropdown.querySelectorAll('.searchable-select-option:not(.hidden)'));
-            const currentSelected = this.dropdown.querySelector('.searchable-select-option.selected:not(.hidden)');
-            let currentIndex = options.indexOf(currentSelected);
-            
-            switch (e.key) {
-                case 'ArrowDown':
-                    e.preventDefault();
-                    currentIndex = currentIndex < options.length - 1 ? currentIndex + 1 : 0;
-                    this.highlightOption(options[currentIndex]);
-                    break;
-                    
-                case 'ArrowUp':
-                    e.preventDefault();
-                    currentIndex = currentIndex > 0 ? currentIndex - 1 : options.length - 1;
-                    this.highlightOption(options[currentIndex]);
-                    break;
-                    
-                case 'Enter':
-                    e.preventDefault();
-                    if (currentSelected && !currentSelected.classList.contains('hidden')) {
-                        this.selectOption(currentSelected);
-                    } else if (options.length > 0) {
-                        this.selectOption(options[0]);
-                    }
-                    break;
-                    
-                case 'Escape':
-                    e.preventDefault();
-                    this.closeDropdown();
-                    break;
-            }
-        }
-        
-        highlightOption(optionElement) {
-            if (!optionElement) return;
-            
-            // Remove previous selection visual
-            this.dropdown.querySelectorAll('.searchable-select-option').forEach(opt => {
-                opt.style.background = '';
-            });
-            
-            // Highlight current
-            optionElement.style.background = 'var(--card-hover)';
-            
-            // Scroll into view
-            optionElement.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-        }
-        
-        updateOptions() {
-            // Refresh dropdown when options change dynamically
-            this.populateDropdown(this.dropdown);
-        }
-        
-        // Public method to get current value
-        getValue() {
-            return this.selectedValue;
-        }
-        
-        // Public method to set value programmatically
-        setValue(value) {
-            const option = Array.from(this.originalSelect.options).find(opt => opt.value === value);
-            if (option) {
-                this.selectedValue = value;
-                this.selectedText = option.text;
-                this.input.value = option.text;
-                this.input.classList.add('has-value');
-                this.originalSelect.value = value;
-                
-                // Update selected state in dropdown
-                this.dropdown.querySelectorAll('.searchable-select-option').forEach(opt => {
-                    opt.classList.remove('selected');
-                    if (opt.dataset.value === value) {
-                        opt.classList.add('selected');
-                    }
-                });
-            }
-        }
-    }
-    
-    // Store all searchable select instances
-    window.searchableSelectInstances = new Map();
-    
-    // Initialize all select elements as searchable selects
-    function initializeSearchableSelects() {
-        const selects = document.querySelectorAll('select');
-        let newInstancesCount = 0;
-        
-        selects.forEach(select => {
-            // Skip if already converted
-            if (select.style.display === 'none' && select.previousElementSibling?.classList.contains('searchable-select-wrapper')) {
-                return;
-            }
-            
-            // Skip if it's in the instances map
-            if (window.searchableSelectInstances.has(select)) {
-                return;
-            }
-            
-            const instance = new SearchableSelect(select);
-            window.searchableSelectInstances.set(select, instance);
-            newInstancesCount++;
-        });
-        
-        if (newInstancesCount > 0) {
-            console.log(`✅ Initialized ${newInstancesCount} new searchable select dropdown(s)`);
-        }
-        
-        return newInstancesCount;
-    }
-    
-    // Auto-initialize when DOM is ready
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initializeSearchableSelects);
-    } else {
-        // DOM already loaded
-        setTimeout(initializeSearchableSelects, 100);
-    }
-    
-    // Re-initialize periodically to catch dynamically added selects
-    setInterval(() => {
-        initializeSearchableSelects();
-    }, 2000);
-    
-    // Expose to global scope for manual initialization if needed
-    window.SearchableSelect = SearchableSelect;
-    window.initializeSearchableSelects = initializeSearchableSelects;
 
 
 </script>
