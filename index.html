@@ -3823,6 +3823,33 @@ body.dark-mode .units-available-danger {
         <div id="lastSyncDisplay" style="margin-top: 15px; font-size: 0.7rem; color: var(--text-muted);">
             Last Synced: Checking...
         </div>
+        
+        <!-- Firestore Usage Graph -->
+        <div style="margin-top: 20px; padding: 15px; background: var(--input-bg); border-radius: 12px; border: 1px solid var(--glass-border);">
+            <h4 style="margin: 0 0 10px 0; color: var(--accent); font-size: 0.85rem; text-align: left;"> Firestore Usage</h4>
+            
+            <!-- Stats Grid -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px;">
+                <div style="background: rgba(48, 209, 88, 0.1); padding: 10px; border-radius: 8px; border: 1px solid rgba(48, 209, 88, 0.3);">
+                    <div style="font-size: 0.65rem; color: var(--text-muted); margin-bottom: 3px;">READS</div>
+                    <div style="font-size: 1.2rem; font-weight: 700; color: #30d158;" id="firestore-reads-count">0</div>
+                </div>
+                <div style="background: rgba(0, 122, 255, 0.1); padding: 10px; border-radius: 8px; border: 1px solid rgba(0, 122, 255, 0.3);">
+                    <div style="font-size: 0.65rem; color: var(--text-muted); margin-bottom: 3px;">WRITES</div>
+                    <div style="font-size: 1.2rem; font-weight: 700; color: #007aff;" id="firestore-writes-count">0</div>
+                </div>
+            </div>
+            
+            <!-- Live Graph -->
+            <div style="background: var(--glass); padding: 10px; border-radius: 8px; border: 1px solid var(--glass-border);">
+                <canvas id="firestoreUsageChart" style="max-height: 120px;"></canvas>
+            </div>
+            
+            <!-- Auto-Reset Info -->
+            <div style="text-align: center; margin-top: 10px; font-size: 0.7rem; color: var(--text-muted);">
+               
+            </div>
+        </div>
     </div>
 </div>
 
@@ -6064,7 +6091,8 @@ window.addEventListener('offline', () => updateSignalUI('offline'));
             formulaStore: costData.formulaStore,
             formulaCost: costData.totalFormulaCost,
             paymentStatus: paymentStatus, // NEW: Add payment status
-            timestamp: new Date(inputDate).getTime()
+            timestamp: new Date(inputDate).getTime(),
+            syncedAt: new Date().toISOString()
         });
         
         await idb.set('mfg_pro_pkr', db);
@@ -6216,7 +6244,8 @@ async function saveQuickEntityTransaction() {
         description: `Quick ${currentQuickType} from Manager`,
         type: currentQuickType,
         isPayable: false, // Default for manual entry
-        timestamp: now.getTime()
+        timestamp: now.getTime(),
+        syncedAt: new Date().toISOString()
     });
 
     await idb.set('payment_transactions', paymentTransactions);
@@ -6736,7 +6765,8 @@ async function savePaymentTransaction() {
         type: type, // 'IN' or 'OUT'
         materialId: materialId,
         isPayable: isPayable,
-        timestamp: new Date(date).getTime()
+        timestamp: new Date(date).getTime(),
+        syncedAt: new Date().toISOString()
     });
     
     await idb.set('payment_transactions', paymentTransactions);
@@ -7686,7 +7716,8 @@ async function saveFactoryInventoryItem() {
             cost, 
             unit, 
             totalValue,
-            paymentStatus: 'pending'
+            paymentStatus: 'pending',
+            syncedAt: new Date().toISOString()
         });
     }
 
@@ -8162,7 +8193,8 @@ async function linkMaterialToSupplier(materialId, supplierId, totalCost) {
             materialsCost: baseCost, 
             additionalCost: totalAdditionalCost,
             rawMaterialsUsed: rawMat, 
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            syncedAt: new Date().toISOString()
         });
 
         // Atomic Save: Ensure both inventory and history are updated or neither is
@@ -8746,6 +8778,7 @@ async function saveCustomerSale() {
         profit: profit,
         creditReceived: paymentType === 'CASH' ? true : false,
         timestamp: new Date(date).getTime(),
+        syncedAt: new Date().toISOString(),
         // --- ISOLATION FLAG ---
         isRepModeEntry: false // Tag as Admin Mode
         
@@ -9046,6 +9079,234 @@ const firebaseConfig = {
   messagingSenderId: "124313576124",
   appId: "1:124313576124:web:fb721bb61bc19b51db26b9"
 }; 
+
+// ============================================
+// FIRESTORE USAGE TRACKING WITH AUTO-RESET
+// ============================================
+
+// Load stats from localStorage or initialize
+function loadFirestoreStats() {
+    const saved = localStorage.getItem('firestoreStats');
+    if (saved) {
+        try {
+            firestoreStats = JSON.parse(saved);
+            // Ensure lastReset exists (for backwards compatibility)
+            if (!firestoreStats.lastReset) {
+                firestoreStats.lastReset = Date.now();
+            }
+            // Check if auto-reset is needed after loading
+            checkAndAutoResetFirestoreStats();
+        } catch (e) {
+            console.error('Error loading Firestore stats:', e);
+            firestoreStats = {
+                reads: 0,
+                writes: 0,
+                history: [],
+                lastReset: Date.now()
+            };
+        }
+    } else {
+        firestoreStats = {
+            reads: 0,
+            writes: 0,
+            history: [],
+            lastReset: Date.now()
+        };
+    }
+}
+
+// Save stats to localStorage
+function saveFirestoreStats() {
+    try {
+        localStorage.setItem('firestoreStats', JSON.stringify(firestoreStats));
+    } catch (e) {
+        console.error('Error saving Firestore stats:', e);
+    }
+}
+
+let firestoreStats = {
+    reads: 0,
+    writes: 0,
+    history: [],
+    lastReset: Date.now()
+};
+
+let firestoreUsageChart = null;
+
+// Auto-reset function - resets stats every 24 hours
+function checkAndAutoResetFirestoreStats() {
+    const now = Date.now();
+    const hoursSinceReset = (now - firestoreStats.lastReset) / (1000 * 60 * 60);
+    
+    // Reset if more than 24 hours have passed
+    if (hoursSinceReset >= 24) {
+        console.log('🔄 Auto-resetting Firestore stats (24 hours elapsed)');
+        firestoreStats.reads = 0;
+        firestoreStats.writes = 0;
+        firestoreStats.history = [];
+        firestoreStats.lastReset = now;
+        saveFirestoreStats();
+        updateFirestoreDisplay();
+        
+        if (firestoreUsageChart) {
+            firestoreUsageChart.data.labels = [];
+            firestoreUsageChart.data.datasets[0].data = [];
+            firestoreUsageChart.data.datasets[1].data = [];
+            firestoreUsageChart.update();
+        }
+    }
+}
+
+// Run auto-reset check every hour
+setInterval(checkAndAutoResetFirestoreStats, 60 * 60 * 1000);
+
+// Initialize chart when DOM is ready
+function initFirestoreUsageChart() {
+    const ctx = document.getElementById('firestoreUsageChart');
+    if (!ctx) return;
+    
+    firestoreUsageChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [
+                {
+                    label: 'Reads',
+                    data: [],
+                    borderColor: '#30d158',
+                    backgroundColor: 'rgba(48, 209, 88, 0.1)',
+                    tension: 0.4,
+                    fill: true
+                },
+                {
+                    label: 'Writes',
+                    data: [],
+                    borderColor: '#007aff',
+                    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+                    tension: 0.4,
+                    fill: true
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: false
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        color: 'var(--text-muted)',
+                        font: { size: 10 }
+                    },
+                    grid: {
+                        color: 'rgba(255, 255, 255, 0.05)'
+                    }
+                },
+                x: {
+                    ticks: {
+                        color: 'var(--text-muted)',
+                        font: { size: 9 }
+                    },
+                    grid: {
+                        color: 'rgba(255, 255, 255, 0.05)'
+                    }
+                }
+            }
+        }
+    });
+}
+
+// Track Firestore reads
+function trackFirestoreRead(count = 1) {
+    checkAndAutoResetFirestoreStats(); // Check for auto-reset
+    firestoreStats.reads += count;
+    saveFirestoreStats(); // Persist to localStorage
+    updateFirestoreDisplay();
+    console.log(`📖 Firestore Read: +${count} (Total: ${firestoreStats.reads})`);
+}
+
+// Track Firestore writes
+function trackFirestoreWrite(count = 1) {
+    checkAndAutoResetFirestoreStats(); // Check for auto-reset
+    firestoreStats.writes += count;
+    saveFirestoreStats(); // Persist to localStorage
+    updateFirestoreDisplay();
+    console.log(`✍️ Firestore Write: +${count} (Total: ${firestoreStats.writes})`);
+}
+
+// Update display
+function updateFirestoreDisplay() {
+    const readsEl = document.getElementById('firestore-reads-count');
+    const writesEl = document.getElementById('firestore-writes-count');
+    
+    if (readsEl) readsEl.textContent = firestoreStats.reads;
+    if (writesEl) writesEl.textContent = firestoreStats.writes;
+    
+    // Update chart every 10 operations
+    if ((firestoreStats.reads + firestoreStats.writes) % 10 === 0) {
+        updateFirestoreChart();
+    }
+}
+
+// Update chart
+function updateFirestoreChart() {
+    if (!firestoreUsageChart) return;
+    
+    const now = new Date();
+    const timeLabel = now.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+    
+    // Add data point
+    firestoreUsageChart.data.labels.push(timeLabel);
+    firestoreUsageChart.data.datasets[0].data.push(firestoreStats.reads);
+    firestoreUsageChart.data.datasets[1].data.push(firestoreStats.writes);
+    
+    // Keep only last 10 points
+    if (firestoreUsageChart.data.labels.length > 10) {
+        firestoreUsageChart.data.labels.shift();
+        firestoreUsageChart.data.datasets[0].data.shift();
+        firestoreUsageChart.data.datasets[1].data.shift();
+    }
+    
+    firestoreUsageChart.update();
+}
+
+// Reset stats (now only used internally for auto-reset)
+function resetFirestoreStats() {
+    firestoreStats = { reads: 0, writes: 0, history: [], lastReset: Date.now() };
+    updateFirestoreDisplay();
+    
+    if (firestoreUsageChart) {
+        firestoreUsageChart.data.labels = [];
+        firestoreUsageChart.data.datasets[0].data = [];
+        firestoreUsageChart.data.datasets[1].data = [];
+        firestoreUsageChart.update();
+    }
+    
+    console.log('🔄 Firestore stats reset');
+}
+
+// Initialize chart when data menu opens
+const originalOpenDataMenu = window.openDataMenu;
+window.openDataMenu = function() {
+    if (typeof originalOpenDataMenu === 'function') {
+        originalOpenDataMenu();
+    } else {
+        document.getElementById('dataMenuOverlay').style.display = 'flex';
+    }
+    
+    // Initialize chart if not already done
+    setTimeout(() => {
+        if (!firestoreUsageChart) {
+            initFirestoreUsageChart();
+        }
+    }, 100);
+};
+
 // --- GLOBAL VARIABLES ---
 let firebaseDB = null;
 let database = null;
@@ -9059,7 +9320,7 @@ function initializeFirebaseSystem() {
     
     // 1. Check if SDK is loaded
     if (typeof firebase === 'undefined') {
-        console.warn('Firebase SDK not ready yet. Retrying...');
+        console.log('⏳ Waiting for Firebase SDK to load...');
         if (indicator) {
             indicator.title = 'Loading Cloud SDK...';
             indicator.className = 'signal-connecting';
@@ -9075,7 +9336,7 @@ function initializeFirebaseSystem() {
             console.log('🔥 Firebase App Initialized');
         }
 
-             // 3. Setup Firestore
+        // 3. Setup Firestore
         database = firebase.firestore();
         firebaseDB = database;
         
@@ -9423,6 +9684,8 @@ function retryFirebaseInit(attempts = 0, maxAttempts = 5) {
             .onSnapshot(async (doc) => {
                 if (!doc.exists) return;
                 
+                trackFirestoreRead(1); // Track realtime settings read
+                
                 const data = doc.data();
                 const cloudTime = data.last_synced ? new Date(data.last_synced).getTime() : 0;
                 const localTimeStr = await idb.get('last_synced');
@@ -9446,6 +9709,8 @@ function retryFirebaseInit(attempts = 0, maxAttempts = 5) {
             .onSnapshot(async (snapshot) => {
                 snapshot.docChanges().forEach(async (change) => {
                     if (change.type === 'added') {
+                        trackFirestoreRead(1); // Track realtime sync update read
+                        
                         const payload = change.doc.data();
                         if (!payload || payload.senderId === currentUser.id) return;
                         
@@ -9806,6 +10071,9 @@ function sanitizeForFirestore(obj, depth = 0) {
 
 // 1. Helper: The Decision Engine
 // Compares two arrays and returns a single array where the newest version of every item wins.
+// REMOVED: resolveDataConflicts function
+// Now using timestamp-based sync instead
+/*
 function resolveDataConflicts(localArray, cloudArray, deletedIdsSet) {
     // FIX: Force inputs to be arrays to prevent ReferenceError/TypeError
     if (!Array.isArray(localArray)) localArray = [];
@@ -9851,11 +10119,47 @@ function resolveDataConflicts(localArray, cloudArray, deletedIdsSet) {
 
     return Array.from(masterMap.values());
 }
+*/
 
 // 2. Main Sync Execution Function
 // FIX: Robust Sync with null checks to prevent TypeError
 // 2. Main Sync Execution Function
 // FIX: Robust Sync with null checks to prevent TypeError
+
+// ==========================================
+// TIMESTAMP-BASED SYNC HELPER FUNCTIONS
+// ==========================================
+
+/**
+ * Smart merge function - only adds cloud items if their UUID doesn't exist locally
+ * @param {Array} localArray - Local data array
+ * @param {Array} cloudArray - Cloud data array
+ * @returns {Array} - Merged array
+ */
+function mergeArraysByTimestamp(localArray, cloudArray) {
+    const merged = [...localArray];
+    const localIds = new Set(localArray.map(item => item.id));
+    
+    let downloadedCount = 0;
+    
+    for (const cloudItem of cloudArray) {
+        // Only download if UUID doesn't exist locally
+        if (!localIds.has(cloudItem.id)) {
+            merged.push(cloudItem);
+            downloadedCount++;
+        }
+        // If UUID exists locally, skip download (local version takes precedence)
+    }
+    
+    if (downloadedCount > 0) {
+        console.log(`📥 Downloaded ${downloadedCount} new items from cloud`);
+    }
+    
+    return merged;
+}
+
+// Legacy functions removed - using syncedAt timestamp instead
+
 async function performOneClickSync(silent = false) {
     if (!database) {
         if (!silent) {
@@ -9924,6 +10228,10 @@ async function performOneClickSync(silent = false) {
             userRef.collection('settings').doc('config').get()
         ]);
 
+        // Track reads - each .get() operation counts
+        trackFirestoreRead(9); // 9 collection reads
+        trackFirestoreRead(1); // 1 document read (settings)
+
         // Helper to safely extract docs
         const extractDocs = (snap) => snap ? snap.docs.map(doc => ({ id: doc.id, ...doc.data() })) : [];
 
@@ -9970,18 +10278,57 @@ async function performOneClickSync(silent = false) {
         const mergedDeletedIds = new Set([...localDeleted, ...cloudDeleted]);
         deletedRecordIds = mergedDeletedIds;
 
-              // EXECUTE "NEWEST WINS" LOGIC
-        // FIX: Added || [] defaults to prevent passing undefined
-        db = resolveDataConflicts(db || [], cloudData.mfg_pro_pkr, deletedRecordIds);
-        customerSales = resolveDataConflicts(customerSales || [], cloudData.customer_sales, deletedRecordIds);
-        repSales = resolveDataConflicts(repSales || [], cloudData.rep_sales, deletedRecordIds);
-        salesHistory = resolveDataConflicts(salesHistory || [], cloudData.noman_history, deletedRecordIds);
-        factoryInventoryData = resolveDataConflicts(factoryInventoryData || [], cloudData.factory_inventory_data, deletedRecordIds);
-        factoryProductionHistory = resolveDataConflicts(factoryProductionHistory || [], cloudData.factory_production_history, deletedRecordIds);
-        paymentEntities = resolveDataConflicts(paymentEntities || [], cloudData.payment_entities, deletedRecordIds);
-        paymentTransactions = resolveDataConflicts(paymentTransactions || [], cloudData.payment_transactions, deletedRecordIds);
-        stockReturns = resolveDataConflicts(stockReturns || [], cloudData.stock_returns, deletedRecordIds);
-
+              // SMART SYNC LOGIC - UUID-BASED
+        // Upload: Check cloud first, only upload items with UUIDs not in cloud
+        // Download: Check local first, only download items with UUIDs not in local
+        
+        // Prepare all local data for smart upload check
+        const unsyncedProduction = db || [];
+        const unsyncedSales = customerSales || [];
+        const unsyncedRepSales = repSales || [];
+        const unsyncedCalcHistory = salesHistory || [];
+        const unsyncedTransactions = paymentTransactions || [];
+        const unsyncedEntities = paymentEntities || [];
+        const unsyncedInventory = factoryInventoryData || [];
+        const unsyncedFactoryHistory = factoryProductionHistory || [];
+        const unsyncedReturns = stockReturns || [];
+        
+        // SMART DOWNLOAD: Only download items with UUIDs not in local data
+        console.log('📥 Starting smart download - checking local for existing items...');
+        
+        const newCloudProduction = cloudData.mfg_pro_pkr || [];
+        const newCloudSales = cloudData.customer_sales || [];
+        const newCloudRepSales = cloudData.rep_sales || [];
+        const newCloudCalcHistory = cloudData.noman_history || [];
+        const newCloudTransactions = cloudData.payment_transactions || [];
+        const newCloudEntities = cloudData.payment_entities || [];
+        const newCloudInventory = cloudData.factory_inventory_data || [];
+        const newCloudFactoryHistory = cloudData.factory_production_history || [];
+        const newCloudReturns = cloudData.stock_returns || [];
+        
+        console.log(`☁️ Cloud data counts - Production: ${newCloudProduction.length}, Sales: ${newCloudSales.length}, Rep Sales: ${newCloudRepSales.length}`);
+        
+        // Merge - only downloads items with UUIDs not present locally
+        db = mergeArraysByTimestamp(db || [], newCloudProduction);
+        customerSales = mergeArraysByTimestamp(customerSales || [], newCloudSales);
+        repSales = mergeArraysByTimestamp(repSales || [], newCloudRepSales);
+        salesHistory = mergeArraysByTimestamp(salesHistory || [], newCloudCalcHistory);
+        paymentTransactions = mergeArraysByTimestamp(paymentTransactions || [], newCloudTransactions);
+        paymentEntities = mergeArraysByTimestamp(paymentEntities || [], newCloudEntities);
+        factoryInventoryData = mergeArraysByTimestamp(factoryInventoryData || [], newCloudInventory);
+        factoryProductionHistory = mergeArraysByTimestamp(factoryProductionHistory || [], newCloudFactoryHistory);
+        stockReturns = mergeArraysByTimestamp(stockReturns || [], newCloudReturns);
+        
+        // Clean up deleted records
+        db = db.filter(item => !deletedRecordIds.has(item.id));
+        customerSales = customerSales.filter(item => !deletedRecordIds.has(item.id));
+        repSales = repSales.filter(item => !deletedRecordIds.has(item.id));
+        salesHistory = salesHistory.filter(item => !deletedRecordIds.has(item.id));
+        paymentTransactions = paymentTransactions.filter(item => !deletedRecordIds.has(item.id));
+        paymentEntities = paymentEntities.filter(item => !deletedRecordIds.has(item.id));
+        factoryInventoryData = factoryInventoryData.filter(item => !deletedRecordIds.has(item.id));
+        factoryProductionHistory = factoryProductionHistory.filter(item => !deletedRecordIds.has(item.id));
+        stockReturns = stockReturns.filter(item => !deletedRecordIds.has(item.id));
 
         // Merge settings (Read from incoming settingsData)
         // CRITICAL FIX: Wrap each setting merge in try-catch to prevent sync freeze
@@ -10098,6 +10445,10 @@ async function performOneClickSync(silent = false) {
 
         const batch = database.batch();
         let operationCount = 0;
+        
+    
+        // Direct sync - no uploadedAt marking needed (using syncedAt instead)
+
         const batches = [batch];
         
         const getCurrentBatch = () => {
@@ -10115,6 +10466,9 @@ async function performOneClickSync(silent = false) {
             'transactions': paymentTransactions, 'returns': stockReturns
         };
 
+        // SMART UPLOAD: Check cloud first for existing IDs
+        console.log('📤 Starting smart upload - checking cloud for existing items...');
+        
         for (const [collectionName, dataArray] of Object.entries(collections)) {
             // Validate collection name is a proper string
             if (!collectionName || typeof collectionName !== 'string') {
@@ -10122,30 +10476,46 @@ async function performOneClickSync(silent = false) {
                 continue;
             }
             
-            if (Array.isArray(dataArray)) {
-                console.log(`📝 Syncing ${collectionName}: ${dataArray.length} items`);
+            if (Array.isArray(dataArray) && dataArray.length > 0) {
+                console.log(`📝 Checking ${collectionName}: ${dataArray.length} local items`);
+                
+                // Get existing cloud IDs for this collection
+                const cloudSnapshot = await userRef.collection(collectionName).get();
+                trackFirestoreRead(1); // Track the collection read
+                
+                const existingCloudIds = new Set(cloudSnapshot.docs.map(doc => doc.id));
+                
+                console.log(`☁️ Found ${existingCloudIds.size} existing items in cloud ${collectionName}`);
+                
+                // Filter and upload only new items (not in cloud)
+                let uploadedCount = 0;
                 
                 for (const item of dataArray) {
                     if (item && item.id) {
                         try {
-                            const currentBatch = getCurrentBatch();
+                            const docId = String(item.id);
                             
-                            // CRITICAL FIX: Convert ID to string and validate (Firestore requirement)
-                            let docId = String(item.id);
-                            
-                            // Ensure docId is valid - Firestore doc IDs cannot contain / or be empty
-                            if (!docId || docId.includes('/')) {
-                                console.error(`[SYNC] Invalid document ID in ${collectionName}:`, docId);
-                                continue; // Skip this item
+                            // Skip if already exists in cloud (based on UUID)
+                            if (existingCloudIds.has(docId)) {
+                                continue; // Item already in cloud, don't upload
                             }
                             
-                            // CRITICAL FIX: Sanitize data before writing
+                            // Item is new, proceed to upload
+                            const currentBatch = getCurrentBatch();
+                            
+                            // Validate docId
+                            if (!docId || docId.includes('/')) {
+                                console.error(`[SYNC] Invalid document ID in ${collectionName}:`, docId);
+                                continue;
+                            }
+                            
+                            // Sanitize data before writing
                             const sanitizedItem = sanitizeForFirestore(item);
                             
                             // Validate sanitized item has content
                             if (!sanitizedItem || typeof sanitizedItem !== 'object' || Object.keys(sanitizedItem).length === 0) {
                                 console.error(`[SYNC] Empty sanitized item in ${collectionName}:`, item.id);
-                                continue; // Skip empty items
+                                continue;
                             }
                             
                             // Ensure sanitizedItem.id is a string
@@ -10155,12 +10525,15 @@ async function performOneClickSync(silent = false) {
                             
                             currentBatch.set(userRef.collection(collectionName).doc(docId), sanitizedItem);
                             operationCount++;
+                            uploadedCount++;
+                            trackFirestoreWrite(1); // Track each write operation
                         } catch (itemError) {
                             console.error(`[SYNC] Error with item in ${collectionName}:`, itemError, item);
-                            // Continue with other items
                         }
                     }
                 }
+                
+                console.log(`🆕 Uploaded ${uploadedCount} new items to ${collectionName}`);
             }
         }
 
@@ -10224,6 +10597,7 @@ async function performOneClickSync(silent = false) {
         
         console.log('🔧 [SYNC] Factory formulas after sanitization:', JSON.stringify(sanitizedSettings.factory_default_formulas, null, 2));
         configBatch.set(userRef.collection('settings').doc('config'), sanitizedSettings, { merge: true });
+        trackFirestoreWrite(1); // Track settings write
 
         await Promise.all(batches.map(b => b.commit()));
         await idb.set('last_synced', now);
@@ -11194,8 +11568,13 @@ async function saveTransaction() {
         // UI State
         statusText: statusText,
         statusClass: statusClass,
+        linkedSalesIds: [],
+        
+        // Timestamp tracking for sync
+        syncedAt: new Date().toISOString(),
         linkedSalesIds: []
     };
+
 
     // 10. Link to Sales Entries (Admin Mode)
     const linkedIds = await markSalesEntriesAsReceived(seller, sold);
@@ -14221,7 +14600,8 @@ async function processReturnToProduction(storeKey, quantity, date, seller) {
         timestamp: new Date(date).getTime(),
         isReturn: true, // Mark as return entry
         returnedBy: seller,
-        returnNote: `Returned by ${seller}`
+        returnNote: `Returned by ${seller}`,
+        syncedAt: new Date().toISOString()
     };
 
     // Add to production database
@@ -14236,7 +14616,8 @@ async function processReturnToProduction(storeKey, quantity, date, seller) {
         store: storeKey,
         quantity: quantity,
         seller: seller,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        syncedAt: new Date().toISOString()
     };
     
     stockReturns.push(returnLogEntry);
@@ -14318,15 +14699,19 @@ async function reverseReturnFromProduction(storeKey, quantity, date) {
 
 document.addEventListener('DOMContentLoaded', async function() {
     // 1. Strict Initialization: Ensure no UI rendering until loadAllData is complete
-    console.log(" System Initializing ");
+    console.log("🚀 System Initializing...");
     
     try {
         // Initialize IndexedDB and load all data first
         await loadAllData();
         await migrateRepData(); // Run migration after loading
-        console.log(" Data loaded successfully from IndexedDB.");
+        console.log("✅ Data loaded successfully from IndexedDB.");
+        
+        // Load Firestore usage stats
+        loadFirestoreStats();
+        console.log("✅ Firestore stats loaded.");
     } catch (e) {
-        console.error(" Critical Initialization Error:", e);
+        console.error("❌ Critical Initialization Error:", e);
         alert("Failed to initialize database. Please refresh the page.");
         return;
     }
@@ -14850,7 +15235,8 @@ async function saveEntity() {
             phone,
             wallet,
             createdAt: Date.now(),
-            updatedAt: Date.now()
+            updatedAt: Date.now(),
+            syncedAt: new Date().toISOString()
         });
         showToast("New entity added", "success");
     }
@@ -16557,7 +16943,8 @@ async function saveRepTransaction() {
             creditReceived: (payType === 'CASH'), 
             timestamp: Date.now(),
             isRepModeEntry: true,
-            affectsInventory: false
+            affectsInventory: false,
+            syncedAt: new Date().toISOString()
         };
 
     } else {
@@ -16583,7 +16970,8 @@ async function saveRepTransaction() {
             isCollection: true, 
             timestamp: Date.now(),
             isRepModeEntry: true,
-            affectsInventory: false
+            affectsInventory: false,
+            syncedAt: new Date().toISOString()
         };
     }
 
