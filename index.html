@@ -26,6 +26,27 @@
 
  <script>
   /* ========================================
+     PERSISTENT LOGIN + AUTO-SYNC ENABLED ✅
+     ========================================
+     Login state is now persistent using:
+     - Firebase Auth LOCAL persistence
+     - localStorage backup for user data
+     
+     Users stay logged in across:
+     ✅ Browser refresh (F5)
+     ✅ App close and reopen
+     ✅ Tab close and reopen
+     ✅ Device restart (if browser preserves data)
+     
+     NEW FEATURES:
+     ✅ Auto-sync on login (data syncs automatically when logged in)
+     ✅ No more "default_user" - proper user authentication required
+     ✅ Sync button shows login status with icons
+     
+     To sign out, use the logout button.
+     ======================================== */
+  
+  /* ========================================
      LIGHTWEIGHT PERFORMANCE MODE ENABLED
      ========================================
      Background processes disabled:
@@ -37,9 +58,11 @@
      
      Active features:
      ✅ Manual sync button
+     ✅ Auto-sync on login
      ✅ Event-based connection updates
      ✅ User-triggered seamless backup
      ✅ Network reconnection logic
+     ✅ Persistent login across sessions
      ======================================== */
   
   if ('serviceWorker' in navigator) {
@@ -9313,6 +9336,16 @@ function initializeFirebaseSystem() {
         // 5. Setup Auth
         auth = firebase.auth();
         
+        // PERSISTENT LOGIN: Enable Firebase Auth persistence
+        // This keeps users logged in across browser sessions
+        auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
+            .then(() => {
+                console.log('🔐 Firebase Auth Persistence enabled (LOCAL)');
+            })
+            .catch((error) => {
+                console.warn('⚠️ Could not enable auth persistence:', error);
+            });
+        
         // 6. Listen for auth state changes
                 // 6. Listen for auth state changes
         auth.onAuthStateChanged(async (user) => {
@@ -9323,6 +9356,27 @@ function initializeFirebaseSystem() {
                     email: user.email,
                     displayName: user.displayName
                 };
+                
+                // PERSISTENT LOGIN: Save auth state to localStorage
+                try {
+                    const savedLogin = localStorage.getItem('persistentLogin');
+                    const isRestoredSession = savedLogin && JSON.parse(savedLogin).uid === user.uid;
+                    
+                    localStorage.setItem('persistentLogin', JSON.stringify({
+                        uid: user.uid,
+                        email: user.email,
+                        displayName: user.displayName,
+                        lastLogin: new Date().toISOString()
+                    }));
+                    
+                    if (isRestoredSession) {
+                        console.log('🔄 Session restored from persistent login');
+                    } else {
+                        console.log('💾 New login state saved to localStorage');
+                    }
+                } catch (e) {
+                    console.warn('Could not save login state:', e);
+                }
                 
                 // FIX: Immediately hide overlay and show success toast
                 hideAuthOverlay(); 
@@ -9344,14 +9398,26 @@ function initializeFirebaseSystem() {
                     subscribeToRealtime();
                 }
                 
-                // Trigger a silent sync to ensure data is fresh
+                // AUTO-SYNC: Trigger automatic sync when user logs in (with toast notifications)
                 setTimeout(() => {
-                    performOneClickSync(true);
-                }, 1000);
+                    if (typeof performOneClickSync === 'function') {
+                        console.log('🔄 Auto-syncing data after login...');
+                        performOneClickSync(false); // false = show toast messages so user knows sync is happening
+                    }
+                }, 1500);
 
             } else {
                 // User is signed out
                 currentUser = null;
+                
+                // PERSISTENT LOGIN: Clear auth state from localStorage
+                try {
+                    localStorage.removeItem('persistentLogin');
+                    console.log('🗑️ Login state cleared from localStorage');
+                } catch (e) {
+                    console.warn('Could not clear login state:', e);
+                }
+                
                 console.log('User logged out');
                 updateSyncButton();
             }
@@ -10121,10 +10187,11 @@ async function performOneClickSync(silent = false) {
         return;
     }
 
-    if (!currentUser || currentUser.id === 'default_user') {
+    if (!currentUser) {
         if (!silent) {
             showToast("Please log in to sync data", "warning");
-            showAuthOverlay(); 
+            // Don't auto-open auth overlay - let the sync button handle login flow
+            // User should click "LOGIN TO SYNC" button to open auth overlay
         }
         return;
     }
@@ -11240,11 +11307,10 @@ async function triggerCloudAction(action) {
 
 // --- CHECKS ON LOAD ---
 async function checkAuthState() {
-    // Firebase version: No authentication needed, use default user
-    currentUser = { id: 'default_user' };
-    // startDatabaseHeartbeat removed - not needed for Firestore
+    // Firebase Auth persistence handles user state automatically
+    // No need to set default_user - wait for auth state listener
     scheduleAutoBackup();
-    await wakeUpDatabaseAndSync();
+    // wakeUpDatabaseAndSync will be called after user logs in via auth listener
 }
 
 
@@ -11509,16 +11575,16 @@ function updateSyncButton() {
     
     if (!currentUser) {
         // User not logged in - show login prompt
-        syncBtn.innerHTML = 'LOGIN TO SYNC';
+        syncBtn.innerHTML = '🔒 LOGIN TO SYNC';
         syncBtn.onclick = () => {
             showAuthOverlay();
         };
         syncBtn.style.background = 'linear-gradient(135deg, #ff9f0a 0%, #ff375f 100%)';
     } else {
-        // User logged in - show sync button
-        syncBtn.innerHTML = ' SYNC DATA';
+        // User logged in - show sync button (text changes to SYNC DATA)
+        syncBtn.innerHTML = 'SYNC DATA';
         syncBtn.onclick = () => {
-            performOneClickSync();
+            performOneClickSync(); // Just sync, don't open auth overlay
         };
         syncBtn.style.background = 'linear-gradient(135deg, #2563eb 0%, #059669 100%)';
     }
@@ -18510,8 +18576,7 @@ class EnhancedFirestoreManager {
         return typeof database !== 'undefined' && 
                database !== null && 
                typeof currentUser !== 'undefined' && 
-               currentUser !== null &&
-               currentUser.id !== 'default_user';
+               currentUser !== null;
     }
 
     /**
