@@ -1,22 +1,8 @@
 async function saveWithTracking(key, data) {
-const keyToCollection = {
-'mfg_pro_pkr': 'production',
-'customer_sales': 'sales',
-'noman_history': 'calculator_history',
-'rep_sales': 'rep_sales',
-'rep_customers': 'rep_customers',
-'sales_customers': 'sales_customers',
-'payment_transactions': 'transactions',
-'payment_entities': 'entities',
-'factory_inventory_data': 'inventory',
-'factory_production_history': 'factory_history',
-'expenses': 'expenses',
-'stock_returns': 'returns'
-};
 const result = await idb.set(key, data);
-const collectionName = keyToCollection[key];
-if (collectionName) {
-  DeltaSync.trackCollection(collectionName);
+const collectionEntry = IndexedDBToFirestoreMap[key];
+if (collectionEntry) {
+  DeltaSync.trackCollection(collectionEntry.collection);
 }
 return result;
 }
@@ -68,19 +54,17 @@ return false;
 if (window._firestoreNetworkDisabled || !navigator.onLine) {
 if (typeof OfflineQueue !== 'undefined') {
 const now = Date.now();
-const recordWithTimestamps = {
+const queuedRecord = sanitizeForFirestore({
 ...record,
-updatedAt: record.isMerged ? record.updatedAt : now,
 syncedAt: new Date().toISOString()
-};
-if (!recordWithTimestamps.createdAt) {
-recordWithTimestamps.createdAt = now;
-}
+});
+if (!queuedRecord.createdAt) queuedRecord.createdAt = now;
+if (!record.isMerged) queuedRecord.updatedAt = now;
 await OfflineQueue.add({
 action: 'set',
 collection: collectionName,
 docId: String(record.id),
-data: sanitizeForFirestore(recordWithTimestamps)
+data: queuedRecord
 });
 }
 return true;
@@ -89,32 +73,25 @@ try {
 const userRef = firebaseDB.collection('users').doc(currentUser.uid);
 const docRef = userRef.collection(collectionName).doc(String(record.id));
 const now = Date.now();
-const recordWithTimestamps = {
-...record,
-updatedAt: record.isMerged ? record.updatedAt : now,
-syncedAt: new Date().toISOString()
-};
-if (!recordWithTimestamps.createdAt) {
-recordWithTimestamps.createdAt = now;
-}
-await docRef.set(sanitizeForFirestore(recordWithTimestamps), { merge: true });
+const sanitized = sanitizeForFirestore({ ...record, syncedAt: new Date().toISOString() });
+if (!sanitized.createdAt) sanitized.createdAt = now;
+if (!record.isMerged) sanitized.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
+await docRef.set(sanitized, { merge: true });
 trackFirestoreWrite(1);
 await DeltaSync.setLastSyncTimestamp(collectionName);
+DeltaSync.markUploaded(collectionName, record.id);
 return true;
 } catch (error) {
 if (typeof OfflineQueue !== 'undefined') {
 const now = Date.now();
-const recordWithTimestamps = {
-...record,
-updatedAt: record.isMerged ? record.updatedAt : now,
-syncedAt: new Date().toISOString()
-};
-if (!recordWithTimestamps.createdAt) recordWithTimestamps.createdAt = now;
+const fallbackRecord = sanitizeForFirestore({ ...record, syncedAt: new Date().toISOString() });
+if (!fallbackRecord.createdAt) fallbackRecord.createdAt = now;
+if (!record.isMerged) fallbackRecord.updatedAt = now; 
 await OfflineQueue.add({
 action: 'set',
 collection: collectionName,
 docId: String(record.id),
-data: sanitizeForFirestore(recordWithTimestamps)
+data: fallbackRecord
 });
 return true;
 }
@@ -156,13 +133,13 @@ recordId: recordId,
 collection: collectionName,
 recordType: collectionName,
 deletedAt: firebase.firestore.FieldValue.serverTimestamp(),
-expiresAt: firebase.firestore.Timestamp.fromMillis(Date.now() + (90 * 24 * 60 * 60 * 1000))
+expiresAt: firebase.firestore.Timestamp.fromMillis(Date.now() + APP_CONFIG.TOMBSTONE_EXPIRY_MS)
 });
 await batch.commit();
 trackFirestoreWrite(2);
 return true;
 } catch (error) {
-console.error('deleteRecordFromFirestore error:', error);
+console.error('deleteRecordFromFirestore error:', _safeErr(error));
 if (typeof OfflineQueue !== 'undefined') {
 await OfflineQueue.add({
 action: 'delete',
@@ -180,25 +157,55 @@ return false;
 }
 }
 async function unifiedSave(idbKey, dataArray, specificRecord = null) {
-// Save to local IndexedDB immediately — UI unblocks here
 await saveWithTracking(idbKey, dataArray);
-// Fire Firestore sync in the background without blocking the caller
 if (specificRecord && specificRecord.id) {
   const collectionName = getFirestoreCollection(idbKey);
   if (collectionName) DeltaSync.trackId(collectionName, specificRecord.id);
-  Promise.resolve().then(() => saveRecordToFirestore(idbKey, specificRecord)).catch(() => {});
+  try {
+    const saved = await saveRecordToFirestore(idbKey, specificRecord);
+    if (!saved && typeof OfflineQueue !== 'undefined') {
+      const now = Date.now();
+      const fallback = sanitizeForFirestore({ ...specificRecord, syncedAt: new Date().toISOString() });
+      if (!fallback.createdAt) fallback.createdAt = now;
+      if (!specificRecord.isMerged) fallback.updatedAt = now;
+      await OfflineQueue.add({
+        action: 'set',
+        collection: collectionName,
+        docId: String(specificRecord.id),
+        data: fallback
+      });
+    }
+  } catch (e) {
+    if (typeof OfflineQueue !== 'undefined' && collectionName) {
+      const now = Date.now();
+      const fallback = sanitizeForFirestore({ ...specificRecord, syncedAt: new Date().toISOString() });
+      if (!fallback.createdAt) fallback.createdAt = now;
+      if (!specificRecord.isMerged) fallback.updatedAt = now;
+      await OfflineQueue.add({
+        action: 'set',
+        collection: collectionName,
+        docId: String(specificRecord.id),
+        data: fallback
+      });
+    }
+  }
 }
 triggerAutoSync();
 return true;
 }
-async function unifiedDelete(idbKey, dataArray, deletedRecordId) {
-// Save updated local array immediately — UI unblocks here
+async function unifiedDelete(idbKey, dataArray, deletedRecordId, opts = {}) {
+if (opts.strict !== true) {
+  console.warn(`[RecycleBin] BLOCKED unifiedDelete on "${idbKey}" id=${deletedRecordId} — strict flag missing. Pass { strict: true } to confirm intentional deletion.`);
+  if (typeof window.showToast === 'function') window.showToast('Delete blocked: missing strict confirmation flag.', 'warning');
+  return false;
+}
 await saveWithTracking(idbKey, dataArray);
-// Fire Firestore delete + deletion log in the background without blocking the caller
 const collectionName = getFirestoreCollection(idbKey);
 Promise.resolve().then(async () => {
   try {
-    if (collectionName) await registerDeletion(deletedRecordId, collectionName);
+    if (collectionName && typeof window.registerDeletion === 'function') {
+      await window.registerDeletion(deletedRecordId, collectionName);
+    }
     await deleteRecordFromFirestore(idbKey, deletedRecordId);
   } catch (e) {}
 }).catch(() => {});
@@ -291,30 +298,30 @@ email: user.email,
 displayName: user.displayName
 };
 try {
-const savedLogin = localStorage.getItem('persistentLogin');
-const isRestoredSession = savedLogin && JSON.parse(savedLogin).uid === user.uid;
-localStorage.setItem('persistentLogin', JSON.stringify({
-uid: user.uid,
-email: user.email,
-displayName: user.displayName,
-lastLogin: new Date().toISOString()
-}));
+  const loginData = {
+    uid: user.uid,
+    email: user.email,
+    displayName: user.displayName,
+    lastLogin: new Date().toISOString()
+  };
+  await IDBCrypto.sessionSet('login', loginData);
+  await IDBCrypto.sessionSet('active', { value: '1', ts: Date.now() });
+  localStorage.setItem('persistentLogin', JSON.stringify(loginData));
+  localStorage.setItem('_gznd_session_active', '1');
+  sessionStorage.setItem('_gznd_session_active', '1');
 } catch (e) {
 console.warn('Failed to save persistent login:', e);
 }
 hideAuthOverlay();
 showToast(`Welcome back, ${user.email.split('@')[0]}`, 'success');
-try { sessionStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
 idb.setUserPrefix(user.uid);
 await IDBCrypto.initialize();
 const keyRestored = await IDBCrypto.restoreSessionKeyFromStorage();
 if (!keyRestored) {
-
 const hasStoredCreds = await OfflineAuth.hasStoredCredentials();
 if (hasStoredCreds) {
 const savedEmail = await OfflineAuth.getSavedEmail();
 if (savedEmail && savedEmail.toLowerCase() === user.email.toLowerCase()) {
-
 showToast('Please enter your password to restore data access', 'warning');
 setTimeout(() => {
 showAuthOverlay();
@@ -326,6 +333,7 @@ messageDiv.style.color = 'var(--warning)';
 const emailInput = document.getElementById('auth-email');
 if (emailInput) emailInput.value = user.email;
 }, 1000);
+updateSyncButton();
 return;
 }
 }
@@ -337,10 +345,16 @@ if (!isKeyValid) {
 console.warn('Auth: Encryption key validation failed');
 IDBCrypto.clearSessionKey();
 showToast('Encryption key invalid. Please log in again.', 'error');
+updateSyncButton();
 showAuthOverlay();
 return;
 }
-
+}
+try {
+  if (typeof loadAllData === 'function') await loadAllData();
+  if (typeof refreshAllDisplays === 'function') await refreshAllDisplays();
+} catch(e) {
+  console.warn('Auth: post-login data reload failed:', e);
 }
 updateSyncButton();
 if (typeof subscribeToRealtime === 'function') {
@@ -353,16 +367,17 @@ console.warn('Device registration failed:', err);
 });
 }, 500);
 }
-// Refresh all device ID storage layers on every successful login
-// so the ID is preserved even if some layers were cleared
 if (typeof refreshDeviceIdAnchors === 'function') {
 setTimeout(() => { refreshDeviceIdAnchors().catch(() => {}); }, 1500);
+}
+if (typeof initDeviceShard === 'function') {
+setTimeout(() => { initDeviceShard().catch(() => {}); }, 200);
 }
 setTimeout(async () => {
 try {
 await restoreDeviceModeOnLogin(user.uid);
 } catch (error) {
-console.error('Could not restore device mode:', error);
+console.error('Could not restore device mode:', _safeErr(error));
 }
 }, 1000);
 setTimeout(async () => {
@@ -373,7 +388,12 @@ performOneClickSync(false);
 } else {
 currentUser = null;
 try {
-localStorage.removeItem('persistentLogin');
+  await IDBCrypto.sessionDelete('login');
+  await IDBCrypto.sessionDelete('active');
+  await IDBCrypto.sessionDelete('keyBackup');
+  localStorage.removeItem('persistentLogin');
+  localStorage.removeItem('_gznd_session_active');
+  sessionStorage.removeItem('_gznd_session_active');
 } catch (e) {
 console.error('Failed to clear persistent login:', e);
 }
@@ -390,13 +410,13 @@ initFirebase();
 setTimeout(initializeFirebaseSystem, 500);
 }
 } catch (error) {
-console.error('Sync failed. Check your connection.', error);
+console.error('Sync failed. Check your connection.', _safeErr(error));
 showToast('Sync failed. Check your connection.', 'error');
 if (indicator) {
 indicator.title = 'Connection Failed';
 indicator.className = 'signal-offline';
 }
-setTimeout(initializeFirebaseSystem, 2000);
+setTimeout(initializeFirebaseSystem, APP_CONFIG.FIREBASE_INIT_RETRY_DELAY);
 }
 }
 class FirestoreDatabaseInitializer {
@@ -885,10 +905,10 @@ return await isCompleteDatabaseInitialized();
 return false;
 }
 }
-function retryFirebaseInit(attempts = 0, maxAttempts = 5) {
-const success = initializeFirebase();
-if (success) {
-return;
+function retryFirebaseInit(attempts = 0, maxAttempts = APP_CONFIG.FIREBASE_INIT_RETRY_MAX) {
+initializeFirebaseSystem();
+if (firebaseDB) {
+return; 
 }
 if (attempts < maxAttempts) {
 const delay = Math.min(1000 * Math.pow(2, attempts), 5000);
@@ -1035,7 +1055,7 @@ break;
 }
 }
 } catch (error) {
-console.error('Failed to save data locally.', error);
+console.error('Failed to save data locally.', _safeErr(error));
 showToast('Failed to save data locally.', 'error');
 }
 }
@@ -1066,7 +1086,9 @@ const changedKeys = Object.keys(payload);
 if (syncChannel) {
 try {
 if (!window._selfSenderId) {
-window._selfSenderId = Date.now().toString(36) + Math.random().toString(36).slice(2);
+window._selfSenderId = (typeof generateUUID === 'function')
+  ? generateUUID('tab')
+  : Date.now().toString(36) + Math.random().toString(36).slice(2); 
 }
 syncChannel.postMessage({
 type: 'data-update',
@@ -1096,7 +1118,7 @@ syncSnapshot.docs.slice(10).forEach(doc => batch.delete(doc.ref));
 await batch.commit();
 }
 } catch (error) {
-console.error('Cloud save operation failed.', error);
+console.error('Cloud save operation failed.', _safeErr(error));
 showToast('Cloud save operation failed.', 'error');
 }
 };
@@ -1140,7 +1162,6 @@ return timeSinceLastSuccess > staleThreshold;
 }
 async function subscribeToRealtime() {
 if (!firebaseDB || !currentUser) return;
-
 if (!pendingFirestoreYearClose) {
   const storedFlag = await idb.get('pendingFirestoreYearClose');
   if (storedFlag === true) pendingFirestoreYearClose = true;
@@ -1187,32 +1208,38 @@ showToast('Firebase operation failed.', 'error');
 realtimeRefs = [];
 const userRef = firebaseDB.collection('users').doc(currentUser.uid);
 try {
-const updateArray = (array, docData, arrayName) => {
+const updateArray = (array, docData, collectionName) => {
 if (docData._placeholder || docData.id === '_placeholder_') return array;
-const existingIndex = array.findIndex(item => item.id === docData.id);
-if (existingIndex === -1) {
-array.push(docData);
-return array;
-} else {
-const getComparableTimestamp = (item) => {
-const ts = item.updatedAt !== undefined ? item.updatedAt
-          : item.timestamp !== undefined ? item.timestamp
-          : item.createdAt;
-if (!ts) return 0;
-if (ts && typeof ts.toMillis === 'function') return ts.toMillis();
-if (ts && typeof ts.seconds === 'number') return ts.seconds * 1000;
-if (ts instanceof Date) return ts.getTime();
-if (typeof ts === 'number') return ts;
-if (typeof ts === 'string') return new Date(ts).getTime();
-return 0;
+const sid = String(docData.id);
+if (collectionName && DeltaSync.wasDownloaded(collectionName, sid)) return array;
+const _getMs = (rec) => {
+  if (!rec) return 0;
+  const ts = rec.updatedAt || rec.timestamp || rec.createdAt || 0;
+  if (typeof ts === 'number') return ts;
+  if (ts && typeof ts.toMillis === 'function') return ts.toMillis();
+  if (ts && typeof ts === 'object') {
+    if (typeof ts.seconds === 'number') return ts.seconds * 1000;
+    if (typeof ts._seconds === 'number') return ts._seconds * 1000;
+  }
+  if (ts instanceof Date) return ts.getTime();
+  if (typeof ts === 'string') { try { const t = new Date(ts).getTime(); if (!isNaN(t)) return t; } catch(e){} }
+  return 0;
 };
-const localTimestamp = getComparableTimestamp(array[existingIndex]);
-const cloudTimestamp = getComparableTimestamp(docData);
-if (cloudTimestamp >= localTimestamp) {
-array[existingIndex] = docData;
+const existingIdx = array.findIndex(item => item && item.id === docData.id);
+if (existingIdx === -1) {
+  // Record doesn't exist locally — add it
+  array.push(docData);
+} else {
+  // Record exists — use UUID v2 as authoritative conflict resolver
+  const _cmpUpdate = (typeof compareRecordVersions === 'function')
+    ? compareRecordVersions(docData, array[existingIdx])
+    : _getMs(docData) - _getMs(array[existingIdx]);
+  if (_cmpUpdate > 0) {
+    array[existingIdx] = docData;
+  }
 }
+if (collectionName) DeltaSync.markDownloaded(collectionName, sid);
 return array;
-}
 };
 let productionQuery = userRef.collection('production');
 const lastProductionSync = await DeltaSync.getLastSyncFirestoreTimestamp('production');
@@ -1232,11 +1259,13 @@ for (const change of changes) {
 try {
 const docData = { id: change.doc.id, ...change.doc.data() };
 if (change.type === 'added' || change.type === 'modified') {
+deletedRecordIds.delete(change.doc.id);
 db = updateArray(db, docData, 'production');
 hasChanges = true;
 } else if (change.type === 'removed') {
-db = db.filter(item => item.id !== change.doc.id);
 deletedRecordIds.add(change.doc.id);
+DeltaSync.markDownloaded('production', change.doc.id);
+db = db.filter(item => item.id !== change.doc.id);
 hasChanges = true;
 }
 } catch (docError) {
@@ -1252,7 +1281,7 @@ flashLivePulse();
 }
 recordSuccessfulConnection();
 } catch (error) {
-console.error('Failed to save data locally.', error);
+console.error('Failed to save data locally.', _safeErr(error));
 showToast('Failed to save data locally.', 'error');
 }
 };
@@ -1281,11 +1310,13 @@ for (const change of changes) {
 try {
 const docData = { id: change.doc.id, ...change.doc.data() };
 if (change.type === 'added' || change.type === 'modified') {
-customerSales = updateArray(customerSales, docData, 'sale');
+deletedRecordIds.delete(change.doc.id);
+customerSales = updateArray(customerSales, docData, 'sales');
 hasChanges = true;
 } else if (change.type === 'removed') {
-customerSales = customerSales.filter(item => item.id !== change.doc.id);
 deletedRecordIds.add(change.doc.id);
+DeltaSync.markDownloaded('sales', change.doc.id);
+customerSales = customerSales.filter(item => item.id !== change.doc.id);
 hasChanges = true;
 }
 } catch (docError) {
@@ -1301,7 +1332,7 @@ flashLivePulse();
 }
 recordSuccessfulConnection();
 } catch (error) {
-console.error('Failed to save data locally.', error);
+console.error('Failed to save data locally.', _safeErr(error));
 showToast('Failed to save data locally.', 'error');
 }
 };
@@ -1328,11 +1359,13 @@ for (const change of snapshot.docChanges()) {
 try {
 const docData = { id: change.doc.id, ...change.doc.data() };
 if (change.type === 'added' || change.type === 'modified') {
-repSales = updateArray(repSales, docData, 'rep sale');
+deletedRecordIds.delete(change.doc.id);
+repSales = updateArray(repSales, docData, 'rep_sales');
 hasChanges = true;
 } else if (change.type === 'removed') {
-repSales = repSales.filter(item => item.id !== change.doc.id);
 deletedRecordIds.add(change.doc.id);
+DeltaSync.markDownloaded('rep_sales', change.doc.id);
+repSales = repSales.filter(item => item.id !== change.doc.id);
 hasChanges = true;
 }
 } catch (docError) { console.warn('repSales doc error', docError); }
@@ -1346,7 +1379,7 @@ flashLivePulse();
 }
 recordSuccessfulConnection();
 } catch (error) {
-console.error('repSales snapshot error', error);
+console.error('repSales snapshot error', _safeErr(error));
 }
 };
 const repSalesUnsub = repSalesQuery.onSnapshot(async (snapshot) => {
@@ -1371,11 +1404,13 @@ for (const change of snapshot.docChanges()) {
 try {
 const docData = { id: change.doc.id, ...change.doc.data() };
 if (change.type === 'added' || change.type === 'modified') {
-repCustomers = updateArray(repCustomers, docData, 'rep customer');
+deletedRecordIds.delete(change.doc.id);
+repCustomers = updateArray(repCustomers, docData, 'rep_customers');
 hasChanges = true;
 } else if (change.type === 'removed') {
-repCustomers = repCustomers.filter(item => item.id !== change.doc.id);
 deletedRecordIds.add(change.doc.id);
+DeltaSync.markDownloaded('rep_customers', change.doc.id);
+repCustomers = repCustomers.filter(item => item.id !== change.doc.id);
 hasChanges = true;
 }
 } catch (docError) { console.warn('repCustomers doc error', docError); }
@@ -1389,7 +1424,7 @@ flashLivePulse();
 }
 recordSuccessfulConnection();
 } catch (error) {
-console.error('repCustomers snapshot error', error);
+console.error('repCustomers snapshot error', _safeErr(error));
 }
 };
 const repCustomersUnsub = repCustomersQuery.onSnapshot(async (snapshot) => {
@@ -1399,7 +1434,6 @@ await _handleRepCustomersSnapshot(snapshot);
 updateSignalUI('error');
 scheduleListenerReconnect();
 });
-
 let salesCustomersQuery = userRef.collection('sales_customers');
 const lastSalesCustomersSync = await DeltaSync.getLastSyncFirestoreTimestamp('sales_customers');
 if (lastSalesCustomersSync) {
@@ -1415,11 +1449,13 @@ for (const change of snapshot.docChanges()) {
 try {
 const docData = { id: change.doc.id, ...change.doc.data() };
 if (change.type === 'added' || change.type === 'modified') {
-salesCustomers = updateArray(salesCustomers, docData, 'sales customer');
+deletedRecordIds.delete(change.doc.id);
+salesCustomers = updateArray(salesCustomers, docData, 'sales_customers');
 hasChanges = true;
 } else if (change.type === 'removed') {
-salesCustomers = salesCustomers.filter(item => item.id !== change.doc.id);
 deletedRecordIds.add(change.doc.id);
+DeltaSync.markDownloaded('sales_customers', change.doc.id);
+salesCustomers = salesCustomers.filter(item => item.id !== change.doc.id);
 hasChanges = true;
 }
 } catch (docError) { console.warn('salesCustomers doc error', docError); }
@@ -1432,7 +1468,7 @@ flashLivePulse();
 }
 recordSuccessfulConnection();
 } catch (error) {
-console.error('salesCustomers snapshot error', error);
+console.error('salesCustomers snapshot error', _safeErr(error));
 }
 };
 const salesCustomersUnsub = salesCustomersQuery.onSnapshot(async (snapshot) => {
@@ -1460,11 +1496,13 @@ for (const change of changes) {
 try {
 const docData = { id: change.doc.id, ...change.doc.data() };
 if (change.type === 'added' || change.type === 'modified') {
-paymentTransactions = updateArray(paymentTransactions, docData, 'transaction');
+deletedRecordIds.delete(change.doc.id);
+paymentTransactions = updateArray(paymentTransactions, docData, 'transactions');
 hasChanges = true;
 } else if (change.type === 'removed') {
-paymentTransactions = paymentTransactions.filter(item => item.id !== change.doc.id);
 deletedRecordIds.add(change.doc.id);
+DeltaSync.markDownloaded('transactions', change.doc.id);
+paymentTransactions = paymentTransactions.filter(item => item.id !== change.doc.id);
 hasChanges = true;
 }
 } catch (docError) {
@@ -1480,7 +1518,7 @@ flashLivePulse();
 }
 recordSuccessfulConnection();
 } catch (error) {
-console.error('Failed to save data locally.', error);
+console.error('Failed to save data locally.', _safeErr(error));
 showToast('Failed to save data locally.', 'error');
 }
 };
@@ -1506,11 +1544,13 @@ for (const change of snapshot.docChanges()) {
 try {
 const docData = { id: change.doc.id, ...change.doc.data() };
 if (change.type === 'added' || change.type === 'modified') {
-paymentEntities = updateArray(paymentEntities, docData, 'entity');
+deletedRecordIds.delete(change.doc.id);
+paymentEntities = updateArray(paymentEntities, docData, 'entities');
 hasChanges = true;
 } else if (change.type === 'removed') {
-paymentEntities = paymentEntities.filter(item => item.id !== change.doc.id);
 deletedRecordIds.add(change.doc.id);
+DeltaSync.markDownloaded('entities', change.doc.id);
+paymentEntities = paymentEntities.filter(item => item.id !== change.doc.id);
 hasChanges = true;
 }
 } catch (docError) { console.warn('entities doc error', docError); }
@@ -1525,7 +1565,7 @@ flashLivePulse();
 }
 recordSuccessfulConnection();
 } catch (error) {
-console.error('entities snapshot error', error);
+console.error('entities snapshot error', _safeErr(error));
 }
 };
 const entitiesUnsub = entitiesQuery.onSnapshot(async (snapshot) => {
@@ -1550,11 +1590,13 @@ for (const change of snapshot.docChanges()) {
 try {
 const docData = { id: change.doc.id, ...change.doc.data() };
 if (change.type === 'added' || change.type === 'modified') {
-factoryInventoryData = updateArray(factoryInventoryData, docData, 'inventory item');
+deletedRecordIds.delete(change.doc.id);
+factoryInventoryData = updateArray(factoryInventoryData, docData, 'inventory');
 hasChanges = true;
 } else if (change.type === 'removed') {
-factoryInventoryData = factoryInventoryData.filter(item => item.id !== change.doc.id);
 deletedRecordIds.add(change.doc.id);
+DeltaSync.markDownloaded('inventory', change.doc.id);
+factoryInventoryData = factoryInventoryData.filter(item => item.id !== change.doc.id);
 hasChanges = true;
 }
 } catch (docError) { console.warn('inventory doc error', docError); }
@@ -1568,7 +1610,7 @@ flashLivePulse();
 }
 recordSuccessfulConnection();
 } catch (error) {
-console.error('inventory snapshot error', error);
+console.error('inventory snapshot error', _safeErr(error));
 }
 };
 const inventoryUnsub = inventoryQuery.onSnapshot(async (snapshot) => {
@@ -1594,11 +1636,13 @@ for (const change of snapshot.docChanges()) {
 try {
 const docData = { id: change.doc.id, ...change.doc.data() };
 if (change.type === 'added' || change.type === 'modified') {
-factoryProductionHistory = updateArray(factoryProductionHistory, docData, 'factory history');
+deletedRecordIds.delete(change.doc.id);
+factoryProductionHistory = updateArray(factoryProductionHistory, docData, 'factory_history');
 hasChanges = true;
 } else if (change.type === 'removed') {
-factoryProductionHistory = factoryProductionHistory.filter(item => item.id !== change.doc.id);
 deletedRecordIds.add(change.doc.id);
+DeltaSync.markDownloaded('factory_history', change.doc.id);
+factoryProductionHistory = factoryProductionHistory.filter(item => item.id !== change.doc.id);
 hasChanges = true;
 }
 } catch (docError) { console.warn('factoryHistory doc error', docError); }
@@ -1612,7 +1656,7 @@ flashLivePulse();
 }
 recordSuccessfulConnection();
 } catch (error) {
-console.error('factoryHistory snapshot error', error);
+console.error('factoryHistory snapshot error', _safeErr(error));
 }
 };
 const factoryHistoryUnsub = factoryHistoryQuery.onSnapshot(async (snapshot) => {
@@ -1638,11 +1682,13 @@ for (const change of snapshot.docChanges()) {
 try {
 const docData = { id: change.doc.id, ...change.doc.data() };
 if (change.type === 'added' || change.type === 'modified') {
-stockReturns = updateArray(stockReturns, docData, 'return');
+deletedRecordIds.delete(change.doc.id);
+stockReturns = updateArray(stockReturns, docData, 'returns');
 hasChanges = true;
 } else if (change.type === 'removed') {
-stockReturns = stockReturns.filter(item => item.id !== change.doc.id);
 deletedRecordIds.add(change.doc.id);
+DeltaSync.markDownloaded('returns', change.doc.id);
+stockReturns = stockReturns.filter(item => item.id !== change.doc.id);
 hasChanges = true;
 }
 } catch (docError) { console.warn('returns doc error', docError); }
@@ -1656,7 +1702,7 @@ flashLivePulse();
 }
 recordSuccessfulConnection();
 } catch (error) {
-console.error('returns snapshot error', error);
+console.error('returns snapshot error', _safeErr(error));
 }
 };
 const returnsUnsub = returnsQuery.onSnapshot(async (snapshot) => {
@@ -1682,11 +1728,13 @@ for (const change of snapshot.docChanges()) {
 try {
 const docData = { id: change.doc.id, ...change.doc.data() };
 if (change.type === 'added' || change.type === 'modified') {
-expenseRecords = updateArray(expenseRecords, docData, 'expense');
+deletedRecordIds.delete(change.doc.id);
+expenseRecords = updateArray(expenseRecords, docData, 'expenses');
 hasExpenseChanges = true;
 } else if (change.type === 'removed') {
-expenseRecords = expenseRecords.filter(item => item.id !== change.doc.id);
 deletedRecordIds.add(change.doc.id);
+DeltaSync.markDownloaded('expenses', change.doc.id);
+expenseRecords = expenseRecords.filter(item => item.id !== change.doc.id);
 hasExpenseChanges = true;
 }
 } catch (docError) { console.warn('expenses doc error', docError); }
@@ -1700,7 +1748,7 @@ flashLivePulse();
 }
 recordSuccessfulConnection();
 } catch (error) {
-console.error('expenses snapshot error', error);
+console.error('expenses snapshot error', _safeErr(error));
 }
 };
 const expensesUnsub = expensesQuery.onSnapshot(async (snapshot) => {
@@ -1728,11 +1776,13 @@ for (const change of changes) {
 try {
 const docData = { id: change.doc.id, ...change.doc.data() };
 if (change.type === 'added' || change.type === 'modified') {
-salesHistory = updateArray(salesHistory, docData, 'calc history');
+deletedRecordIds.delete(change.doc.id);
+salesHistory = updateArray(salesHistory, docData, 'calculator_history');
 hasChanges = true;
 } else if (change.type === 'removed') {
-salesHistory = salesHistory.filter(item => item.id !== change.doc.id);
 deletedRecordIds.add(change.doc.id);
+DeltaSync.markDownloaded('calculator_history', change.doc.id);
+salesHistory = salesHistory.filter(item => item.id !== change.doc.id);
 hasChanges = true;
 }
 } catch (docError) {
@@ -1748,7 +1798,7 @@ flashLivePulse();
 }
 recordSuccessfulConnection();
 } catch (error) {
-console.error('Failed to save data locally.', error);
+console.error('Failed to save data locally.', _safeErr(error));
 showToast('Failed to save data locally.', 'error');
 }
 };
@@ -1811,7 +1861,7 @@ emitSyncUpdate({ settings: cloudSettings });
 flashLivePulse();
 recordSuccessfulConnection();
 } catch (error) {
-console.error('Failed to save data locally.', error);
+console.error('Failed to save data locally.', _safeErr(error));
 showToast('Failed to save data locally.', 'error');
 }
 };
@@ -1868,7 +1918,7 @@ refreshFactorySettingsOverlay();
 } else {
 }
 } catch (error) {
-console.error('Failed to save data locally.', error);
+console.error('Failed to save data locally.', _safeErr(error));
 showToast('Failed to save data locally.', 'error');
 }
 }
@@ -1952,7 +2002,7 @@ emitSyncUpdate({ factorySettings: cloudFactorySettings });
 flashLivePulse();
 recordSuccessfulConnection();
 } catch (error) {
-console.error('Failed to save data locally.', error);
+console.error('Failed to save data locally.', _safeErr(error));
 showToast('Failed to save data locally.', 'error');
 }
 };
@@ -1983,7 +2033,7 @@ flashLivePulse();
 }
 recordSuccessfulConnection();
 } catch (error) {
-console.error('Failed to save data locally.', error);
+console.error('Failed to save data locally.', _safeErr(error));
 showToast('Failed to save data locally.', 'error');
 }
 };
@@ -1994,6 +2044,23 @@ await _handleExpenseCategoriesSnapshot(doc);
 updateSignalUI('error');
 scheduleListenerReconnect();
 });
+function _dedupDeletionRecords(arr) {
+  if (!Array.isArray(arr)) return [];
+  const seen = new Map();
+  arr.forEach(r => {
+    if (!r) return;
+    const key = String(r.id || r.recordId || '');
+    if (!key) return;
+    const existing = seen.get(key);
+    if (!existing
+        || (!existing.displayName && r.displayName)
+        || (!existing.snapshot && r.snapshot)
+        || (r.syncedToCloud && !existing.syncedToCloud)) {
+      seen.set(key, r);
+    }
+  });
+  return Array.from(seen.values());
+}
 const _handleDeletionsSnapshot = async (snapshot) => {
 try {
 if (snapshot.metadata.hasPendingWrites) return;
@@ -2007,14 +2074,27 @@ try {
 const docData = { id: change.doc.id, ...change.doc.data() };
 if (change.type === 'added' || change.type === 'modified') {
 if (docData.recordId || docData.id) {
-deletedRecordIds.add(docData.recordId || docData.id);
+const _rid = docData.recordId || docData.id;
+const _recoveredSet = typeof _recoveredThisSession !== 'undefined' ? _recoveredThisSession : null;
+if (_recoveredSet && (_recoveredSet.has(_rid) || _recoveredSet.has(docData.id))) {
+hasChanges = false;
+continue;
 }
+deletedRecordIds.add(_rid);
+}
+const _docSid = String(docData.id || doc.id);
+const _docRid = String(docData.recordId || docData.id || doc.id);
 const normalizedDoc = {
 ...docData,
+id: _docSid,
+recordId: _docRid,
 syncedToCloud: true,
 deletedAt: docData.deletedAt?.toMillis ? docData.deletedAt.toMillis() : (typeof docData.deletedAt === 'number' ? docData.deletedAt : Date.now())
 };
-const existingIndex = deletionRecords.findIndex(item => item.id === docData.id);
+const existingIndex = deletionRecords.findIndex(item =>
+  String(item.id) === _docSid || String(item.recordId) === _docSid ||
+  String(item.id) === _docRid || String(item.recordId) === _docRid
+);
 if (existingIndex === -1) {
 deletionRecords.push(normalizedDoc);
 } else {
@@ -2027,13 +2107,13 @@ await idb.set('mfg_pro_pkr', db);
 } else if ((docData.recordType === 'sale' || docData.recordType === 'sales') && docData.recordId) {
 customerSales = customerSales.filter(item => item.id !== docData.recordId);
 await idb.set('customer_sales', customerSales);
-} else if (docData.recordType === 'expense' && docData.recordId) {
+} else if ((docData.recordType === 'expenses' || docData.recordType === 'expense') && docData.recordId) {
 expenseRecords = expenseRecords.filter(item => item.id !== docData.recordId);
 await idb.set('expenses', expenseRecords);
-} else if (docData.recordType === 'transaction' && docData.recordId) {
+} else if ((docData.recordType === 'transactions' || docData.recordType === 'transaction') && docData.recordId) {
 paymentTransactions = paymentTransactions.filter(item => item.id !== docData.recordId);
 await idb.set('payment_transactions', paymentTransactions);
-} else if (docData.recordType === 'rep_sale' && docData.recordId) {
+} else if ((docData.recordType === 'rep_sales' || docData.recordType === 'rep_sale') && docData.recordId) {
 repSales = repSales.filter(item => item.id !== docData.recordId);
 await idb.set('rep_sales', repSales);
 } else if (docData.recordType === 'rep_customers' && docData.recordId) {
@@ -2060,7 +2140,11 @@ console.warn('Failed to apply deletion to collection', collectionError);
 }
 hasChanges = true;
 } else if (change.type === 'removed') {
-deletionRecords = deletionRecords.filter(item => item.id !== change.doc.id);
+const _removedRecordId = change.doc.data()?.recordId || change.doc.id;
+deletionRecords = deletionRecords.filter(item => item.id !== change.doc.id && item.id !== _removedRecordId);
+deletedRecordIds.delete(_removedRecordId);
+deletedRecordIds.delete(change.doc.id);
+try { await idb.set('deleted_records', Array.from(deletedRecordIds)); } catch(_e) {}
 hasChanges = true;
 }
 } catch (docError) {
@@ -2068,13 +2152,14 @@ console.warn('Failed to save data locally.', docError);
 }
 }
 if (hasChanges) {
+deletionRecords = _dedupDeletionRecords(deletionRecords);
 await idb.set('deletion_records', deletionRecords);
 emitSyncUpdate({ deletion_records: deletionRecords });
 flashLivePulse();
 recordSuccessfulConnection();
 }
 } catch (error) {
-console.error('Failed to save data locally.', error);
+console.error('Failed to save data locally.', _safeErr(error));
 showToast('Failed to save data locally.', 'error');
 }
 };
@@ -2145,7 +2230,7 @@ registerDevice().catch(err => {
 });
 }
 } catch (error) {
-console.error('Device registration failed.', error);
+console.error('Device registration failed.', _safeErr(error));
 showToast('Device registration failed.', 'error');
 updateSignalUI('offline');
 scheduleListenerReconnect();
@@ -2187,6 +2272,13 @@ document.addEventListener('visibilitychange', window._fbVisibilityHandler);
 } catch (e) {
 console.warn('Failed to pull data from cloud.', e);
 }
+}
+function _toMs(v) {
+if (!v) return 0;
+if (typeof v === 'number') return v;
+if (typeof v.toMillis === 'function') return v.toMillis();
+if (typeof v === 'object' && v.seconds) return v.seconds * 1000 + Math.round((v.nanoseconds || 0) / 1e6);
+return new Date(v).getTime() || 0;
 }
 function mergeDatasets(localArray, cloudArray) {
 if (!Array.isArray(localArray)) localArray = [];
@@ -2238,15 +2330,15 @@ if (localItem.paymentStatus === 'paid' && cloudItem.paymentStatus !== 'paid') {
 mergedMap.set(localItem.id, localItem);
 return;
 }
-const localTime = localItem.timestamp || new Date(localItem.date).getTime() || 0;
-const cloudTime = cloudItem.timestamp || new Date(cloudItem.date).getTime() || 0;
+const localTime = _toMs(localItem.updatedAt || localItem.timestamp) || new Date(localItem.date).getTime() || 0;
+const cloudTime = _toMs(cloudItem.updatedAt || cloudItem.timestamp) || new Date(cloudItem.date).getTime() || 0;
 if (localTime >= cloudTime) {
 mergedMap.set(localItem.id, localItem);
 }
 });
 return Array.from(mergedMap.values());
 }
-function sanitizeForFirestore(obj, depth = 0) {
+function sanitizeForFirestore(obj, depth = 0, seen = new WeakSet()) {
 if (depth > 20) {
 return null;
 }
@@ -2255,6 +2347,10 @@ return null;
 }
 if (obj instanceof Date) {
 return obj.toISOString();
+}
+if (typeof obj === 'object') {
+if (seen.has(obj)) return '[Circular]';
+seen.add(obj);
 }
 if (typeof obj !== 'object') {
 if (typeof obj === 'number') {
@@ -2278,7 +2374,7 @@ const sanitizedArray = [];
 for (let i = 0; i < obj.length; i++) {
 const item = obj[i];
 if (typeof item === 'function') continue;
-const sanitized = sanitizeForFirestore(item, depth + 1);
+const sanitized = sanitizeForFirestore(item, depth + 1, seen);
 if (sanitized !== null && sanitized !== undefined) {
 sanitizedArray.push(sanitized);
 }
@@ -2329,7 +2425,7 @@ sanitized[cleanKey] = new Date().toISOString();
 }
 continue;
 }
-const sanitizedValue = sanitizeForFirestore(value, depth + 1);
+const sanitizedValue = sanitizeForFirestore(value, depth + 1, seen);
 if (sanitizedValue !== null && sanitizedValue !== undefined) {
 if (typeof sanitizedValue === 'object' && !Array.isArray(sanitizedValue)) {
 const isFactorySettings = cleanKey === 'default_formulas' ||
@@ -2354,48 +2450,79 @@ return {};
 }
 return sanitized;
 }
-function mergeArraysByTimestamp(localArray, cloudArray) {
+async function _commitMergedBatch(userRef, collectionName, mergedRecords, deleteFilter) {
+const OPS_PER_BATCH = 400;
+let batchesTotal = 0;
+let batchesFailed = 0;
+let firstError = null;
+try {
+  const existingSnapshot = await userRef.collection(collectionName).get();
+  const deleteDocs = existingSnapshot.docs.filter(doc => {
+    const d = doc.data(); return deleteFilter ? deleteFilter(d) : !d.isMerged;
+  });
+  const writeDocs = mergedRecords.map(record => {
+    const sanitized = sanitizeForFirestore(record);
+    sanitized.updatedAt = record.updatedAt;
+    sanitized.createdAt = record.createdAt;
+    sanitized.timestamp = record.timestamp;
+    return { ref: userRef.collection(collectionName).doc(record.id), data: sanitized };
+  });
+  const allOps = [
+    ...deleteDocs.map(d => ({ type: 'delete', ref: d.ref })),
+    ...writeDocs.map(w => ({ type: 'set', ref: w.ref, data: w.data }))
+  ];
+  for (let i = 0; i < allOps.length; i += OPS_PER_BATCH) {
+    batchesTotal++;
+    const batch = firebaseDB.batch();
+    allOps.slice(i, i + OPS_PER_BATCH).forEach(op => {
+      if (op.type === 'delete') batch.delete(op.ref);
+      else batch.set(op.ref, op.data);
+    });
+    try {
+      await batch.commit();
+    } catch (batchErr) {
+      batchesFailed++;
+      if (!firstError) firstError = batchErr;
+      console.error(`_commitMergedBatch [${collectionName}] batch ${batchesTotal} failed:`, _safeErr(batchErr));
+      throw batchErr; 
+    }
+  }
+} catch (outerErr) {
+  console.error(`_commitMergedBatch [${collectionName}] snapshot read failed:`, _safeErr(outerErr));
+  return { ok: false, batchesTotal, batchesFailed: batchesTotal || 1, error: outerErr };
+}
+const ok = batchesFailed === 0;
+return { ok, batchesTotal, batchesFailed, error: firstError || null };
+}
+function mergeArrays(localArray, cloudArray) {
 const merged = [...localArray];
-
-const mergedIndexMap = new Map(merged.map((item, idx) => [item.id, idx]));
 const localIds = new Set(localArray.map(item => item.id));
 let downloadedCount = 0;
-let updatedCount = 0;
 let fixedCount = 0;
-const getComparableTimestamp = (item) => {
-const ts = item.updatedAt !== undefined ? item.updatedAt
-         : item.timestamp !== undefined ? item.timestamp
-         : item.createdAt;
-if (!ts) return 0;
-if (ts && typeof ts.toMillis === 'function') return ts.toMillis();
-if (ts && typeof ts.seconds === 'number') return ts.seconds * 1000;
-if (ts instanceof Date) return ts.getTime();
-if (typeof ts === 'number') return ts;
-if (typeof ts === 'string') return new Date(ts).getTime();
-return 0;
-};
 for (let cloudItem of cloudArray) {
 if (!cloudItem.id || cloudItem.id === '_placeholder_' || cloudItem._placeholder) continue;
 if (!validateUUID(cloudItem.id)) {
 cloudItem = ensureRecordIntegrity(cloudItem, false, true);
 fixedCount++;
 }
-const cloudTimestamp = getComparableTimestamp(cloudItem);
 if (!localIds.has(cloudItem.id)) {
 cloudItem = ensureRecordIntegrity(cloudItem, false, true);
-
-mergedIndexMap.set(cloudItem.id, merged.length);
+localIds.add(cloudItem.id);
 merged.push(cloudItem);
 downloadedCount++;
 } else {
-
-const index = mergedIndexMap.get(cloudItem.id);
-const localItem = merged[index];
-const localTimestamp = getComparableTimestamp(localItem);
-if (cloudTimestamp > localTimestamp) {
-cloudItem = ensureRecordIntegrity(cloudItem, false, true);
-merged[index] = cloudItem;
-updatedCount++;
+const idx = merged.findIndex(r => r.id === cloudItem.id);
+const localRecord = merged[idx];
+const localTs = _toMs(localRecord?.updatedAt || localRecord?.timestamp);
+const cloudTs  = _toMs(cloudItem.updatedAt   || cloudItem.timestamp);
+// UUID v2 is the authoritative conflict resolver:
+// timestamp (ms) -> sequence -> deviceShard; falls back to field timestamps for non-v2
+const cloudWins = (typeof compareRecordVersions === 'function')
+  ? compareRecordVersions(cloudItem, localRecord) > 0
+  : cloudTs > localTs || (cloudTs === localTs && cloudTs > 0);
+if (cloudWins) {
+  merged[idx] = ensureRecordIntegrity(cloudItem, false, true);
+  downloadedCount++;
 }
 }
 }
@@ -2406,7 +2533,7 @@ fixedCount++;
 }
 return item;
 });
-if (downloadedCount > 0 || updatedCount > 0 || fixedCount > 0) {
+if (downloadedCount > 0 || fixedCount > 0) {
 }
 return validatedMerged;
 }
@@ -2436,7 +2563,6 @@ btn.innerHTML = 'Syncing...';
 if (!silent) {
 showToast("Syncing....", "info");
 }
-(async () => {
 try {
 const userRef = firebaseDB.collection('users').doc(currentUser.uid);
 const currentAppMode = appMode || 'admin';
@@ -2444,9 +2570,9 @@ const isRepMode = currentAppMode === 'rep';
 const getAccessibleCollections = () => {
 return {
 download: ['production', 'sales', 'calculator_history', 'rep_sales', 'rep_customers',
-'transactions', 'entities', 'inventory', 'factory_history', 'returns', 'expenses'],
+'sales_customers', 'transactions', 'entities', 'inventory', 'factory_history', 'returns', 'expenses'],
 upload: ['production', 'sales', 'calculator_history', 'rep_sales', 'rep_customers',
-'transactions', 'entities', 'inventory', 'factory_history', 'returns', 'expenses'],
+'sales_customers', 'transactions', 'entities', 'inventory', 'factory_history', 'returns', 'expenses'],
 settings: ['settings', 'factorySettings', 'expenseCategories']
 };
 };
@@ -2511,7 +2637,6 @@ initialized: true
 if (!silent) {
 showToast('Your account is ready!', 'success');
 }
-isSyncing = false;
 if (!silent && btn) {
 btn.innerHTML = originalText;
 }
@@ -2627,18 +2752,77 @@ expenseCategories = expenseCategoriesData.categories;
 await idb.set('expense_categories', expenseCategories);
 }
 }
-db = mergeArraysByTimestamp(db || [], cloudData.mfg_pro_pkr || []);
-customerSales = mergeArraysByTimestamp(customerSales || [], cloudData.customer_sales || []);
-salesHistory = mergeArraysByTimestamp(salesHistory || [], cloudData.noman_history || []);
-repSales = mergeArraysByTimestamp(repSales || [], cloudData.rep_sales || []);
-repCustomers = mergeArraysByTimestamp(repCustomers || [], cloudData.rep_customers || []);
-salesCustomers = mergeArraysByTimestamp(salesCustomers || [], cloudData.sales_customers || []);
-paymentTransactions = mergeArraysByTimestamp(paymentTransactions || [], cloudData.payment_transactions || []);
-paymentEntities = mergeArraysByTimestamp(paymentEntities || [], cloudData.payment_entities || []);
-factoryInventoryData = mergeArraysByTimestamp(factoryInventoryData || [], cloudData.factory_inventory_data || []);
-factoryProductionHistory = mergeArraysByTimestamp(factoryProductionHistory || [], cloudData.factory_production_history || []);
-stockReturns = mergeArraysByTimestamp(stockReturns || [], cloudData.stock_returns || []);
-expenseRecords = mergeArraysByTimestamp(expenseRecords || [], cloudData.expenses || []);
+try {
+  const deletionsSnap = await userRef.collection('deletions').get();
+  const threeMonthsAgo = Date.now() - APP_CONFIG.TOMBSTONE_EXPIRY_MS;
+  const cloudDels = deletionsSnap.docs
+    .filter(d => d.id !== '_placeholder_' && !d.data()._placeholder)
+    .map(d => {
+      const data = d.data();
+      return {
+        id: String(d.id),
+        recordId: String(d.id),
+        recordType: data.recordType || data.collection || 'unknown',
+        collection: data.collection || data.recordType || 'unknown',
+        deletedAt: data.deletedAt?.toMillis ? data.deletedAt.toMillis() : (data.deletedAt || Date.now()),
+        syncedToCloud: true
+      };
+    })
+    .filter(r => r.deletedAt > threeMonthsAgo);
+  let localDels = await idb.get('deletion_records') || [];
+  if (!Array.isArray(localDels)) localDels = [];
+  const mergedDels = [...localDels];
+  cloudDels.forEach(cd => {
+    const _cdSid = String(cd.id);
+    const _cdRid = String(cd.recordId || cd.id);
+    const _dup = mergedDels.find(ld =>
+      String(ld.id) === _cdSid || String(ld.recordId) === _cdSid ||
+      String(ld.id) === _cdRid || String(ld.recordId) === _cdRid
+    );
+    if (!_dup) mergedDels.push(cd);
+  });
+  const validDels = mergedDels.filter(r => r.deletedAt > threeMonthsAgo);
+  const _recoveredSet = typeof _recoveredThisSession !== 'undefined' ? _recoveredThisSession : null;
+  const safeDels = _recoveredSet
+    ? validDels.filter(r => !_recoveredSet.has(String(r.id)) && !_recoveredSet.has(String(r.recordId)))
+    : validDels;
+  const _dedupedDels = _dedupDeletionRecords(safeDels);
+  await idb.set('deletion_records', _dedupedDels);
+  deletedRecordIds.clear();
+  _dedupedDels.forEach(r => deletedRecordIds.add(r.id));
+  await idb.set('deleted_records', Array.from(deletedRecordIds));
+  trackFirestoreRead(deletionsSnap.docs.length);
+} catch (_delErr) {
+  console.warn('[Sync] Failed to refresh deletions in performOneClickSync:', _delErr);
+}
+db = mergeArrays(db || [], cloudData.mfg_pro_pkr || []);
+customerSales = mergeArrays(customerSales || [], cloudData.customer_sales || []);
+salesHistory = mergeArrays(salesHistory || [], cloudData.noman_history || []);
+repSales = mergeArrays(repSales || [], cloudData.rep_sales || []);
+repCustomers = mergeArrays(repCustomers || [], cloudData.rep_customers || []);
+salesCustomers = mergeArrays(salesCustomers || [], cloudData.sales_customers || []);
+paymentTransactions = mergeArrays(paymentTransactions || [], cloudData.payment_transactions || []);
+paymentEntities = mergeArrays(paymentEntities || [], cloudData.payment_entities || []);
+factoryInventoryData = mergeArrays(factoryInventoryData || [], cloudData.factory_inventory_data || []);
+factoryProductionHistory = mergeArrays(factoryProductionHistory || [], cloudData.factory_production_history || []);
+stockReturns = mergeArrays(stockReturns || [], cloudData.stock_returns || []);
+expenseRecords = mergeArrays(expenseRecords || [], cloudData.expenses || []);
+const _bulkMarkDownloaded = (collection, arr) => {
+  if (!Array.isArray(arr)) return;
+  arr.forEach(item => { if (item && item.id) DeltaSync.markDownloaded(collection, item.id); });
+};
+_bulkMarkDownloaded('production', cloudData.mfg_pro_pkr);
+_bulkMarkDownloaded('sales', cloudData.customer_sales);
+_bulkMarkDownloaded('calculator_history', cloudData.noman_history);
+_bulkMarkDownloaded('rep_sales', cloudData.rep_sales);
+_bulkMarkDownloaded('rep_customers', cloudData.rep_customers);
+_bulkMarkDownloaded('sales_customers', cloudData.sales_customers);
+_bulkMarkDownloaded('transactions', cloudData.payment_transactions);
+_bulkMarkDownloaded('entities', cloudData.payment_entities);
+_bulkMarkDownloaded('inventory', cloudData.factory_inventory_data);
+_bulkMarkDownloaded('factory_history', cloudData.factory_production_history);
+_bulkMarkDownloaded('returns', cloudData.stock_returns);
+_bulkMarkDownloaded('expenses', cloudData.expenses);
 const _notDeleted = item => !deletedRecordIds.has(item.id);
 db = db.filter(_notDeleted);
 customerSales = customerSales.filter(_notDeleted);
@@ -2684,10 +2868,6 @@ lastChecked: Date.now(),
 initialized: true,
 restoredItems: totalCloudChanges
 });
-['production','sales','calculator_history','transactions','entities',
-'inventory','factory_history','returns','expenses','rep_sales',
-'rep_customers','sales_customers','deletions'
-].reduce((p, c) => p.then(() => DeltaSync.setLastSyncTimestamp(c)), Promise.resolve());
 }
 }
 if (userType === 'existing') {
@@ -2707,10 +2887,9 @@ if (typeof validateAllDataOnStartup === 'function') {
 await validateAllDataOnStartup();
 }
 } catch (error) {
-console.error('Data validation encountered an error:', error);
+console.error('Data validation encountered an error:', _safeErr(error));
 }
 }, 2000);
-isSyncing = false;
 if (!silent && btn) {
 btn.innerHTML = originalText;
 }
@@ -2729,6 +2908,7 @@ return batches[batches.length - 1];
 const isRealRecord = (item) => item && item.id && !item._placeholder && item.id !== '_placeholder_';
 const collections = {
 'production': db.filter(isRealRecord), 'sales': customerSales.filter(isRealRecord), 'rep_sales': repSales.filter(isRealRecord), 'rep_customers': repCustomers.filter(isRealRecord),
+'sales_customers': salesCustomers.filter(isRealRecord),
 'calculator_history': salesHistory.filter(isRealRecord), 'inventory': factoryInventoryData.filter(isRealRecord),
 'factory_history': factoryProductionHistory.filter(isRealRecord), 'entities': paymentEntities.filter(isRealRecord),
 'transactions': paymentTransactions.filter(isRealRecord), 'expenses': expenseRecords.filter(isRealRecord), 'returns': stockReturns.filter(isRealRecord)
@@ -2742,6 +2922,7 @@ const collectionNameMap = {
 'calculator_history': 'calculator_history',
 'rep_sales': 'rep_sales',
 'rep_customers': 'rep_customers',
+'sales_customers': 'sales_customers',
 'inventory': 'inventory',
 'factory_history': 'factory_history',
 'entities': 'entities',
@@ -2763,6 +2944,7 @@ let uploadedCount = 0;
 for (let i = 0; i < changedItems.length; i++) {
 const item = changedItems[i];
 if (item && item.id) {
+if (DeltaSync.wasUploaded(deltaName, item.id)) continue;
 try {
 const docId = String(item.id);
 const currentBatch = getCurrentBatch();
@@ -2782,6 +2964,7 @@ operationCount++;
 uploadedCount++;
 totalItemsToWrite++;
 trackFirestoreWrite(1);
+DeltaSync.markUploaded(deltaName, item.id);
 if (i > 0 && i % 50 === 0) {
 }
 } catch (itemError) {
@@ -2880,7 +3063,6 @@ if (typeof refreshAllDisplays === 'function') {
 refreshAllDisplays();
 }
 }, 100);
-isSyncing = false;
 if (!silent && btn) {
 btn.innerHTML = originalText;
 }
@@ -2951,7 +3133,7 @@ if (typeof validateAllDataOnStartup === 'function') {
 await validateAllDataOnStartup();
 }
 } catch (error) {
-console.error('Data validation encountered an error.', error);
+console.error('Data validation encountered an error.', _safeErr(error));
 showToast('Data validation encountered an error.', 'error');
 }
 }, 2000);
@@ -2964,7 +3146,6 @@ btn.innerHTML = originalText;
 }
 _flushSyncLockQueue().catch(err => console.warn('[SyncLock] Flush error', err));
 }
-})();
 }
 async function pushDataToCloud(silent = false) {
 if (!firebaseDB || !currentUser) {
@@ -2979,6 +3160,7 @@ let btn = null;
 let originalText = '';
 const pushTimeout = setTimeout(() => {
 isSyncing = false;
+_flushSyncLockQueue().catch(err => console.warn('[SyncLock] Flush error (timeout)', err));
 if (!silent) {
 showToast(" Upload timeout - Please try again", "warning");
 if (btn) {
@@ -2986,7 +3168,7 @@ btn.innerText = originalText;
 btn.disabled = false;
 }
 }
-}, 300000);
+}, APP_CONFIG.HEARTBEAT_INTERVAL_MS);
 try {
 if (!silent) {
 const menuBtn = document.querySelector('#dataMenuOverlay .btn-main');
@@ -3131,7 +3313,6 @@ console.warn('Failed to write batch item to Firestore', itemError);
 }
 }
 }
-// deltaName will be stamped after successful commit (see below)
 DeltaSync.clearDirty(deltaName);
 }
 }
@@ -3150,7 +3331,7 @@ batch.set(deletionsRef, {
 id: String(deletionRecord.id),
 deletedAt: firebase.firestore.Timestamp.fromMillis(deletedAtMs),
 collection: deletionRecord.collection || 'unknown',
-expiresAt: firebase.firestore.Timestamp.fromMillis(deletedAtMs + (90 * 24 * 60 * 60 * 1000))
+expiresAt: firebase.firestore.Timestamp.fromMillis(deletedAtMs + APP_CONFIG.TOMBSTONE_EXPIRY_MS)
 });
 operationCount++;
 if (deletionRecord.collection && deletionRecord.collection !== 'unknown') {
@@ -3258,7 +3439,7 @@ last_synced: now
 sanitizedFactorySettings = sanitizeForFirestore(factorySettingsPayload);
 }
 } catch (fetchErr) {
-console.error('Firebase operation failed.', fetchErr);
+console.error('Firebase operation failed.', _safeErr(fetchErr));
 showToast('Firebase operation failed.', 'error');
 }
 }
@@ -3298,19 +3479,17 @@ const settingsBatch = getCurrentBatch();
 settingsBatch.set(settingsRef, sanitizedSettings, { merge: true });
 operationCount++;
 batches.push(currentBatch);
-await idb.set('last_synced', now);
 try {
-// Commit batches one at a time with event-loop yields — keeps UI smooth
 for (let _bi = 0; _bi < batches.length; _bi++) {
 await batches[_bi].commit();
-await new Promise(r => setTimeout(r, 0)); // yield to browser
+await new Promise(r => setTimeout(r, 0)); 
 }
-// Stamp sync timestamps AFTER all batches committed successfully
+await idb.set('last_synced', now);
 for (const _col of Object.keys(collections)) {
 await DeltaSync.setLastSyncTimestamp(_col);
 }
 } catch (batchError) {
-console.error('Failed to save data locally.', batchError);
+console.error('Failed to save data locally.', _safeErr(batchError));
 showToast('Failed to save data locally.', 'error');
 if (batchError.message && (batchError.message.includes('indexOf') || batchError.message.includes('is not a function'))) {
 }
@@ -3343,6 +3522,7 @@ if (btn) {
 btn.innerText = originalText || 'Backup to Cloud';
 btn.disabled = false;
 }
+_flushSyncLockQueue().catch(err => console.warn('[SyncLock] Flush error', err));
 }
 }
 async function pullDataFromCloud(silent = false, forceDownload = false) {
@@ -3401,10 +3581,6 @@ userRef.collection('factorySettings').doc('config').get(),
 userRef.collection('expenseCategories').doc('categories').get(),
 userRef.collection('deletions').get()
 ]);
-for (const collection of ['production', 'sales', 'calculator_history', 'rep_sales', 'rep_customers', 'transactions',
-'entities', 'inventory', 'factory_history', 'returns', 'expenses', 'sales_customers']) {
-await DeltaSync.setLastSyncTimestamp(collection);
-}
 trackFirestoreRead(12);
 trackFirestoreRead(3);
 const hasData = productionSnap.docs.length > 0 || salesSnap.docs.length > 0 ||
@@ -3413,7 +3589,6 @@ entitiesSnap.docs.length > 0 ||
 settingsSnap.exists || factorySettingsSnap.exists;
 if (!hasData) {
 if (!silent) showToast('Cloud is empty. Nothing to download.', 'info');
-isSyncing = false;
 return;
 }
 const cloudProduction = productionSnap.docs.filter(doc => doc.id !== '_placeholder_' && !doc.data()._placeholder).map(doc => ({ id: doc.id, ...doc.data() }));
@@ -3440,15 +3615,24 @@ syncedToCloud: true
 let localDeletionRecords = await idb.get('deletion_records', []);
 const allDeletions = [...localDeletionRecords];
 cloudDeletions.forEach(cloudDel => {
-if (!allDeletions.find(d => d.id === cloudDel.id)) {
-allDeletions.push(cloudDel);
-}
+const _cSid = String(cloudDel.id);
+const _cRid = String(cloudDel.recordId || cloudDel.id);
+const _cDup = allDeletions.find(d =>
+  String(d.id) === _cSid || String(d.recordId) === _cSid ||
+  String(d.id) === _cRid || String(d.recordId) === _cRid
+);
+if (!_cDup) allDeletions.push(cloudDel);
 });
-const threeMonthsAgo = Date.now() - (90 * 24 * 60 * 60 * 1000);
+const threeMonthsAgo = Date.now() - APP_CONFIG.TOMBSTONE_EXPIRY_MS;
 const validDeletions = allDeletions.filter(record => record.deletedAt > threeMonthsAgo);
-await idb.set('deletion_records', validDeletions);
+const _rSet = typeof _recoveredThisSession !== 'undefined' ? _recoveredThisSession : null;
+const safeDeletions = _rSet
+  ? validDeletions.filter(r => !_rSet.has(String(r.id)) && !_rSet.has(String(r.recordId)))
+  : validDeletions;
+const _dedupedSafeDels = _dedupDeletionRecords(safeDeletions);
+await idb.set('deletion_records', _dedupedSafeDels);
 deletedRecordIds.clear();
-validDeletions.forEach(record => deletedRecordIds.add(record.id));
+_dedupedSafeDels.forEach(record => deletedRecordIds.add(record.id));
 await idb.set('deleted_records', Array.from(deletedRecordIds));
 const filterDeletedItems = (items) => items.filter(item => !deletedRecordIds.has(item.id));
 const filteredCloudProduction = filterDeletedItems(cloudProduction);
@@ -3463,18 +3647,18 @@ const filteredCloudFactoryHistory = filterDeletedItems(cloudFactoryHistory);
 const filteredCloudReturns = filterDeletedItems(cloudReturns);
 const filteredCloudExpenses = filterDeletedItems(cloudExpenses);
 const filteredCloudSalesCustomers = filterDeletedItems(cloudSalesCustomers);
-db = mergeArraysByTimestamp(db || [], filteredCloudProduction);
-customerSales = mergeArraysByTimestamp(customerSales || [], filteredCloudSales);
-salesHistory = mergeArraysByTimestamp(salesHistory || [], filteredCloudCalcHistory);
-repSales = mergeArraysByTimestamp(repSales || [], filteredCloudRepSales);
-repCustomers = mergeArraysByTimestamp(repCustomers || [], filteredCloudRepCustomers);
-paymentTransactions = mergeArraysByTimestamp(paymentTransactions || [], filteredCloudTransactions);
-paymentEntities = mergeArraysByTimestamp(paymentEntities || [], filteredCloudEntities);
-factoryInventoryData = mergeArraysByTimestamp(factoryInventoryData || [], filteredCloudInventory);
-factoryProductionHistory = mergeArraysByTimestamp(factoryProductionHistory || [], filteredCloudFactoryHistory);
-stockReturns = mergeArraysByTimestamp(stockReturns || [], filteredCloudReturns);
-expenseRecords = mergeArraysByTimestamp(expenseRecords || [], filteredCloudExpenses);
-salesCustomers = mergeArraysByTimestamp(salesCustomers || [], filteredCloudSalesCustomers);
+db = mergeArrays(db || [], filteredCloudProduction);
+customerSales = mergeArrays(customerSales || [], filteredCloudSales);
+salesHistory = mergeArrays(salesHistory || [], filteredCloudCalcHistory);
+repSales = mergeArrays(repSales || [], filteredCloudRepSales);
+repCustomers = mergeArrays(repCustomers || [], filteredCloudRepCustomers);
+paymentTransactions = mergeArrays(paymentTransactions || [], filteredCloudTransactions);
+paymentEntities = mergeArrays(paymentEntities || [], filteredCloudEntities);
+factoryInventoryData = mergeArrays(factoryInventoryData || [], filteredCloudInventory);
+factoryProductionHistory = mergeArrays(factoryProductionHistory || [], filteredCloudFactoryHistory);
+stockReturns = mergeArrays(stockReturns || [], filteredCloudReturns);
+expenseRecords = mergeArrays(expenseRecords || [], filteredCloudExpenses);
+salesCustomers = mergeArrays(salesCustomers || [], filteredCloudSalesCustomers);
 if (factorySettingsSnap.exists) {
 const cloudFactorySettings = factorySettingsSnap.data();
 if (cloudFactorySettings.default_formulas && typeof cloudFactorySettings.default_formulas === 'object') {
@@ -3606,7 +3790,6 @@ salesHistory = salesHistory.filter(item => !deletedRecordIds.has(item.id));
 paymentTransactions = paymentTransactions.filter(item => !deletedRecordIds.has(item.id));
 paymentEntities = paymentEntities.filter(item => !deletedRecordIds.has(item.id));
 factoryInventoryData = factoryInventoryData.filter(item => !deletedRecordIds.has(item.id));
-hasChanges = true;
 factoryProductionHistory = factoryProductionHistory.filter(item => !deletedRecordIds.has(item.id));
 stockReturns = stockReturns.filter(item => !deletedRecordIds.has(item.id));
 expenseRecords = expenseRecords.filter(item => !deletedRecordIds.has(item.id));
@@ -3671,6 +3854,10 @@ await idb.setBatch(saveEntries);
 } else {
 await Promise.all(saveEntries.map(([key, value]) => idb.set(key, value)));
 }
+for (const collection of ['production', 'sales', 'calculator_history', 'rep_sales', 'rep_customers',
+'transactions', 'entities', 'inventory', 'factory_history', 'returns', 'expenses', 'sales_customers']) {
+await DeltaSync.setLastSyncTimestamp(collection);
+}
 if (!silent) showToast(' Data Restored Successfully', 'success');
 updateUnitsAvailableIndicator();
 await refreshAllDisplays();
@@ -3678,6 +3865,7 @@ await refreshAllDisplays();
 if (!silent) showToast('Restore failed. Using local data.', 'error');
 } finally {
 isSyncing = false;
+_flushSyncLockQueue().catch(err => console.warn('[SyncLock] Flush error', err));
 }
 }
 let seamlessBackupTimer = null;
@@ -3956,14 +4144,24 @@ const _signInCred = await firebaseAuth.signInWithEmailAndPassword(email, passwor
 await OfflineAuth.saveCredentials(email, password);
 idb.setUserPrefix(_signInCred.user.uid);
 await IDBCrypto.setSessionKey(email, password);
-try { sessionStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
+await IDBCrypto.sessionSet('login', {
+  uid: _signInCred.user.uid,
+  email,
+  displayName: _signInCred.user.displayName || '',
+  lastLogin: new Date().toISOString()
+});
+try { localStorage.setItem('_gznd_session_active', '1'); sessionStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
 LoginRateLimiter.recordSuccess();
 messageDiv.textContent = 'Success! Loading...';
 messageDiv.style.color = 'var(--accent-emerald)';
+try {
+  if (typeof loadAllData === 'function') await loadAllData();
+} catch(e) { console.warn('Post-login data reload failed:', e); }
 setTimeout(() => {
 hideAuthOverlay();
+if (typeof refreshAllDisplays === 'function') refreshAllDisplays();
 if(typeof performOneClickSync === 'function') performOneClickSync();
-}, 1000);
+}, 300);
 } else {
 const hasStored = await OfflineAuth.hasStoredCredentials();
 if (!hasStored) {
@@ -3985,20 +4183,24 @@ offlineMode: true
 };
 idb.setUserPrefix(currentUser.uid);
 await IDBCrypto.setSessionKey(email, password);
-try { sessionStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
+try { localStorage.setItem('_gznd_session_active', '1'); sessionStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
 LoginRateLimiter.recordSuccess();
 messageDiv.textContent = '✓ Offline Login Successful';
 messageDiv.style.color = 'var(--accent-emerald)';
+try {
+  if (typeof loadAllData === 'function') await loadAllData();
+} catch(e) { console.warn('Post-offline-login data reload failed:', e); }
 setTimeout(() => {
 if (currentUser) {
 const overlay = document.getElementById('auth-overlay');
 if (overlay) { overlay.style.display = 'none'; }
 document.body.style.overflow = '';
+if (typeof refreshAllDisplays === 'function') refreshAllDisplays();
 }
-}, 1000);
+}, 300);
 }
 } catch (error) {
-console.error('Sign in failed.', error);
+console.error('Sign in failed.', _safeErr(error));
 let errorMessage = 'Sign in failed. ';
 if (error.code === 'auth/invalid-email') errorMessage = 'Invalid email address.';
 else if (error.code === 'auth/user-disabled') errorMessage = 'Account disabled.';
@@ -4010,10 +4212,11 @@ if (valid) {
 currentUser = { id: email.replace(/[^a-zA-Z0-9]/g, '_'), uid: email.replace(/[^a-zA-Z0-9]/g, '_'), email, offlineMode: true };
 idb.setUserPrefix(currentUser.uid);
 await IDBCrypto.setSessionKey(email, password);
-try { sessionStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
+try { localStorage.setItem('_gznd_session_active', '1'); sessionStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
+try { if (typeof loadAllData === 'function') await loadAllData(); } catch(e) {}
 messageDiv.textContent = '✓ Offline Login (Network unavailable)';
 messageDiv.style.color = 'var(--accent-emerald)';
-setTimeout(() => { if(currentUser){const o=document.getElementById('auth-overlay');if(o)o.style.display='none';document.body.style.overflow='';} }, 1000);
+setTimeout(() => { if(currentUser){const o=document.getElementById('auth-overlay');if(o)o.style.display='none';document.body.style.overflow='';if(typeof refreshAllDisplays==='function')refreshAllDisplays();} }, 300);
 return;
 }
 errorMessage = 'Network error. If you have logged in before, ensure correct credentials for offline access.';
@@ -4061,7 +4264,7 @@ displayName: userCredential.user.displayName
 await OfflineAuth.saveCredentials(email, password);
 idb.setUserPrefix(currentUser.uid);
 await IDBCrypto.setSessionKey(email, password);
-try { sessionStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
+try { localStorage.setItem('_gznd_session_active', '1'); sessionStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
 if (database) {
 await firebaseDB.collection('users').doc(currentUser.uid).set({
 email: email,
@@ -4080,7 +4283,7 @@ messageDiv.textContent = 'Internet required to create a new account.';
 messageDiv.style.color = 'var(--danger)';
 }
 } catch (error) {
-console.error('Sign up failed.', error);
+console.error('Sign up failed.', _safeErr(error));
 let errorMessage = 'Sign up failed. ';
 if (error.code === 'auth/email-already-in-use') errorMessage += 'Email already registered.';
 else if (error.code === 'auth/invalid-email') errorMessage += 'Invalid email address.';
@@ -4112,14 +4315,14 @@ await auth.signOut();
 currentUser = null;
 IDBCrypto.clearSessionKey();
 idb.clearUserPrefix();
-try { sessionStorage.removeItem('_gznd_session_active'); } catch(e) {}
+try { sessionStorage.removeItem('_gznd_session_active'); localStorage.removeItem('_gznd_session_active'); localStorage.removeItem('_gznd_session_key_backup'); localStorage.removeItem('persistentLogin'); } catch(e) {}
 DeltaSync.clearAllTimestamps().catch(e => console.warn("[DeltaSync] clearAllTimestamps on signout:", e));
 showToast(' Signed out successfully', 'success');
 } else {
 currentUser = null;
 IDBCrypto.clearSessionKey();
 idb.clearUserPrefix();
-try { sessionStorage.removeItem('_gznd_session_active'); } catch(e) {}
+try { sessionStorage.removeItem('_gznd_session_active'); localStorage.removeItem('_gznd_session_active'); localStorage.removeItem('_gznd_session_key_backup'); localStorage.removeItem('persistentLogin'); } catch(e) {}
 DeltaSync.clearAllTimestamps().catch(e => console.warn("[DeltaSync] clearAllTimestamps on signout:", e));
 showToast(' Signed out', 'success');
 }

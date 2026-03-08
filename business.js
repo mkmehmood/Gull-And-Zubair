@@ -1,3 +1,17 @@
+/**
+ * Sanitizes an error value before passing to console.error or throwing.
+ * Prevents loglevel/_formatMsg from crashing on null or bare DOMException objects.
+ */
+function _safeErr(err) {
+  if (err === null || err === undefined) return new Error('Unknown error (null)');
+  if (err instanceof Error) return err;
+  if (err instanceof DOMException) return new Error('[DOMException] ' + err.name + ': ' + err.message);
+  if (typeof err === 'object') {
+    try { return new Error(JSON.stringify(err)); } catch (_) { return new Error(String(err)); }
+  }
+  return new Error(String(err));
+}
+
 function escapeHtml(str) {
   if (str === null || str === undefined) return '';
   return String(str)
@@ -8,12 +22,7 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;');
 }
 const esc = escapeHtml; 
-
-// ─── Cross-browser file download helper ──────────────────────────────────────
-// Works on: Chrome, Firefox, Safari (iOS 13+), Edge, Samsung Internet, Opera.
-// Falls back to msSaveBlob for legacy Edge / IE 11.
 function _triggerFileDownload(blob, filename) {
-  // Legacy IE / old Edge
   if (typeof window.navigator.msSaveBlob === 'function') {
     window.navigator.msSaveBlob(blob, filename);
     return;
@@ -23,26 +32,19 @@ function _triggerFileDownload(blob, filename) {
   a.href = objectUrl;
   a.download = filename;
   a.style.display = 'none';
-  // iOS Safari requires the element to be in the DOM *and* needs a real click
   document.body.appendChild(a);
-  // Use a tiny delay so iOS Safari's download sheet can register the gesture
   setTimeout(() => {
     a.click();
-    // Clean up after the browser has had time to initiate the download
     setTimeout(() => {
       document.body.removeChild(a);
       URL.revokeObjectURL(objectUrl);
     }, 300);
   }, 0);
 }
-
-// ─── FileReader → Promise helper (with ArrayBuffer fallback for older browsers)
 function _readFileAsArrayBuffer(file) {
-  // Modern browsers support file.arrayBuffer() natively
   if (typeof file.arrayBuffer === 'function') {
     return file.arrayBuffer();
   }
-  // Fallback: FileReader
   return new Promise((resolve, reject) => {
     const fr = new FileReader();
     fr.onload  = () => resolve(fr.result);
@@ -50,8 +52,6 @@ function _readFileAsArrayBuffer(file) {
     fr.readAsArrayBuffer(file);
   });
 }
-
-// ─── FileReader → text Promise helper ────────────────────────────────────────
 function _readFileAsText(file) {
   if (typeof file.text === 'function') return file.text();
   return new Promise((resolve, reject) => {
@@ -61,36 +61,10 @@ function _readFileAsText(file) {
     fr.readAsText(file);
   });
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// GNDVirtualScroll — lightweight virtual-scroll engine for tbody tables
-//
-// How it works:
-//   • The scroll container (overflow-y: auto) gets an IntersectionObserver
-//     so the engine wakes up only when the container is visible.
-//   • A "phantom" spacer <tr> at the top pads the visible area upward,
-//     and another at the bottom extends the total scroll height downward.
-//     Both use a single cell with the correct pixel height so the table
-//     layout stays intact.
-//   • On every scroll event (throttled to one rAF per frame) the engine
-//     computes the first and last visible row index from scrollTop and
-//     renders only those rows plus an overScan buffer on each side.
-//   • Row height is measured once from the first rendered row, then cached.
-//     A ResizeObserver on the container triggers a remeasure if the
-//     container width changes (responsive layout / orientation change).
-//   • GNDVirtualScroll.mount() is idempotent: calling it again with new
-//     data tears down the previous instance and mounts fresh.
-//   • GNDVirtualScroll.destroy(id) cleanly disconnects observers.
-// ═══════════════════════════════════════════════════════════════════════════
 const GNDVirtualScroll = (() => {
-  const OVERSCAN   = 5;   // extra rows to render beyond viewport edges
-  const FALLBACK_H = 44;  // px — used before first measurement
-
-  // Map of scrollerId → instance state
+  const OVERSCAN   = 5;   
+  const FALLBACK_H = 44;  
   const _instances = new Map();
-
-  // ── helpers ──────────────────────────────────────────────────────────────
-
   function _makeSpacerRow(colSpan) {
     const tr = document.createElement('tr');
     tr.setAttribute('aria-hidden', 'true');
@@ -101,18 +75,14 @@ const GNDVirtualScroll = (() => {
     tr.style.cssText = 'height:0px; pointer-events:none;';
     return tr;
   }
-
   function _setSpacerHeight(spacerRow, px) {
     const h = Math.max(0, Math.round(px)) + 'px';
     spacerRow.style.height = h;
     spacerRow.firstElementChild.style.height = h;
   }
-
   function _colSpanOf(tbody) {
-    // Peek at the first non-spacer row to count columns, fall back to 5.
     const first = Array.from(tbody.rows).find(r => !r.hasAttribute('aria-hidden'));
     if (first) return first.cells.length || 5;
-    // Try the thead for column count
     const table = tbody.closest('table');
     if (table) {
       const hRow = table.querySelector('thead tr');
@@ -120,39 +90,25 @@ const GNDVirtualScroll = (() => {
     }
     return 5;
   }
-
-  // ── core render ───────────────────────────────────────────────────────────
-
   function _render(inst) {
     const { scroller, tbody, items, buildRow, topSpacer, botSpacer } = inst;
     const rowH    = inst.rowHeight || FALLBACK_H;
     const scrollH = scroller.clientHeight;
     const scrollT = scroller.scrollTop;
-
     if (items.length === 0) return;
-
     const firstVis = Math.max(0, Math.floor(scrollT / rowH) - OVERSCAN);
     const lastVis  = Math.min(items.length - 1,
                        Math.ceil((scrollT + scrollH) / rowH) + OVERSCAN);
-
-    // Skip re-render if the window hasn't changed
     if (inst.renderedFirst === firstVis && inst.renderedLast === lastVis) return;
     inst.renderedFirst = firstVis;
     inst.renderedLast  = lastVis;
-
-    // Build the visible fragment
     const frag = document.createDocumentFragment();
     for (let i = firstVis; i <= lastVis; i++) {
       const el = buildRow(items[i], i);
       if (el) frag.appendChild(el);
     }
-
-    // Spacer heights
     _setSpacerHeight(topSpacer, firstVis * rowH);
     _setSpacerHeight(botSpacer, (items.length - 1 - lastVis) * rowH);
-
-    // Swap in visible rows between the two spacers (leave spacers in place)
-    // Remove all children except spacers, then re-insert
     let child = topSpacer.nextSibling;
     while (child && child !== botSpacer) {
       const next = child.nextSibling;
@@ -161,26 +117,16 @@ const GNDVirtualScroll = (() => {
     }
     tbody.insertBefore(frag, botSpacer);
   }
-
-  // ── row-height measurement ────────────────────────────────────────────────
-
   function _measureRowHeight(inst) {
-    // Pull the first non-spacer TR, read its offsetHeight
     const first = Array.from(inst.tbody.rows).find(r => !r.hasAttribute('aria-hidden'));
     if (first && first.offsetHeight > 0) {
       inst.rowHeight = first.offsetHeight;
     }
   }
-
-  // ── public API ────────────────────────────────────────────────────────────
-
   function mount(scrollerId, items, buildRow, tbody) {
-    // Tear down any existing instance on this scroller
     destroy(scrollerId);
-
     const scroller = document.getElementById(scrollerId);
     if (!scroller) {
-      // Fallback: render all rows directly (no virtual scroll possible without container)
       tbody.innerHTML = '';
       const frag = document.createDocumentFragment();
       items.forEach((item, i) => {
@@ -190,21 +136,16 @@ const GNDVirtualScroll = (() => {
       tbody.appendChild(frag);
       return;
     }
-
     if (!items || items.length === 0) {
       tbody.innerHTML = '';
       return;
     }
-
     const colSpan  = _colSpanOf(tbody) || 5;
     const topSpacer = _makeSpacerRow(colSpan);
     const botSpacer = _makeSpacerRow(colSpan);
-
-    // Seed tbody with spacers + do an initial render
     tbody.innerHTML = '';
     tbody.appendChild(topSpacer);
     tbody.appendChild(botSpacer);
-
     const inst = {
       scroller, tbody, items, buildRow,
       topSpacer, botSpacer,
@@ -216,18 +157,12 @@ const GNDVirtualScroll = (() => {
       resizeObs: null,
       intersectionObs: null,
     };
-
     _instances.set(scrollerId, inst);
-
-    // Initial render pass
     _render(inst);
-    // Measure real row height after first paint
     requestAnimationFrame(() => {
       _measureRowHeight(inst);
       _render(inst);
     });
-
-    // Scroll handler (throttled to one rAF per frame)
     inst.scrollHandler = () => {
       if (inst.rafId) return;
       inst.rafId = requestAnimationFrame(() => {
@@ -236,19 +171,15 @@ const GNDVirtualScroll = (() => {
       });
     };
     scroller.addEventListener('scroll', inst.scrollHandler, { passive: true });
-
-    // ResizeObserver — remeasure and re-render on container resize
     if (typeof ResizeObserver !== 'undefined') {
       inst.resizeObs = new ResizeObserver(() => {
-        inst.renderedFirst = -1; // force re-render
+        inst.renderedFirst = -1; 
         inst.renderedLast  = -1;
         _measureRowHeight(inst);
         _render(inst);
       });
       inst.resizeObs.observe(scroller);
     }
-
-    // IntersectionObserver — only render when tab/section becomes visible
     if (typeof IntersectionObserver !== 'undefined') {
       inst.intersectionObs = new IntersectionObserver(entries => {
         if (entries[0].isIntersecting) {
@@ -261,7 +192,6 @@ const GNDVirtualScroll = (() => {
       inst.intersectionObs.observe(scroller);
     }
   }
-
   function destroy(scrollerId) {
     const inst = _instances.get(scrollerId);
     if (!inst) return;
@@ -271,34 +201,23 @@ const GNDVirtualScroll = (() => {
     if (inst.intersectionObs) inst.intersectionObs.disconnect();
     _instances.delete(scrollerId);
   }
-
   return { mount, destroy };
 })();
-
-
 if (window.trustedTypes && window.trustedTypes.createPolicy) {
   window._gndHTMLPolicy = window.trustedTypes.createPolicy('gnd-html-policy', {
-
-    
-
     createHTML: (s) => s
   });
-
-  
-
   window.setHTML = (el, html) => {
     el.innerHTML = window._gndHTMLPolicy.createHTML(html);
   };
 } else {
-
   window.setHTML = (el, html) => { el.innerHTML = html; };
 }
-
 const CryptoEngine = (() => {
 const MAGIC = new Uint8Array([0x47,0x5A,0x4E,0x44,0x5F,0x45,0x4E,0x43,0x5F,0x56,0x32]);
 const SALT_LEN = 32;
 const IV_LEN = 12;
-const PBKDF2_ITERS = 310000;
+const PBKDF2_ITERS = 100000;
 async function deriveKey(email, password, salt) {
 const enc = new TextEncoder();
 const keyMaterial = await crypto.subtle.importKey(
@@ -431,11 +350,6 @@ tx.onerror = e => rej(e.target.error);
 });
 }
 };
-let currentUser = null;
-let firebaseDB = null;
-let database = null;
-let auth = null;
-let isSyncing = false;
 async function _checkFirebaseSessionExists() {
 try {
 if ('databases' in indexedDB) {
@@ -450,6 +364,15 @@ if (tokenExists) return true;
 }
 const sessionFlag = sessionStorage.getItem('_gznd_session_active');
 if (sessionFlag === '1') return true;
+try {
+  const lsFlag = localStorage.getItem('_gznd_session_active');
+  if (lsFlag === '1') return true;
+  const persistentLogin = localStorage.getItem('persistentLogin');
+  if (persistentLogin) {
+    const parsed = JSON.parse(persistentLogin);
+    if (parsed && parsed.uid) return true;
+  }
+} catch(e) {}
 return false;
 } catch(e) {
 return false;
@@ -483,21 +406,19 @@ req.onerror = () => resolve(false);
 });
 } catch(e) { return false; }
 }
-
 const IDBCrypto = (() => {
-
   let _sessionKey = null;
   let _keyEmail = null;
   let _db = null;
   let _initPromise = null;
-
-  const PBKDF2_ITERS = 310000;
-
-  
+  let _preWarmPromise = null;
+  const PBKDF2_ITERS = 100000;
   const DB_NAME = 'GZND_SecureStorage';
-  const DB_VERSION = 1;
+  const DB_VERSION = 3; 
   const KEY_STORE = 'encryptedKeys';
   const ENTROPY_STORE = 'deviceEntropy';
+  const SESSION_STORE = 'userSession';     
+  const WRAPKEY_CACHE_STORE = 'wrapKeyCache'; 
   const IDB_KDF_SALT = new Uint8Array([
     0x47,0x5A,0x4E,0x44,0x49,0x44,0x42,0x4B,
     0x45,0x59,0x53,0x41,0x4C,0x54,0x76,0x31,
@@ -507,68 +428,56 @@ const IDBCrypto = (() => {
   const IV_LEN = 12;
   const ENC_PREFIX = 'GZND_ENC_';
   const KEY_VERSION = '3'; 
-
-  
   const LEGACY_LS_KEY = '_gznd_idbk_v2';
   const LEGACY_LS_SECRET = '_gznd_wksec_v2';
   const LEGACY_LS_EMAIL = '_gznd_key_email';
-
   async function _initDB() {
     if (_db) return _db;
     if (_initPromise) return _initPromise;
-
     _initPromise = new Promise((resolve, reject) => {
       const request = indexedDB.open(DB_NAME, DB_VERSION);
-
       request.onerror = () => {
         _initPromise = null;
-        reject(request.error);
+        reject(request.error || new Error("IDB request failed"));
       };
-
       request.onsuccess = () => {
         _db = request.result;
         resolve(_db);
       };
-
       request.onupgradeneeded = (event) => {
         const db = event.target.result;
-
-        
         if (!db.objectStoreNames.contains(KEY_STORE)) {
           const keyStore = db.createObjectStore(KEY_STORE, { keyPath: 'id' });
           keyStore.createIndex('email', 'email', { unique: false });
           keyStore.createIndex('version', 'version', { unique: false });
         }
-
-        
         if (!db.objectStoreNames.contains(ENTROPY_STORE)) {
           db.createObjectStore(ENTROPY_STORE, { keyPath: 'id' });
         }
+        if (!db.objectStoreNames.contains(SESSION_STORE)) {
+          db.createObjectStore(SESSION_STORE, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(WRAPKEY_CACHE_STORE)) {
+          db.createObjectStore(WRAPKEY_CACHE_STORE, { keyPath: 'id' });
+        }
       };
     });
-
     return _initPromise;
   }
-
   async function _getDeviceEntropy() {
     const db = await _initDB();
-
     return new Promise((resolve, reject) => {
       const tx = db.transaction(ENTROPY_STORE, 'readonly');
       const store = tx.objectStore(ENTROPY_STORE);
       const request = store.get('primary');
-
       request.onsuccess = async () => {
         if (request.result) {
-
           const entropyHex = request.result.entropy;
           const entropy = new Uint8Array(entropyHex.match(/.{2}/g).map(h => parseInt(h, 16)));
           resolve(entropy);
         } else {
-
           const newEntropy = crypto.getRandomValues(new Uint8Array(32));
           const entropyHex = Array.from(newEntropy).map(b => b.toString(16).padStart(2, '0')).join('');
-
           try {
             const writeTx = db.transaction(ENTROPY_STORE, 'readwrite');
             const writeStore = writeTx.objectStore(ENTROPY_STORE);
@@ -578,18 +487,73 @@ const IDBCrypto = (() => {
               writeReq.onerror = () => rej(writeReq.error);
             });
           } catch (e) {
-
             console.warn('IDBCrypto: Could not persist device entropy, using memory-only');
           }
-
           resolve(newEntropy);
         }
       };
-
-      request.onerror = () => reject(request.error);
+      request.onerror = () => reject(request.error || new Error("IDB request failed"));
     });
   }
-
+  async function _getCachedWrapKeyBytes(saltHex) {
+    try {
+      const db = await _initDB();
+      const result = await new Promise((res, rej) => {
+        const tx = db.transaction(WRAPKEY_CACHE_STORE, 'readonly');
+        const req = tx.objectStore(WRAPKEY_CACHE_STORE).get('primary');
+        req.onsuccess = () => res(req.result);
+        req.onerror = () => res(null);
+      });
+      if (result && result.saltHex === saltHex && result.keyBytes) return result.keyBytes;
+    } catch (e) {}
+    return null;
+  }
+  async function _setCachedWrapKeyBytes(saltHex, keyBytes) {
+    try {
+      const db = await _initDB();
+      const tx = db.transaction(WRAPKEY_CACHE_STORE, 'readwrite');
+      tx.objectStore(WRAPKEY_CACHE_STORE).put({ id: 'primary', saltHex, keyBytes, ts: Date.now() });
+    } catch (e) {}
+  }
+  async function _idbSessionSet(id, value) {
+    try {
+      const db = await _initDB();
+      await new Promise((res, rej) => {
+        const tx = db.transaction(SESSION_STORE, 'readwrite');
+        const req = tx.objectStore(SESSION_STORE).put({ id, ...value });
+        tx.oncomplete = () => res();
+        tx.onerror = () => rej(tx.error);
+      });
+      if (id === 'active') {
+        try { localStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
+      }
+      if (id === 'login') {
+        try { localStorage.setItem('persistentLogin', JSON.stringify(value)); } catch(e) {}
+      }
+    } catch (e) {}
+  }
+  async function _idbSessionGet(id) {
+    try {
+      const db = await _initDB();
+      return await new Promise((res) => {
+        const tx = db.transaction(SESSION_STORE, 'readonly');
+        const req = tx.objectStore(SESSION_STORE).get(id);
+        req.onsuccess = () => res(req.result || null);
+        req.onerror = () => res(null);
+      });
+    } catch (e) { return null; }
+  }
+  async function _idbSessionDelete(id) {
+    try {
+      const db = await _initDB();
+      await new Promise((res) => {
+        const tx = db.transaction(SESSION_STORE, 'readwrite');
+        tx.objectStore(SESSION_STORE).delete(id);
+        tx.oncomplete = () => res();
+        tx.onerror = () => res();
+      });
+    } catch(e) {}
+  }
   async function deriveSessionKey(email, password) {
     const enc = new TextEncoder();
     const keyMaterial = await crypto.subtle.importKey(
@@ -599,7 +563,6 @@ const IDBCrypto = (() => {
       false, 
       ['deriveKey']
     );
-
     return crypto.subtle.deriveKey(
       { 
         name: 'PBKDF2', 
@@ -613,16 +576,25 @@ const IDBCrypto = (() => {
       ['encrypt', 'decrypt']
     );
   }
-
   async function deriveWrappingKey(wrapSalt) {
+    const saltHex = Array.from(wrapSalt).map(b => b.toString(16).padStart(2, '0')).join('');
+    const cachedBytes = await _getCachedWrapKeyBytes(saltHex);
+    if (cachedBytes) {
+      try {
+        return await crypto.subtle.importKey(
+          'raw',
+          new Uint8Array(cachedBytes),
+          { name: 'AES-KW' },
+          false,
+          ['wrapKey', 'unwrapKey']
+        );
+      } catch (e) {
+      }
+    }
     const deviceEntropy = await _getDeviceEntropy();
-    const enc = new TextEncoder();
-
-    
     const combined = new Uint8Array(deviceEntropy.length + wrapSalt.length);
     combined.set(deviceEntropy, 0);
     combined.set(wrapSalt, deviceEntropy.length);
-
     const keyMaterial = await crypto.subtle.importKey(
       'raw',
       combined,
@@ -630,44 +602,44 @@ const IDBCrypto = (() => {
       false,
       ['deriveKey']
     );
-
-    return crypto.subtle.deriveKey(
+    const wrapKey = await crypto.subtle.deriveKey(
       {
         name: 'PBKDF2',
         salt: IDB_KDF_SALT,
-        iterations: PBKDF2_ITERS, 
+        iterations: PBKDF2_ITERS,
         hash: 'SHA-256'
       },
       keyMaterial,
       { name: 'AES-KW', length: 256 },
-      false,
+      true,                          
       ['wrapKey', 'unwrapKey']
     );
+    try {
+      const rawBuf = await crypto.subtle.exportKey('raw', wrapKey);
+      await _setCachedWrapKeyBytes(saltHex, Array.from(new Uint8Array(rawBuf)));
+      return await crypto.subtle.importKey(
+        'raw',
+        new Uint8Array(rawBuf),
+        { name: 'AES-KW' },
+        false,
+        ['wrapKey', 'unwrapKey']
+      );
+    } catch (e) {
+      return wrapKey;
+    }
   }
-
   async function _persistKey(key, email) {
     try {
       const db = await _initDB();
-
-      
       const wrapSalt = crypto.getRandomValues(new Uint8Array(16));
-
-      
       const wrapKey = await deriveWrappingKey(wrapSalt);
-
-      
       const wrapped = await crypto.subtle.wrapKey('raw', key, wrapKey, 'AES-KW');
       const wrappedBytes = new Uint8Array(wrapped);
-
-      
       const saltHex = Array.from(wrapSalt).map(b => b.toString(16).padStart(2, '0')).join('');
       const keyHex = Array.from(wrappedBytes).map(b => b.toString(16).padStart(2, '0')).join('');
-
-      
       await new Promise((resolve, reject) => {
         const tx = db.transaction(KEY_STORE, 'readwrite');
         const store = tx.objectStore(KEY_STORE);
-
         const request = store.put({
           id: 'primary',
           email: email,
@@ -676,57 +648,36 @@ const IDBCrypto = (() => {
           version: KEY_VERSION,
           createdAt: Date.now()
         });
-
         request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
+        request.onerror = () => reject(request.error || new Error("IDB request failed"));
       });
-
-      
-
       try {
-        sessionStorage.setItem('_gznd_session_key_backup', JSON.stringify({
-          email,
-          salt: saltHex,
-          wrappedKey: keyHex,
-          version: KEY_VERSION
-        }));
-      } catch (e) {
-
-      }
-
+        const keyBackup = { email, salt: saltHex, wrappedKey: keyHex, version: KEY_VERSION, ts: Date.now() };
+        await _idbSessionSet('keyBackup', keyBackup);
+        localStorage.setItem('_gznd_session_key_backup', JSON.stringify(keyBackup));
+        sessionStorage.setItem('_gznd_session_key_backup', JSON.stringify(keyBackup));
+      } catch (e) {}
       _keyEmail = email;
-
-      
       _clearLegacyStorage();
-
     } catch (e) {
-      console.error('IDBCrypto: Failed to persist key:', e);
+      console.error('IDBCrypto: Failed to persist key:', _safeErr(e));
       throw e;
     }
   }
-
   async function _restoreKey() {
     try {
       const db = await _initDB();
-
-      
       const stored = await new Promise((resolve, reject) => {
         const tx = db.transaction(KEY_STORE, 'readonly');
         const store = tx.objectStore(KEY_STORE);
         const request = store.get('primary');
-
         request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
+        request.onerror = () => reject(request.error || new Error("IDB request failed"));
       });
-
       if (stored && stored.salt && stored.wrappedKey) {
         const wrapSalt = new Uint8Array(stored.salt.match(/.{2}/g).map(h => parseInt(h, 16)));
         const wrappedBytes = new Uint8Array(stored.wrappedKey.match(/.{2}/g).map(h => parseInt(h, 16)));
-
-        
         const wrapKey = await deriveWrappingKey(wrapSalt);
-
-        
         const key = await crypto.subtle.unwrapKey(
           'raw',
           wrappedBytes,
@@ -736,21 +687,29 @@ const IDBCrypto = (() => {
           false,
           ['encrypt', 'decrypt']
         );
-
         _keyEmail = stored.email;
         return key;
       }
-
-      
-      const sessionBackup = sessionStorage.getItem('_gznd_session_key_backup');
+      const idbBackup = await _idbSessionGet('keyBackup');
+      if (idbBackup && idbBackup.salt && idbBackup.wrappedKey) {
+        const wrapSalt = new Uint8Array(idbBackup.salt.match(/.{2}/g).map(h => parseInt(h, 16)));
+        const wrappedBytes = new Uint8Array(idbBackup.wrappedKey.match(/.{2}/g).map(h => parseInt(h, 16)));
+        const wrapKey = await deriveWrappingKey(wrapSalt);
+        const key = await crypto.subtle.unwrapKey(
+          'raw', wrappedBytes, wrapKey, 'AES-KW',
+          { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+        );
+        _keyEmail = idbBackup.email;
+        await _persistKey(key, idbBackup.email);
+        return key;
+      }
+      const sessionBackup = sessionStorage.getItem('_gznd_session_key_backup') || localStorage.getItem('_gznd_session_key_backup');
       if (sessionBackup) {
         const backup = JSON.parse(sessionBackup);
         if (backup.salt && backup.wrappedKey) {
           const wrapSalt = new Uint8Array(backup.salt.match(/.{2}/g).map(h => parseInt(h, 16)));
           const wrappedBytes = new Uint8Array(backup.wrappedKey.match(/.{2}/g).map(h => parseInt(h, 16)));
-
           const wrapKey = await deriveWrappingKey(wrapSalt);
-
           const key = await crypto.subtle.unwrapKey(
             'raw',
             wrappedBytes,
@@ -760,50 +719,36 @@ const IDBCrypto = (() => {
             false,
             ['encrypt', 'decrypt']
           );
-
           _keyEmail = backup.email;
-
-          
           await _persistKey(key, backup.email);
-
           return key;
         }
       }
-
-      
       return await _migrateFromLegacy();
-
     } catch (e) {
-      console.error('IDBCrypto: Failed to restore key:', e);
+      console.error('IDBCrypto: Failed to restore key:', _safeErr(e));
       return null;
     }
   }
-
   async function _migrateFromLegacy() {
     try {
       const stored = localStorage.getItem(LEGACY_LS_KEY);
       const wrapSecret = localStorage.getItem(LEGACY_LS_SECRET);
       const email = localStorage.getItem(LEGACY_LS_EMAIL);
-
       if (!stored || !wrapSecret || !email) return null;
-
       const [saltHex, keyHex] = stored.split(':');
       if (!saltHex || !keyHex) return null;
-
       const wrapSalt = new Uint8Array(saltHex.match(/.{2}/g).map(h => parseInt(h, 16)));
       const wrappedBytes = new Uint8Array(keyHex.match(/.{2}/g).map(h => parseInt(h, 16)));
-
       const enc = new TextEncoder();
       const wkMaterial = await crypto.subtle.importKey('raw', enc.encode(wrapSecret), 'PBKDF2', false, ['deriveKey']);
-
       const wrapKey = await crypto.subtle.deriveKey(
-        { name: 'PBKDF2', salt: wrapSalt, iterations: 10000, hash: 'SHA-256' },
+        { name: 'PBKDF2', salt: wrapSalt, iterations: APP_CONFIG.PBKDF2_ITERATIONS_LEGACY, hash: 'SHA-256' }, 
         wkMaterial,
         { name: 'AES-KW', length: 256 },
         false,
         ['unwrapKey']
       );
-
       const key = await crypto.subtle.unwrapKey(
         'raw',
         wrappedBytes,
@@ -813,20 +758,14 @@ const IDBCrypto = (() => {
         false,
         ['encrypt', 'decrypt']
       );
-
-      
       await _persistKey(key, email);
       _keyEmail = email;
-
-      
       return key;
-
     } catch (e) {
-      console.error('IDBCrypto: Legacy migration failed:', e);
+      console.error('IDBCrypto: Legacy migration failed:', _safeErr(e));
       return null;
     }
   }
-
   function _clearLegacyStorage() {
     try {
       localStorage.removeItem(LEGACY_LS_KEY);
@@ -834,163 +773,155 @@ const IDBCrypto = (() => {
       localStorage.removeItem(LEGACY_LS_EMAIL);
       localStorage.removeItem('_gznd_key_version');
     } catch (e) {
-
     }
   }
-
   return {
-
     async initialize() {
       try {
         await _initDB();
         return true;
       } catch (e) {
-        console.error('IDBCrypto: Initialization failed:', e);
+        console.error('IDBCrypto: Initialization failed:', _safeErr(e));
         return false;
       }
     },
-
+    preWarm() {
+      if (!_preWarmPromise) {
+        _preWarmPromise = _restoreKey().then(key => {
+          if (key) { _sessionKey = key; }
+          _preWarmPromise = null;
+          return !!key;
+        }).catch(() => { _preWarmPromise = null; return false; });
+      }
+      return _preWarmPromise;
+    },
     async setSessionKey(email, password) {
       _sessionKey = await deriveSessionKey(email, password);
       await _persistKey(_sessionKey, email);
       _keyEmail = email;
+      await _idbSessionSet('login', {
+        uid: null, 
+        email,
+        lastLogin: new Date().toISOString()
+      });
+      await _idbSessionSet('active', { value: '1', ts: Date.now() });
     },
-
+    async sessionSet(id, value) { return _idbSessionSet(id, value); },
+    async sessionGet(id) { return _idbSessionGet(id); },
+    async sessionDelete(id) { return _idbSessionDelete(id); },
     async restoreSessionKeyFromStorage() {
       if (_sessionKey) return true;
-
-      const key = await _restoreKey();
-      if (key) {
-        _sessionKey = key;
-
-        return true;
+      if (_preWarmPromise) return _preWarmPromise;
+      if (!this._restorePromise) {
+        this._restorePromise = _restoreKey().then(key => {
+          this._restorePromise = null;
+          if (key) { _sessionKey = key; return true; }
+          return false;
+        }).catch(() => { this._restorePromise = null; return false; });
       }
-      return false;
+      return this._restorePromise;
     },
-
     async rederiveKey(email, password) {
       try {
         _sessionKey = await deriveSessionKey(email, password);
         await _persistKey(_sessionKey, email);
         _keyEmail = email;
-
         return true;
       } catch (e) {
-        console.error('IDBCrypto: Failed to re-derive key:', e);
+        console.error('IDBCrypto: Failed to re-derive key:', _safeErr(e));
         return false;
       }
     },
-
     getStoredEmail() {
       return _keyEmail;
     },
-
     clearSessionKey() {
       _sessionKey = null;
       _keyEmail = null;
-
-      
       _initDB().then(db => {
-        const tx = db.transaction([KEY_STORE, ENTROPY_STORE], 'readwrite');
+        const tx = db.transaction([KEY_STORE, ENTROPY_STORE, SESSION_STORE, WRAPKEY_CACHE_STORE], 'readwrite');
         tx.objectStore(KEY_STORE).delete('primary');
         tx.objectStore(ENTROPY_STORE).delete('primary');
+        tx.objectStore(SESSION_STORE).clear();
+        tx.objectStore(WRAPKEY_CACHE_STORE).clear();
       }).catch(() => {});
-
-      
       try {
         sessionStorage.removeItem('_gznd_session_key_backup');
         sessionStorage.removeItem('_gznd_session_active');
+        localStorage.removeItem('_gznd_session_key_backup');
+        localStorage.removeItem('_gznd_session_active');
+        localStorage.removeItem('persistentLogin');
       } catch (e) {}
-
-      
       _clearLegacyStorage();
     },
-
     isReady() {
       return _sessionKey !== null;
     },
-
     async encrypt(plainValue) {
       if (!_sessionKey) {
         console.warn('IDBCrypto: Cannot encrypt - no session key');
         return plainValue;
       }
-
       try {
         const iv = crypto.getRandomValues(new Uint8Array(IV_LEN));
         const plaintext = new TextEncoder().encode(
           typeof plainValue === 'string' ? plainValue : JSON.stringify(plainValue)
         );
-
         const ciphertext = await crypto.subtle.encrypt(
           { name: 'AES-GCM', iv },
           _sessionKey,
           plaintext
         );
-
         const ctBytes = new Uint8Array(ciphertext);
         const combined = new Uint8Array(IV_LEN + ctBytes.length);
         combined.set(iv, 0);
         combined.set(ctBytes, IV_LEN);
-
         let binary = '';
         combined.forEach(b => { binary += String.fromCharCode(b); });
-
         return ENC_PREFIX + btoa(binary);
       } catch (e) {
-        console.error('IDBCrypto: Encryption failed:', e);
+        console.error('IDBCrypto: Encryption failed:', _safeErr(e));
         return plainValue;
       }
     },
-
     async decrypt(encValue) {
       if (!_sessionKey) {
         await this.restoreSessionKeyFromStorage();
       }
-
       if (!_sessionKey) {
         console.warn('IDBCrypto: Cannot decrypt - no session key available');
         return null;
       }
-
       if (typeof encValue !== 'string' || !encValue.startsWith(ENC_PREFIX)) {
         return encValue;
       }
-
       try {
         const b64 = encValue.slice(ENC_PREFIX.length);
         const binary = atob(b64);
         const combined = new Uint8Array(binary.length);
-
         for (let i = 0; i < binary.length; i++) {
           combined[i] = binary.charCodeAt(i);
         }
-
         const iv = combined.slice(0, IV_LEN);
         const ciphertext = combined.slice(IV_LEN);
-
         const plaintext = await crypto.subtle.decrypt(
           { name: 'AES-GCM', iv },
           _sessionKey,
           ciphertext
         );
-
         const decoded = new TextDecoder().decode(plaintext);
-
         try {
           return JSON.parse(decoded);
         } catch (e) {
           return decoded;
         }
       } catch (decErr) {
-        console.error('IDBCrypto: Decryption failed:', decErr);
+        console.error('IDBCrypto: Decryption failed:', _safeErr(decErr));
         return null;
       }
     },
-
     async validateKey() {
       if (!_sessionKey) return false;
-
       try {
         const testValue = 'test_' + Date.now();
         const encrypted = await this.encrypt(testValue);
@@ -1003,7 +934,7 @@ const IDBCrypto = (() => {
     }
   };
 })();
-
+IDBCrypto.preWarm();
 let currentActiveTab = 'prod';
 const USE_IDB_ONLY = true;
 function safeNumber(value, defaultValue = 0) {
@@ -1013,11 +944,26 @@ return (isNaN(num) || !isFinite(num)) ? defaultValue : num;
 function safeToFixed(value, decimals = 2) {
 return safeNumber(value, 0).toFixed(decimals);
 }
-const originalToFixed = Number.prototype.toFixed;
-Number.prototype.toFixed = function(decimals = 2) {
-const num = safeNumber(this, 0);
-return originalToFixed.call(num, decimals);
-};
+function formatIndianCurrency(value) {
+const num = Math.round(safeNumber(value, 0));
+if (isNaN(num)) return '0';
+const isNeg = num < 0;
+const abs = Math.abs(num);
+const s = abs.toString();
+let result;
+if (s.length <= 3) {
+result = s;
+} else {
+const last3 = s.slice(-3);
+const rest = s.slice(0, s.length - 3);
+const restFormatted = rest.replace(/\B(?=(\d{2})+(?!\d))/g, ',');
+result = restFormatted + ',' + last3;
+}
+return isNeg ? '-' + result : result;
+}
+function fmtAmt(value) {
+return formatIndianCurrency(value);
+}
 function safeString(value, defaultValue = '') {
 if (value === null || value === undefined) return defaultValue;
 return String(value);
@@ -1044,6 +990,7 @@ const idb = {
 db: null,
 _initPromise: null,
 _prefix: '',
+_quotaToastShown: false,
 _DEVICE_GLOBAL: new Set(['device_id', 'device_name', 'theme', 'appMode', 'appMode_timestamp', 'repProfile', 'repProfile_timestamp', 'assignedManager', 'assignedUserTabs']),
 setUserPrefix(uid) {
   const newPrefix = uid ? 'u_' + uid + '_' : '';
@@ -1083,7 +1030,7 @@ objectStore.createIndex(IDB_CONFIG.indexes.type, 'metadata.type', { unique: fals
 objectStore.createIndex(IDB_CONFIG.indexes.userId, 'metadata.userId', { unique: false });
 objectStore.createIndex(IDB_CONFIG.indexes.composite, ['metadata.type', 'metadata.timestamp'], { unique: false });
 } catch (e) {
-console.error('An unexpected error occurred.', e);
+console.error('An unexpected error occurred.', _safeErr(e));
 showToast('An unexpected error occurred.', 'error');
 }
 } else if (oldVersion < 2) {
@@ -1102,7 +1049,7 @@ resolve(this.db);
 };
 request.onerror = (e) => {
 this._initPromise = null;
-reject(e.target.error);
+reject(e.target.error || new Error("IDB open failed"));
 };
 request.onblocked = () => {
 };
@@ -1191,8 +1138,26 @@ try { resolve(JSON.parse(rawData)); } catch(e) { resolve(rawData); }
 }
 }
 };
-request.onerror = () => reject(request.error);
+request.onerror = () => reject(request.error || new Error("IDB request failed"));
 });
+},
+_handleWriteError(err, context) {
+  if (err && (err.name === 'QuotaExceededError' || err.name === 'NS_ERROR_DOM_QUOTA_REACHED')) {
+    console.error('IDB: QuotaExceededError on', context, _safeErr(err));
+    if (!this._quotaToastShown) {
+      this._quotaToastShown = true;
+      if (typeof showToast === 'function') {
+        showToast(
+          'Storage full — data could not be saved. Free up device storage and try again.',
+          'error', 8000
+        );
+      }
+      setTimeout(() => { this._quotaToastShown = false; }, 10000);
+    }
+  } else {
+    console.error('IDB: Write error on', context, _safeErr(err));
+  }
+  throw err;
 },
 async set(key, value) {
 await this.init();
@@ -1208,7 +1173,8 @@ value = ensureRecordIntegrity(value);
 }
 const serialized = typeof value === 'string' ? value : JSON.stringify(value);
 const encryptedData = await IDBCrypto.encrypt(serialized);
-return new Promise((resolve, reject) => {
+try {
+return await new Promise((resolve, reject) => {
 const transaction = this.db.transaction(IDB_CONFIG.store, 'readwrite');
 const store = transaction.objectStore(IDB_CONFIG.store);
 const wrapped = this._wrapValue(key, value);
@@ -1219,9 +1185,15 @@ request.onsuccess = () => {
 resolve();
 };
 request.onerror = () => {
-reject(request.error);
+reject(request.error || new Error("IDB request failed"));
+};
+transaction.onerror = () => {
+reject(transaction.error);
 };
 });
+} catch (err) {
+this._handleWriteError(err, key);
+}
 },
 async setBatch(entries) {
 await this.init();
@@ -1245,7 +1217,7 @@ const serialized = typeof value === 'string' ? value : JSON.stringify(value);
 const encryptedData = await IDBCrypto.encrypt(serialized);
 return [key, value, encryptedData];
 } catch (encErr) {
-console.error('IDB: Encryption failed for key:', key, encErr);
+console.error('IDB: Encryption failed for key:', key, _safeErr(encErr));
 return [key, value, typeof value === 'string' ? value : JSON.stringify(value)];
 }
 })
@@ -1254,6 +1226,7 @@ const batches = [];
 for (let i = 0; i < encryptedEntries.length; i += IDB_CONFIG.performance.batchSize) {
 batches.push(encryptedEntries.slice(i, i + IDB_CONFIG.performance.batchSize));
 }
+try {
 for (const batch of batches) {
 await new Promise((resolve, reject) => {
 const transaction = this.db.transaction(IDB_CONFIG.store, 'readwrite');
@@ -1268,45 +1241,63 @@ transaction.oncomplete = () => {
 resolve();
 };
 transaction.onerror = () => reject(transaction.error);
+transaction.onabort = () => reject(transaction.error || new DOMException('Transaction aborted', 'AbortError'));
 });
 }
+} catch (err) {
+this._handleWriteError(err, 'setBatch[' + entries.map(([k]) => k).join(',') + ']');
+}
 },
+DECRYPT_FAILED: Symbol('DECRYPT_FAILED'),
 async getBatch(keys) {
 await this.init();
 const results = new Map();
+if (keys.length === 0) return results;
+await IDBCrypto.restoreSessionKeyFromStorage();
+const rawMap = new Map();
 await new Promise((resolve, reject) => {
 const transaction = this.db.transaction(IDB_CONFIG.store, 'readonly');
 const store = transaction.objectStore(IDB_CONFIG.store);
 let completed = 0;
-if (keys.length === 0) { resolve(); return; }
 keys.forEach(key => {
 const request = store.get(this._k(key));
-request.onsuccess = async () => {
-const rawData = this._unwrapValue(request.result);
-if (rawData !== null && rawData !== undefined) {
+request.onsuccess = () => {
+rawMap.set(key, this._unwrapValue(request.result));
+if (++completed === keys.length) resolve();
+};
+request.onerror = () => { rawMap.set(key, null); if (++completed === keys.length) resolve(); };
+});
+});
+await Promise.all(keys.map(async key => {
+const rawData = rawMap.get(key);
+if (rawData === null || rawData === undefined) { results.set(key, null); return; }
 try {
 const decrypted = await IDBCrypto.decrypt(rawData);
 if (decrypted === null) {
+const wasEncrypted = typeof rawData === 'string' && rawData.startsWith('GZND_ENC_');
+if (wasEncrypted) {
+console.warn('IDB: Decryption returned null for encrypted key in batch:', key);
+results.set(key, idb.DECRYPT_FAILED);
+} else {
 console.warn('IDB: Decryption returned null for key in batch:', key);
 results.set(key, null);
+}
 } else if (typeof decrypted === 'string') {
 try { results.set(key, JSON.parse(decrypted)); } catch(e) { results.set(key, decrypted); }
 } else {
 results.set(key, decrypted);
 }
 } catch(e) {
+const wasEncrypted = typeof rawData === 'string' && rawData.startsWith('GZND_ENC_');
+if (wasEncrypted) {
+console.warn('IDB: Decryption exception for encrypted key in batch:', key, e);
+results.set(key, idb.DECRYPT_FAILED);
+} else {
 console.warn('IDB: Decryption error for key in batch:', key, e);
 try { results.set(key, JSON.parse(rawData)); } catch(e2) { results.set(key, rawData); }
 }
-} else {
-results.set(key, null);
 }
-completed++;
-if (completed === keys.length) resolve();
-};
-request.onerror = () => { completed++; if (completed === keys.length) resolve(); };
-});
-});
+}));
 return results;
 },
 async remove(key) {
@@ -1316,7 +1307,7 @@ const transaction = this.db.transaction(IDB_CONFIG.store, 'readwrite');
 const store = transaction.objectStore(IDB_CONFIG.store);
 const request = store.delete(this._k(key));
 request.onsuccess = () => resolve();
-request.onerror = () => reject(request.error);
+request.onerror = () => reject(request.error || new Error("IDB request failed"));
 });
 },
 async queryByType(type, options = {}) {
@@ -1346,7 +1337,7 @@ cursor.continue();
 resolve(results);
 }
 };
-request.onerror = () => reject(request.error);
+request.onerror = () => reject(request.error || new Error("IDB request failed"));
 } catch (e) {
 resolve([]);
 }
@@ -1379,9 +1370,9 @@ cursor.continue();
 resolve(results);
 }
 };
-request.onerror = () => reject(request.error);
+request.onerror = () => reject(request.error || new Error("IDB request failed"));
 } catch (e) {
-console.error('An unexpected error occurred.', e);
+console.error('An unexpected error occurred.', _safeErr(e));
 showToast('An unexpected error occurred.', 'error');
 this.queryByType(type, options).then(resolve).catch(reject);
 }
@@ -1398,18 +1389,18 @@ const index = store.index(IDB_CONFIG.indexes.type);
 const range = IDBKeyRange.only(options.type);
 const request = index.count(range);
 request.onsuccess = () => resolve(request.result);
-request.onerror = () => reject(request.error);
+request.onerror = () => reject(request.error || new Error("IDB request failed"));
 } catch (e) {
-console.error('An unexpected error occurred.', e);
+console.error('An unexpected error occurred.', _safeErr(e));
 showToast('An unexpected error occurred.', 'error');
 const request = store.count();
 request.onsuccess = () => resolve(request.result);
-request.onerror = () => reject(request.error);
+request.onerror = () => reject(request.error || new Error("IDB request failed"));
 }
 } else {
 const request = store.count();
 request.onsuccess = () => resolve(request.result);
-request.onerror = () => reject(request.error);
+request.onerror = () => reject(request.error || new Error("IDB request failed"));
 }
 });
 }
@@ -1461,6 +1452,7 @@ paymentEntities = ensureArray(batchResults.get('payment_entities'));
 paymentTransactions = ensureArray(batchResults.get('payment_transactions'));
 expenseRecords = ensureArray(batchResults.get('expenses'));
 deletionRecordsArray = ensureArray(batchResults.get('deletion_records'));
+deletionRecords = deletionRecordsArray;
 const deletedRecordsArray = ensureArray(batchResults.get('deleted_records'));
 deletedRecordIds = new Set(deletedRecordsArray);
 const loadedFormulas = batchResults.get('factory_default_formulas');
@@ -1512,13 +1504,45 @@ if (Array.isArray(loadedAssignedUserTabs)) {
 window._assignedUserTabs = loadedAssignedUserTabs;
 window._userRoleAllowedTabs = loadedAssignedUserTabs;
 }
+const CRITICAL_KEYS = [
+  'mfg_pro_pkr', 'customer_sales', 'payment_transactions', 'payment_entities',
+  'noman_history', 'expenses'
+];
+const failedKeys = CRITICAL_KEYS.filter(
+  k => batchResults.get(k) === idb.DECRYPT_FAILED
+);
+if (failedKeys.length > 0) {
+  const keyReady = IDBCrypto.isReady();
+  const reason = keyReady
+    ? 'Decryption failed — data may be corrupted or the encryption key has changed.'
+    : 'Encryption key unavailable — please log in again to restore your data.';
+  console.error(
+    'loadAllData: decryption failure on critical keys:', failedKeys, '| keyReady:', keyReady
+  );
+  const err = new Error(reason);
+  err.code = 'DECRYPT_FAILED';
+  err.failedKeys = failedKeys;
+  throw err;
+}
+if (!IDBCrypto.isReady()) {
+  const criticalEmpty = [db, customerSales, paymentTransactions, paymentEntities]
+    .every(arr => arr.length === 0);
+  if (criticalEmpty) {
+    console.warn('loadAllData: session key not ready and all critical collections empty — possible key loss');
+    if (typeof showToast === 'function') {
+      showToast(
+        'Encryption key unavailable — if you have existing data, please log in again.',
+        'warning', 6000
+      );
+    }
+  }
+}
 }
 const DEVICE_ID_COOKIE = 'gz_did';
 const INSTALL_TOKEN_COOKIE = 'gz_itk';
-const COOKIE_MAX_AGE = 60 * 60 * 24 * 3650; // 10 years
+const COOKIE_MAX_AGE = 60 * 60 * 24 * 3650; 
 const _CACHE_DEVICE_KEY = 'gz_device_anchor';
 const _CACHE_STORE_NAME = 'gz-device-anchor-v1';
-
 function _readCookie(name) {
 try {
 const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
@@ -1533,16 +1557,25 @@ console.warn('_writeCookie failed:', e);
 }
 }
 function _generateUUID() {
-if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-return 'inst_' + crypto.randomUUID().replace(/-/g, '');
+  const buf = new Uint8Array(16);
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    crypto.getRandomValues(buf);
+  } else {
+    let s0 = (Date.now() ^ 0xdeadbeef) >>> 0;
+    let s1 = (Date.now() ^ 0xcafebabe) >>> 0;
+    for (let i = 0; i < 16; i++) {
+      let t = s1 ^ (s1 << 17);
+      s1 = s0;
+      s0 = (s0 ^ (s0 >>> 26)) ^ (t ^ (t ^ (t >>> 7)));
+      buf[i] = s0 & 0xff;
+    }
+  }
+  buf[6] = (buf[6] & 0x0f) | 0x40; 
+  buf[8] = (buf[8] & 0x3f) | 0x80; 
+  const hex = Array.from(buf).map(b => b.toString(16).padStart(2, '0')).join('');
+  const core = `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20,32)}`;
+  return 'inst_' + core.replace(/-/g, '');
 }
-return 'inst_' + 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'.replace(/x/g, () =>
-(Math.random() * 16 | 0).toString(16));
-}
-
-// --- Cache Storage anchor: survives "Clear site data" in many browsers
-// because Cache Storage is keyed per-origin and often not wiped by
-// the standard browser "clear cookies & storage" action when the SW is active.
 async function _readCacheAnchor() {
 try {
 if (!('caches' in window)) return null;
@@ -1558,33 +1591,21 @@ try {
 if (!('caches' in window)) return;
 const cache = await caches.open(_CACHE_STORE_NAME);
 await cache.put(_CACHE_DEVICE_KEY, new Response(value));
-} catch (e) { /* Cache API not available, silently skip */ }
+} catch (e) {  }
 }
-
-// --- sessionStorage mirror: survives page reloads within the same tab session
-// (distinct from localStorage — not cleared by "Clear site data" in some PWA shells)
 function _readSession(key) {
 try { return sessionStorage.getItem(key) || null; } catch (e) { return null; }
 }
 function _writeSession(key, value) {
-try { sessionStorage.setItem(key, value); } catch (e) { /* ignore */ }
+try { sessionStorage.setItem(key, value); } catch (e) {  }
 }
-
-// --- Persist device ID to ALL layers at once
 async function _persistDeviceId(deviceId) {
-// 1. Cookie (10-year max-age)
 _writeCookie(DEVICE_ID_COOKIE, deviceId);
-// 2. localStorage
-try { localStorage.setItem('persistent_device_id', deviceId); } catch (e) { /* ignore */ }
-// 3. sessionStorage (fast same-session recovery)
+try { localStorage.setItem('persistent_device_id', deviceId); } catch (e) {  }
 _writeSession('gz_did_session', deviceId);
-// 4. IndexedDB (unencrypted — device_id is in _DEVICE_GLOBAL)
-try { await idb.set('device_id', deviceId); } catch (e) { /* ignore */ }
-// 5. Cache Storage (most resilient — survives storage clear in PWA context)
+try { await idb.set('device_id', deviceId); } catch (e) {  }
 await _writeCacheAnchor(deviceId);
 }
-
-// --- Query Firestore by hardware fingerprint to recover device ID
 async function _recoverDeviceIdByFingerprint() {
 if (!firebaseDB || !currentUser) return null;
 try {
@@ -1604,8 +1625,6 @@ console.warn('Fingerprint-based device ID recovery failed:', e);
 }
 return null;
 }
-
-// --- Query Firestore by installationToken to recover device ID
 async function _recoverDeviceIdByToken() {
 if (!firebaseDB || !currentUser) return null;
 try {
@@ -1627,62 +1646,36 @@ console.warn('Token-based device ID recovery failed:', e);
 }
 return null;
 }
-
 async function getDeviceId() {
-// ── Layer 1: Cookie (fastest, usually survives unless cookies explicitly cleared)
 let deviceId = _readCookie(DEVICE_ID_COOKIE);
-
-// ── Layer 2: sessionStorage (same-session, even if cookie was blocked)
 if (!deviceId) deviceId = _readSession('gz_did_session');
-
-// ── Layer 3: localStorage
 if (!deviceId) {
-try { deviceId = localStorage.getItem('persistent_device_id') || null; } catch (e) { /* ignore */ }
+try { deviceId = localStorage.getItem('persistent_device_id') || null; } catch (e) {  }
 }
-
-// ── Layer 4: IndexedDB (unencrypted via _DEVICE_GLOBAL)
 if (!deviceId) {
-try { deviceId = await idb.get('device_id'); } catch (e) { /* ignore */ }
+try { deviceId = await idb.get('device_id'); } catch (e) {  }
 }
-
-// ── Layer 5: Cache Storage (survives "Clear site data" in PWA / SW context)
 if (!deviceId) deviceId = await _readCacheAnchor();
-
-// ── Layer 6: Firestore recovery by installationToken
 if (!deviceId) deviceId = await _recoverDeviceIdByToken();
-
-// ── Layer 7: Firestore recovery by hardware fingerprint (most resilient fallback)
-// This works even after a full device wipe of all local storage, because
-// the fingerprint (stableHash) is deterministic from hardware/OS properties.
 if (!deviceId) deviceId = await _recoverDeviceIdByFingerprint();
-
-// ── Layer 8: Generate a brand-new ID (true first install)
 if (!deviceId) deviceId = _generateUUID();
-
-// Persist to all layers so they all stay in sync
 await _persistDeviceId(deviceId);
-
-// Ensure install token exists (mirrors device ID persistence strategy)
 const existingToken = _readCookie(INSTALL_TOKEN_COOKIE) || _readSession('gz_itk_session');
 if (!existingToken) {
 const token = _generateUUID();
 _writeCookie(INSTALL_TOKEN_COOKIE, token);
 _writeSession('gz_itk_session', token);
 } else {
-// Re-write to refresh expiry and session copy
 _writeCookie(INSTALL_TOKEN_COOKIE, existingToken);
 _writeSession('gz_itk_session', existingToken);
 }
-
 return deviceId;
 }
-
-// Call this after successful Firestore auth to keep all layers warm
 async function refreshDeviceIdAnchors() {
 try {
 const deviceId = await getDeviceId();
 await _persistDeviceId(deviceId);
-} catch (e) { /* silent */ }
+} catch (e) {  }
 }
 async function getDeviceFingerprint() {
 const ua = navigator.userAgent;
@@ -1918,7 +1911,7 @@ assignedUserTabs: _isUserRole ? (window._assignedUserTabs || []) : null,
 console.warn('Heartbeat update failed.', error);
 }
 }
-}, 300000);
+}, APP_CONFIG.HEARTBEAT_INTERVAL_MS);
 }
 async function logDeviceActivity(activityType, details = {}) {
 if (!firebaseDB || !currentUser) return;
@@ -1957,77 +1950,442 @@ try {
 await listenForDeviceCommands();
 listenForTeamChanges();
 } catch (error) {
-console.error('Device command listener failed.', error);
+console.error('Device command listener failed.', _safeErr(error));
 showToast('Device command listener failed.', 'error');
 }
 await cleanupOldDeletions();
 }
 window.initializeDeviceListeners = initializeDeviceListeners;
-
-let db = [];
-let salesHistory = [];
-let customerSales = [];
-let repSales = [];
-let repCustomers = [];
-let salesCustomers = [];
-let stockReturns = [];
-let expenseRecords = [];
-let expenseCategories = [];
-let deletedRecordIds = new Set();
-let deletionRecordsArray = [];
-let deletionRecords = deletionRecordsArray;
-let appMode = 'admin';
-let currentRepProfile = 'NORAN SHAH';
-let salesRepsList = ['NORAN SHAH', 'NOMAN SHAH'];
-let userRolesList = [];
-let factoryInventoryData = [];
-let factoryProductionHistory = [];
-let factoryDefaultFormulas = { standard: [], asaan: [] };
-let factoryAdditionalCosts = { standard: 0, asaan: 0 };
-let factorySalePrices = { standard: 0, asaan: 0 };
-let factoryCostAdjustmentFactor = { standard: 1, asaan: 1 };
-let factoryUnitTracking = {
-standard: {
-produced: 0,
-consumed: 0,
-available: 0,
-unitCostHistory: []
-},
-asaan: {
-produced: 0,
-consumed: 0,
-available: 0,
-unitCostHistory: []
-}
+const AppState = Object.seal({
+  currentUser:              null,
+  firebaseDB:               null,
+  database:                 null,
+  auth:                     null,
+  isSyncing:                false,
+  appMode:                  'admin',
+  currentRepProfile:        'NORAN SHAH',
+  salesRepsList:            ['NORAN SHAH', 'NOMAN SHAH'],
+  userRolesList:            [],
+  db:                       [],    
+  salesHistory:             [],
+  customerSales:            [],
+  repSales:                 [],
+  repCustomers:             [],
+  salesCustomers:           [],
+  stockReturns:             [],
+  expenseRecords:           [],
+  expenseCategories:        [],
+  deletedRecordIds:         new Set(),
+  deletionRecordsArray:     [],
+  deletionRecords:          [],    
+  paymentEntities:          [],
+  paymentTransactions:      [],
+  factoryInventoryData:     [],
+  factoryProductionHistory: [],
+  factoryDefaultFormulas:   { standard: [], asaan: [] },
+  factoryAdditionalCosts:   { standard: 0,  asaan: 0  },
+  factorySalePrices:        { standard: 0,  asaan: 0  },
+  factoryCostAdjustmentFactor: { standard: 1, asaan: 1 },
+  factoryUnitTracking: {
+    standard: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] },
+    asaan:    { produced: 0, consumed: 0, available: 0, unitCostHistory: [] }
+  },
+});
+const _VALID_APP_MODES = new Set(['admin','rep','production','factory','userrole']);
+const _AppStateDescriptors = {
+  isSyncing: {
+    get() { return AppState.isSyncing; },
+    set(v) {
+      if (typeof v !== 'boolean') {
+        console.warn('[AppState] isSyncing must be boolean, got:', typeof v, v);
+        return;
+      }
+      AppState.isSyncing = v;
+    }
+  },
+  appMode: {
+    get() { return AppState.appMode; },
+    set(v) {
+      if (!_VALID_APP_MODES.has(v)) {
+        console.warn('[AppState] Invalid appMode value:', v, '— must be one of', [..._VALID_APP_MODES]);
+        return;
+      }
+      AppState.appMode = v;
+    }
+  },
+  currentUser: {
+    get() { return AppState.currentUser; },
+    set(v) {
+      if (v !== null && typeof v !== 'object') {
+        console.warn('[AppState] currentUser must be object or null, got:', typeof v);
+        return;
+      }
+      AppState.currentUser = v;
+    }
+  },
+  firebaseDB: {
+    get() { return AppState.firebaseDB; },
+    set(v) {
+      if (v !== null && typeof v !== 'object') {
+        console.warn('[AppState] firebaseDB must be object or null, got:', typeof v);
+        return;
+      }
+      AppState.firebaseDB = v;
+    }
+  },
 };
-
-function generateUUID(prefix = '', retryCount = 0) {
-const MAX_RETRIES = 3;
-if (retryCount >= MAX_RETRIES) {
-const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-const r = Math.random() * 16 | 0;
-const v = c === 'x' ? r : (r & 0x3 | 0x8);
-return v.toString(16);
+const _plain = (key) => ({
+  get() { return AppState[key]; },
+  set(v) { AppState[key] = v; }
 });
-return prefix ? `${prefix}-${uuid}` : uuid;
+[
+  'database','auth',
+  'currentRepProfile','salesRepsList','userRolesList',
+  'db','salesHistory','customerSales','repSales','repCustomers','salesCustomers',
+  'stockReturns','expenseRecords','expenseCategories','deletedRecordIds',
+  'deletionRecordsArray','deletionRecords',
+  'paymentEntities','paymentTransactions',
+  'factoryInventoryData','factoryProductionHistory','factoryDefaultFormulas',
+  'factoryAdditionalCosts','factorySalePrices','factoryCostAdjustmentFactor',
+  'factoryUnitTracking',
+].forEach(key => { _AppStateDescriptors[key] = _plain(key); });
+Object.defineProperties(window, Object.fromEntries(
+  Object.entries(_AppStateDescriptors).map(([k, desc]) => [k, {
+    get: desc.get,
+    set: desc.set,
+    enumerable: true,
+    configurable: false   
+  }])
+));
+let _cachedDeviceShard = null;
+const _MODE_CODES = {
+  'admin':      '0',
+  'rep':        '1',
+  'production': '2',
+  'factory':    '3',
+  'userrole':   '4',
+};
+const _MODE_CODES_HEX = {
+  'admin':      '00',
+  'rep':        '01',
+  'production': '02',
+  'factory':    '03',
+  'userrole':   '04',
+};
+const _MODE_LABELS = { '0':'admin', '1':'rep', '2':'production', '3':'factory', '4':'userrole' };
+const _MODE_LABELS_HEX = { '00':'admin', '01':'rep', '02':'production', '03':'factory', '04':'userrole' };
+let _uuidLastMs = 0;
+let _uuidSeq    = 0;
+function _deriveDeviceShard(did) {
+  if (!did || typeof did !== 'string') return '0000';
+  let h = 0x811c9dc5;
+  for (let i = 0; i < did.length; i++) {
+    h ^= did.charCodeAt(i);
+    h = (h * 0x01000193) >>> 0; 
+  }
+  return (h & 0xffff).toString(16).padStart(4, '0');
 }
-const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-const r = Math.random() * 16 | 0;
-const v = c === 'x' ? r : (r & 0x3 | 0x8);
-return v.toString(16);
-});
-const finalUUID = prefix ? `${prefix}-${uuid}` : uuid;
-if (!validateUUID(finalUUID)) {
-return generateUUID(prefix, retryCount + 1);
+function _randomBytes(n) {
+  const buf = new Uint8Array(n);
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    crypto.getRandomValues(buf);
+  } else {
+    let s0 = (Date.now() ^ 0xdeadbeef) >>> 0;
+    let s1 = (Date.now() ^ 0xcafebabe) >>> 0;
+    for (let i = 0; i < n; i++) {
+      let t = s1 ^ (s1 << 17);
+      s1 = s0;
+      s0 = (s0 ^ (s0 >>> 26)) ^ (t ^ (t >>> 7));
+      buf[i] = s0 & 0xff;
+    }
+  }
+  return buf;
 }
-return finalUUID;
+function _nextSeq(nowMs) {
+  if (nowMs > _uuidLastMs) {
+    _uuidLastMs = nowMs;
+    _uuidSeq    = _randomBytes(1)[0]; 
+    return { ts: _uuidLastMs, seq: _uuidSeq };
+  }
+  _uuidSeq = (_uuidSeq + 1) & 0xff;
+  if (_uuidSeq === 0) {
+    _uuidLastMs += 1;
+    _uuidSeq = _randomBytes(1)[0];
+  }
+  return { ts: _uuidLastMs, seq: _uuidSeq };
+}
+function _encodeModeTag() {
+  const mode = (typeof appMode !== 'undefined' ? appMode : 'admin') || 'admin';
+  return _MODE_CODES[mode] || '0';
+}
+async function initDeviceShard() {
+  try {
+    const did = await getDeviceId();
+    _cachedDeviceShard = _deriveDeviceShard(did);
+  } catch (e) {
+    _cachedDeviceShard = '0000';
+  }
+}
+function generateUUID(prefix = '', retryCount = 0, tsMs = null, modeOverride = null) {
+  const MAX_RETRIES = 3;
+  const rnd  = _randomBytes(5); 
+  const nowMs = tsMs != null ? tsMs : Date.now();
+  const { ts, seq } = _nextSeq(nowMs);
+  const tsHi32 = Math.floor(ts / 0x10000);   
+  const tsLo16 = ts & 0xffff;                
+  const p1 = tsHi32.toString(16).padStart(8, '0');  
+  const p2 = tsLo16.toString(16).padStart(4, '0');  
+  const modeNib = modeOverride != null
+    ? (parseInt(modeOverride, 16) & 0xf).toString(16)
+    : _encodeModeTag();
+  const p3 = '4'
+    + ((seq >>> 4) & 0xf).toString(16)
+    + (seq         & 0xf).toString(16)
+    + modeNib;                                        
+  const varNib = ((rnd[4] & 0x3) | 0x8).toString(16);
+  const p4r    = rnd[4].toString(16).padStart(2, '0');
+  const extraRnd = _randomBytes(1)[0];
+  const p4 = varNib
+    + ((rnd[4] >>> 4) & 0xf).toString(16)
+    + (extraRnd & 0xf).toString(16)
+    + ((extraRnd >>> 4) & 0xf).toString(16);          
+  const nodeRand = rnd[0].toString(16).padStart(2, '0')
+                 + rnd[1].toString(16).padStart(2, '0')
+                 + rnd[2].toString(16).padStart(2, '0')
+                 + rnd[3].toString(16).padStart(2, '0');
+  const node = (_cachedDeviceShard || '0000') + nodeRand; 
+  const uuid = `${p1}-${p2}-${p3}-${p4}-${node}`;
+  const finalUUID = prefix ? `${prefix}-${uuid}` : uuid;
+  if (retryCount < MAX_RETRIES && !validateUUID(finalUUID)) {
+    return generateUUID(prefix, retryCount + 1, tsMs, modeOverride);
+  }
+  return finalUUID;
 }
 function validateUUID(uuid) {
-if (!uuid || typeof uuid !== 'string') return false;
-const standardRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const prefixedRegex = /^[a-z0-9_]+-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-return standardRegex.test(uuid) || prefixedRegex.test(uuid);
+  if (!uuid || typeof uuid !== 'string') return false;
+  const standardRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const prefixedRegex = /^[a-z0-9_]+-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  return standardRegex.test(uuid) || prefixedRegex.test(uuid);
 }
+function extractUUIDMeta(uuid) {
+  if (!validateUUID(uuid)) return null;
+  const allParts = uuid.split('-');
+  const coreParts = allParts.slice(allParts.length - 5); 
+  const [cp1, cp2, cp3, , node] = coreParts;
+  const modeNib    = cp3[3];                     
+  const appModeNew = _MODE_LABELS[modeNib] || null;
+  if (appModeNew !== null) {
+    const tsHi = parseInt(cp1, 16);
+    const tsLo = parseInt(cp2, 16);
+    const tsMs = tsHi * 0x10000 + tsLo;         
+    const seq = (parseInt(cp3[1], 16) << 4) | parseInt(cp3[2], 16);
+    const deviceShard = node.slice(0, 4);
+    return {
+      deviceShard,
+      timestamp: new Date(tsMs),
+      appMode: appModeNew,
+      sequence: seq,
+      isEnriched: true,
+      version: 2,
+    };
+  }
+  const legacyModeTag   = node.slice(10, 12);
+  const appModeLegacy   = _MODE_LABELS_HEX[legacyModeTag] || null;
+  const isLegacyEnriched = appModeLegacy !== null;
+  let timestamp = null;
+  if (isLegacyEnriched) {
+    const secsFrag = parseInt(node.slice(4, 10), 16);
+    const nowSecs  = Math.floor(Date.now() / 1000);
+    const highBits = nowSecs & ~0xffffff;
+    let secs       = highBits | secsFrag;
+    if (secs > nowSecs + 86400) secs -= 0x1000000;
+    timestamp = new Date(secs * 1000);
+  }
+  return {
+    deviceShard: node.slice(0, 4),
+    timestamp,
+    appMode: appModeLegacy || 'unknown',
+    sequence: null,
+    isEnriched: isLegacyEnriched,
+    version: isLegacyEnriched ? 1 : 0,
+  };
+}
+function migrateUUID(oldUUID, createdAtMs, modeOverride = 'admin') {
+  if (!validateUUID(oldUUID)) return oldUUID; 
+  const meta = extractUUIDMeta(oldUUID);
+  if (meta && meta.isEnriched && meta.version === 2) return oldUUID; 
+  const parts = oldUUID.split('-');
+  let prefix = '';
+  let coreUUID = oldUUID;
+  if (parts.length > 5) {
+    prefix = parts.slice(0, parts.length - 5).join('-');
+    coreUUID = parts.slice(parts.length - 5).join('-');
+  }
+  const modeCode = _MODE_CODES[modeOverride] || '0'; 
+  const newUUID  = generateUUID(prefix, 0, createdAtMs, modeCode);
+  return newUUID;
+}
+async function migrateAllUUIDs() {
+  const DATA_STORES = [
+    'mfg_pro_pkr', 'customer_sales', 'noman_history', 'rep_sales',
+    'rep_customers', 'sales_customers', 'payment_transactions',
+    'payment_entities', 'factory_inventory_data',
+    'factory_production_history', 'expenses', 'stock_returns',
+  ];
+  const idMap = new Map(); 
+  const storeData = {};
+  for (const store of DATA_STORES) {
+    const records = await idb.get(store, []);
+    storeData[store] = Array.isArray(records) ? records : [];
+  }
+  let totalMigrated = 0;
+  for (const store of DATA_STORES) {
+    for (const rec of storeData[store]) {
+      if (!rec || !rec.id) continue;
+      const meta = extractUUIDMeta(rec.id);
+      if (meta && meta.isEnriched && meta.version === 2) continue; 
+      let recMode = 'admin';
+      if (rec.isRepModeEntry === true) recMode = 'rep';
+      else if (store === 'mfg_pro_pkr') recMode = 'production';
+      else if (store === 'factory_production_history') recMode = 'factory';
+      const ts  = rec.createdAt || rec.timestamp || Date.now();
+      const newId = migrateUUID(rec.id, ts, recMode);
+      if (newId !== rec.id) {
+        idMap.set(rec.id, newId);
+        totalMigrated++;
+      }
+    }
+  }
+  if (idMap.size === 0) {
+    console.log('[UUID Migration] All records already enriched — nothing to do.');
+    return { migrated: 0, stores: DATA_STORES.length };
+  }
+  for (const store of DATA_STORES) {
+    let changed = false;
+    for (const rec of storeData[store]) {
+      if (!rec) continue;
+      if (idMap.has(rec.id)) {
+        rec.id = idMap.get(rec.id);
+        changed = true;
+      }
+      const fkFields = ['entityId', 'supplierId', 'expenseId', 'materialId', 'relatedId'];
+      for (const fk of fkFields) {
+        if (rec[fk] && idMap.has(rec[fk])) {
+          rec[fk] = idMap.get(rec[fk]);
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      await idb.set(store, storeData[store]);
+    }
+  }
+  try {
+    let deletionRecs = await idb.get('deletion_records', []);
+    let drChanged = false;
+    for (const dr of deletionRecs) {
+      if (!dr) continue;
+      if (idMap.has(dr.id)) { dr.id = idMap.get(dr.id); drChanged = true; }
+      if (idMap.has(dr.recordId)) { dr.recordId = idMap.get(dr.recordId); drChanged = true; }
+    }
+    const newDeletedIds = new Set(Array.from(deletedRecordIds).map(id => idMap.get(id) || id));
+    deletedRecordIds.clear();
+    newDeletedIds.forEach(id => deletedRecordIds.add(id));
+    if (drChanged) {
+      await idb.set('deletion_records', deletionRecs);
+      await idb.set('deleted_records', Array.from(deletedRecordIds));
+    }
+  } catch(e) { console.warn('[UUID Migration] deletion_records patch failed:', e); }
+  const liveArrays = {
+    'mfg_pro_pkr':               () => db,
+    'customer_sales':            () => customerSales,
+    'noman_history':             () => salesHistory,
+    'rep_sales':                 () => repSales,
+    'rep_customers':             () => repCustomers,
+    'sales_customers':           () => salesCustomers,
+    'payment_transactions':      () => paymentTransactions,
+    'payment_entities':          () => paymentEntities,
+    'factory_inventory_data':    () => factoryInventoryData,
+    'factory_production_history':() => factoryProductionHistory,
+    'expenses':                  () => expenseRecords,
+    'stock_returns':             () => stockReturns,
+  };
+  for (const [store, getArr] of Object.entries(liveArrays)) {
+    try {
+      const arr = getArr();
+      if (!Array.isArray(arr)) continue;
+      for (const rec of arr) {
+        if (!rec) continue;
+        if (idMap.has(rec.id)) rec.id = idMap.get(rec.id);
+        const fkFields = ['entityId', 'supplierId', 'expenseId', 'materialId', 'relatedId'];
+        for (const fk of fkFields) {
+          if (rec[fk] && idMap.has(rec[fk])) rec[fk] = idMap.get(rec[fk]);
+        }
+      }
+    } catch(e) {}
+  }
+  console.log(`[UUID Migration] Complete — ${totalMigrated} records migrated.`);
+  return { migrated: totalMigrated, stores: DATA_STORES.length, idMap };
+}
+window.generateUUID   = generateUUID;
+window.validateUUID   = validateUUID;
+window.extractUUIDMeta = extractUUIDMeta;
+window.migrateUUID    = migrateUUID;
+window.migrateAllUUIDs = migrateAllUUIDs;
+
+/**
+ * compareRecordVersions(a, b) -- canonical UUID-v2-aware conflict resolver.
+ *
+ * Every transaction UUID encodes: creation timestamp (ms) + monotonic sequence
+ * + device shard, making it a globally-unique logical clock.
+ *
+ * Resolution order:
+ *  1. Both UUIDs are v2 -> compare UUID-embedded timestamp (ms)
+ *                       -> tie: compare sequence number (higher = later within same ms)
+ *                       -> tie: deviceShard lexicographic (deterministic cross-device)
+ *  2. Only one is v2    -> v2 record wins (properly versioned)
+ *  3. Neither is v2     -> fall back to record field timestamps (updatedAt/timestamp/createdAt)
+ *
+ * Returns: > 0 if a wins (a is newer), < 0 if b wins, 0 if equal.
+ */
+function compareRecordVersions(a, b) {
+  if (!a && !b) return 0;
+  if (!a) return -1;
+  if (!b) return 1;
+  const metaA = (a.id && typeof extractUUIDMeta === 'function') ? extractUUIDMeta(a.id) : null;
+  const metaB = (b.id && typeof extractUUIDMeta === 'function') ? extractUUIDMeta(b.id) : null;
+  const aIsV2 = metaA && metaA.isEnriched && metaA.version === 2;
+  const bIsV2 = metaB && metaB.isEnriched && metaB.version === 2;
+  if (aIsV2 && bIsV2) {
+    const tA = metaA.timestamp instanceof Date ? metaA.timestamp.getTime() : 0;
+    const tB = metaB.timestamp instanceof Date ? metaB.timestamp.getTime() : 0;
+    if (tA !== tB) return tA - tB;
+    const seqA = typeof metaA.sequence === 'number' ? metaA.sequence : -1;
+    const seqB = typeof metaB.sequence === 'number' ? metaB.sequence : -1;
+    if (seqA !== seqB) return seqA - seqB;
+    const shardA = metaA.deviceShard || '';
+    const shardB = metaB.deviceShard || '';
+    if (shardA !== shardB) return shardA > shardB ? 1 : -1;
+    return 0;
+  }
+  if (aIsV2 && !bIsV2) return 1;
+  if (!aIsV2 && bIsV2) return -1;
+  const _fieldMs = (rec) => {
+    if (!rec) return 0;
+    const ts = rec.updatedAt || rec.timestamp || rec.createdAt || 0;
+    if (typeof ts === 'number') return ts;
+    if (ts && typeof ts.toMillis === 'function') return ts.toMillis();
+    if (ts && typeof ts === 'object') {
+      if (typeof ts.seconds === 'number') return ts.seconds * 1000 + Math.round((ts.nanoseconds || 0) / 1e6);
+      if (typeof ts._seconds === 'number') return ts._seconds * 1000;
+    }
+    if (ts instanceof Date) return ts.getTime();
+    if (typeof ts === 'string') { try { const t = new Date(ts).getTime(); if (!isNaN(t)) return t; } catch(e){} }
+    return 0;
+  };
+  return _fieldMs(a) - _fieldMs(b);
+}
+window.compareRecordVersions = compareRecordVersions;
 function getTimestamp() {
 return Date.now();
 }
@@ -2139,24 +2497,16 @@ if (record.updatedAt < record.createdAt) {
 record.updatedAt = record.createdAt;
 }
 }
-
 if (record.isRepModeEntry === true) {
-
   if (!record.salesRep || record.salesRep === 'NONE' || record.salesRep === 'ADMIN') {
-    record.isRepModeEntry = false; 
-    console.warn('[schema] Corrected contradictory record (isRepModeEntry=true, salesRep="' + record.salesRep + '") → direct sale.', record.id);
-  }
-} else {
-
-  if (record.salesRep && record.salesRep !== 'NONE' && record.salesRep !== 'ADMIN') {
-    record.isRepModeEntry = true; 
-    console.warn('[schema] Corrected contradictory record (isRepModeEntry=false, salesRep="' + record.salesRep + '") → rep sale.', record.id);
+    record.isRepModeEntry = false;
+    console.warn('[schema] Corrected: isRepModeEntry=true but salesRep is NONE → direct sale.', record.id);
   }
 }
 return record;
 }
 async function cleanupOldTombstones() {
-const ninetyDaysAgo = Date.now() - (90 * 24 * 60 * 60 * 1000);
+const ninetyDaysAgo = Date.now() - APP_CONFIG.TOMBSTONE_EXPIRY_MS;
 const dataTypes = [
 'expenses',
 'mfg_pro_pkr',
@@ -2189,7 +2539,7 @@ const removedCount = beforeCount - cleaned.length;
 totalCleaned += removedCount;
 }
 } catch (error) {
-console.error('Failed to save data locally.', error);
+console.error('Failed to save data locally.', _safeErr(error));
 showToast('Failed to save data locally.', 'error');
 }
 }
@@ -2200,7 +2550,7 @@ return totalCleaned;
 function scheduleAutomaticCleanup() {
 setTimeout(() => cleanupOldTombstones(), 5000);
 if (window._tombstoneCleanupInterval) clearInterval(window._tombstoneCleanupInterval);
-window._tombstoneCleanupInterval = setInterval(() => cleanupOldTombstones(), 24 * 60 * 60 * 1000);
+window._tombstoneCleanupInterval = setInterval(() => cleanupOldTombstones(), APP_CONFIG.TOMBSTONE_CLEANUP_INTERVAL_MS);
 }
 async function validateAndFixRecords(dataType, records) {
 if (!Array.isArray(records) || records.length === 0) {
@@ -2275,7 +2625,7 @@ totalValid += result.valid;
 totalRecords += result.total;
 }
 } catch (error) {
-console.error('Data validation encountered an error.', error);
+console.error('Data validation encountered an error.', _safeErr(error));
 showToast('Data validation encountered an error.', 'error');
 }
 }

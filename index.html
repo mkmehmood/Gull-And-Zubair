@@ -48,6 +48,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300;12..96,400;12..96,500;12..96,600;12..96,700;12..96,800&family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700;800;900&family=Geist+Mono:wght@300;400;500;600;700&family=Noto+Nastaliq+Urdu:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="app.css">
+<link rel="preload" href="admin-data.js" as="script">
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
@@ -60,13 +61,11 @@ reg.update();
 reg.onupdatefound = () => {
 const installingWorker = reg.installing;
 installingWorker.onstatechange = () => {
-if (installingWorker.state === 'installed') {
-if (navigator.serviceWorker.controller) {
-// New SW waiting — tell it to skip waiting and take over immediately
-if (reg.waiting) {
-reg.waiting.postMessage({ type: 'SKIP_WAITING' });
-}
-}
+if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
+// A new SW is waiting. Show a banner — do NOT auto-apply.
+// Sending SKIP_WAITING immediately would let the new SW control tabs
+// still running old JS, risking an IDB schema mismatch on update.
+showUpdateBanner(reg.waiting);
 }
 };
 };
@@ -74,6 +73,43 @@ reg.waiting.postMessage({ type: 'SKIP_WAITING' });
 navigator.serviceWorker.addEventListener('controllerchange', () => {
 window.location.reload();
 });
+// SW_UPDATED is posted by the SW activate event (new SW took over) and by
+// the fetch handler when a local JS/CSS file has changed on the server.
+// Both cases mean new code is available; prompt the user rather than auto-reload.
+navigator.serviceWorker.addEventListener('message', (event) => {
+if (event.data && event.data.type === 'SW_UPDATED') {
+showUpdateBanner(navigator.serviceWorker.controller);
+}
+});
+});
+}
+
+function showUpdateBanner(swTarget) {
+if (document.getElementById('sw-update-banner')) return; // already shown
+const banner = document.createElement('div');
+banner.id = 'sw-update-banner';
+banner.style.cssText = [
+  'position:fixed;bottom:0;left:0;right:0;z-index:99999',
+  'background:#1a1a2e;color:#e0e0e0;padding:14px 20px',
+  'display:flex;align-items:center;justify-content:space-between',
+  'font-family:sans-serif;font-size:14px;box-shadow:0 -2px 12px rgba(0,0,0,.4)'
+].join(';');
+banner.innerHTML = [
+  '<span>&#x1F504; A new version is available.</span>',
+  '<button id="sw-update-btn" style="',
+    'background:#4f8ef7;color:#fff;border:none;border-radius:6px;',
+    'padding:8px 18px;cursor:pointer;font-size:14px;margin-left:16px',
+  '">Update &amp; Reload</button>'
+].join('');
+document.body.appendChild(banner);
+document.getElementById('sw-update-btn').addEventListener('click', () => {
+  banner.remove();
+  // swTarget may be a waiting SW (pending install) or the active controller
+  // (already running new code). In either case, postMessage is harmless if
+  // SKIP_WAITING is not needed — the reload is what actually applies the fix.
+  const reg = navigator.serviceWorker.getRegistration ? null : null;
+  if (swTarget && swTarget.postMessage) swTarget.postMessage({ type: 'SKIP_WAITING' });
+  window.location.reload();
 });
 }
 
@@ -422,6 +458,9 @@ This will automatically create a <strong>PAYEE</strong> entity. Any debts to thi
 </div>
 <div class="u-overlay-scroll" id="customerManagementHistoryList">
 </div>
+<div class="u-summary-row" >
+<button class="btn btn-danger btn-sm" onclick="(async () => { await deleteCurrentCustomer() })()">Delete Customer Permanently</button>
+</div>
 </div>
 </div>
 <div id="customerEditOverlay" class="factory-overlay" style="z-index: 10002;">
@@ -433,7 +472,10 @@ This will automatically create a <strong>PAYEE</strong> entity. Any debts to thi
 <div class="grid-inputs u-mb-20" >
 <div class="field">
 <label>Customer Name</label>
-<input type="text" id="edit-cust-name" readonly style="background: rgba(0,0,0,0.05); color: var(--text-muted); font-weight: 700;">
+<input type="text" id="edit-cust-name" placeholder="Customer name" style="font-weight: 700;">
+<div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 4px;">
+Editing the name will update all records for this customer
+</div>
 </div>
 <div class="field">
 <label>Phone Number</label>
@@ -454,6 +496,15 @@ Will be added as a debt transaction in customer history
 </button>
 </div>
 <div id="location-status" style="font-size: 0.65rem; color: var(--text-muted); margin-top: 4px; font-style: italic;"></div>
+</div>
+<div class="field">
+<label>Custom Sale Price (Rs/kg)</label>
+<input type="number" id="edit-cust-custom-price" placeholder="Leave blank to use factory default"
+step="1" min="0"
+style="font-family:'Geist Mono',monospace;">
+<div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 4px;">
+Override the default sale price for this customer. Leave blank to use the standard rate.
+</div>
 </div>
 </div>
 <div style="display:flex; gap:10px; margin-top: 4px;">
@@ -501,6 +552,9 @@ Will be added as a debt transaction in customer history
 <input type="text" id="rep-cust-trans-search" class="search-bar" placeholder="Search history..." oninput="filterRepCustomerManagementHistory()">
 </div>
 <div class="u-overlay-scroll" id="repCustomerManagementHistoryList"></div>
+<div class="u-summary-row" >
+<button class="btn btn-danger btn-sm" onclick="(async () => { await deleteCurrentRepCustomer() })()">Delete Customer Permanently</button>
+</div>
 </div>
 </div>
 <div id="repCustomerEditOverlay" class="factory-overlay" style="z-index: 10002;">
@@ -512,7 +566,10 @@ Will be added as a debt transaction in customer history
 <div class="grid-inputs u-mb-20" >
 <div class="field">
 <label>Customer Name</label>
-<input type="text" id="rep-edit-cust-name" readonly style="background: rgba(0,0,0,0.05); color: var(--text-muted); font-weight: 700;">
+<input type="text" id="rep-edit-cust-name" placeholder="Customer name" style="font-weight: 700;">
+<div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 4px;">
+Editing the name will update all records for this customer
+</div>
 </div>
 <div class="field">
 <label>Phone Number</label>
@@ -594,6 +651,9 @@ Backup to Phone
 <button class="btn" style="background: rgba(37, 99, 235, 0.1); color: var(--text-main); border: 1px solid var(--glass-border); display:flex; align-items:center; justify-content:center; gap:6px;" onclick="document.getElementById('restoreInput').click(); closeDataMenu();">
 Restore from Phone
 </button>
+<button class="btn" style="background: rgba(239,68,68,0.08); color: #ef4444; border: 1px solid rgba(239,68,68,0.25); display:flex; align-items:center; justify-content:center; gap:8px; font-weight:700;" onclick="openRecycleBin()">
+🗑️ Recycle Bin
+</button>
 </div>
 <div id="lastSyncDisplay" style="margin-top: 15px; font-size: 0.7rem; color: var(--text-muted);">
 Last Synced: Checking...
@@ -603,15 +663,50 @@ Last Synced: Checking...
 style="width: 100%; padding: 12px; background: var(--accent); border: none; border-radius: 999px; color: white; cursor: pointer; font-size: 0.85rem; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px;">
 View Database Structure
 </button>
-<button onclick="runUnifiedCleanup()"
-style="width: 100%; margin-top: 12px; padding: 14px; background: var(--accent-emerald); border: none; border-radius: 999px; color: white; cursor: pointer; font-size: 0.9rem; font-weight: 700;">
-Verify & Sync
-</button>
-<div style="font-size: 0.7rem; color: var(--text-muted); text-align: center; margin-top: 8px; line-height: 1.4;">
+
 </div>
 </div>
 </div>
+
+<!-- ═══════════════════════════════════════════════════════ RECYCLE BIN OVERLAY -->
+<div id="recycleBinOverlay" class="factory-overlay" style="display:none;">
+  <div class="factory-overlay-card liquid-card" style="max-width:520px;width:100%;max-height:88vh;display:flex;flex-direction:column;">
+    <!-- Header -->
+    <div class="section-header" style="flex-shrink:0;">
+      <h3 class="u-heading-main" style="display:flex;align-items:center;gap:8px;">🗑️ Recycle Bin</h3>
+      <button class="btn-theme" onclick="closeRecycleBin()">✕</button>
+    </div>
+    <hr style="width:100%;border:0;border-top:1px solid var(--glass-border);margin:4px 0;flex-shrink:0;">
+    <!-- Stats + filter bar -->
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0 4px;flex-shrink:0;flex-wrap:wrap;">
+      <div id="recycleBinStats" style="font-size:0.75rem;color:var(--text-muted);"></div>
+      <select id="recycleBinFilter"
+        onchange="renderRecycleBin(this.value)"
+        style="padding:5px 10px;border-radius:999px;border:1px solid var(--glass-border);background:var(--input-bg);color:var(--text-main);font-size:0.78rem;cursor:pointer;">
+        <option value="all">All Tabs</option>
+        <option value="tab_sales">Sales Tab</option>
+        <option value="tab_rep">Rep Tab</option>
+        <option value="tab_production">Manufacturing Tab</option>
+        <option value="tab_calculator">Calculator Tab</option>
+        <option value="tab_factory">Factory Tab</option>
+        <option value="tab_payments">Payments Tab</option>
+      </select>
+    </div>
+    <!-- Info banner -->
+    <div style="background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.18);border-radius:10px;padding:9px 13px;font-size:0.73rem;color:var(--text-muted);line-height:1.5;margin-bottom:10px;flex-shrink:0;">
+      ↩ <strong style="color:var(--text-main);">Recover</strong> restores the record to its original collection and re-activates it in all views &amp; balances.
+      Records marked <span style="color:#ef4444;font-weight:600;">local only</span> may not have a full snapshot to restore from — balance adjustments may be needed manually.
+      All records expire after <strong style="color:var(--text-main);">90 days</strong>.
+    </div>
+    <!-- Scrollable list -->
+    <div id="recycleBinList" style="flex:1;overflow-y:auto;padding-right:4px;min-height:120px;"></div>
+    <!-- Footer -->
+    <div style="flex-shrink:0;padding-top:12px;border-top:1px solid var(--glass-border);margin-top:8px;display:flex;justify-content:flex-end;">
+      <button onclick="closeRecycleBin()" style="padding:9px 22px;border-radius:999px;background:var(--input-bg);border:1px solid var(--glass-border);color:var(--text-main);font-size:0.85rem;cursor:pointer;">Close</button>
+    </div>
+  </div>
 </div>
+
 <div class="nav-tabs">
 <button class="tab-btn active" onclick="showTab('prod')">PRODUCTION</button>
 <button class="tab-btn" onclick="showTab('sales')">SALES</button>
@@ -689,10 +784,11 @@ oninput="handleUniversalSearch('rep-cust-name', 'rep-customer-search-results', '
 <div id="rep-customer-search-results" class="hidden u-search-dropdown" ></div>
 </div>
 </div>
-<div id="rep-new-customer-phone-container" class="hidden" style="margin-top: 8px; animation: slideDown 0.3s ease;">
-<div class="field">
-<label style="color: var(--accent-emerald);">Mobile number</label>
-<input type="tel" id="rep-new-cust-phone" placeholder="03XX-XXXXXXX" style="border-color: var(--accent-emerald);">
+<div id="rep-new-customer-phone-container" class="hidden" style="margin-top:10px; animation: slideDown 0.3s ease;">
+<div class="field" style="margin:0;">
+<label style="color:var(--accent-emerald);">Mobile number</label>
+<input type="tel" id="rep-new-cust-phone" placeholder="03XX-XXXXXXX"
+style="border-color:var(--accent-emerald); width:100%; box-sizing:border-box; padding:10px; font-size:16px;">
 </div>
 </div>
 <div id="rep-sale-inputs">
@@ -755,6 +851,20 @@ No records found
 </tbody>
 </table>
 </div>
+<div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--glass-border);">
+<div style="display: flex; justify-content: space-between; font-size: 0.7rem;">
+<span style="color: var(--text-muted); font-weight: 400;">Total Outstanding Credit:</span>
+<span id="rep-customers-total-credit" style="color: var(--warning); font-weight: 400;">0.00</span>
+</div>
+<div style="display: flex; justify-content: space-between; font-size: 0.7rem; margin-top: 6px;">
+<span style="color: var(--text-muted); font-weight: 400;">Total Credit Sales:</span>
+<span id="rep-customers-total-credit-sales" style="color: var(--cost-val, #ef4444); font-weight: 400;">0.00</span>
+</div>
+<div style="display: flex; justify-content: space-between; font-size: 0.7rem; margin-top: 6px;">
+<span style="color: var(--text-muted); font-weight: 400;">Total Collections:</span>
+<span id="rep-customers-total-collections" style="color: var(--accent-emerald); font-weight: 400;">0.00</span>
+</div>
+</div>
 </div>
 <div id="repHistoryList" class="report-grid"></div>
 </div>
@@ -795,13 +905,7 @@ Dynamic Cost Value: <span class="u-text-danger" id="display-cost-value" >0.00</s
 </select>
 </div>
 </div>
-<div id="paymentStatusContainer" class="hidden u-mb-15">
-<label style="display: block; margin-bottom: 8px; font-size: 0.7rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Payment Status:</label>
-<div class="toggle-group">
-<button id="production-payment-cash" class="toggle-opt active" onclick="selectProductionPayment(this, 'CASH')">Cash</button>
-<button id="production-payment-credit" class="toggle-opt" onclick="selectProductionPayment(this, 'CREDIT')">Credit</button>
-</div>
-</div>
+
 <div class="grid-inputs">
 <div class="field">
 <label>Formula Units Used</label>
@@ -919,16 +1023,19 @@ Insufficient formula units available! Please reduce formula units used.
 <span id="new-sale-id-display" style="font-size:0.62rem;color:var(--text-secondary);font-family:'Geist Mono',monospace;background:var(--glass-raised);border:1px solid var(--glass-border);border-radius:var(--radius-full);padding:2px 8px;letter-spacing:0.03em;display:none;">ID: —</span>
 </div>
 <div class="grid-inputs">
-<div class="field"><label>Date</label><input type="date" id="cust-date" onchange="refreshCustomerSales(); setSalesSummaryMode(currentSalesSummaryMode || 'day');"></div>
+<div class="field"><label>Date</label><input type="date" id="cust-date" onchange="refreshCustomerSales(); setSalesSummaryMode(currentSalesSummaryMode || 'day'); calculateCustomerSale();"></div>
 <div class="field u-pos-relative" >
 <label>Customer Name</label>
 <input type="text" id="cust-name" list="customer-list" placeholder="Search or type new..."
 oninput="handleUniversalSearch('cust-name', 'customer-search-results', 'customers'); handleCustomerInput(this.value, 'admin')" autocomplete="off">
 <div id="customer-search-results" class="hidden u-search-dropdown" ></div>
-<div id="new-customer-phone-container" class="hidden" style="margin-top: 8px; animation: slideDown 0.3s ease;">
-<div class="field">
-<label style="color: var(--accent-emerald);">Mobile number</label>
-<input type="tel" id="new-cust-phone" placeholder="03XX-XXXXXXX" style="border-color: var(--accent-emerald);">
+<div id="new-customer-phone-container" class="hidden" style="margin-top:10px; animation: slideDown 0.3s ease;">
+<div style="display:flex; gap:10px; align-items:flex-end;">
+<div class="field" style="flex:1; min-width:0; margin:0;">
+<label style="color:var(--accent-emerald);">Mobile number</label>
+<input type="tel" id="new-cust-phone" placeholder="03XX-XXXXXXX"
+style="border-color:var(--accent-emerald); width:100%; box-sizing:border-box;">
+</div>
 </div>
 </div>
 <datalist id="customer-list"></datalist>
@@ -1595,7 +1702,7 @@ Save Transaction
 <span class="formula-value" id="cashDetailDirectSales">0.00</span>
 </div>
 <div class="formula-item">
-<span>Net Production Cash (After Credits):</span>
+<span>Net Production Cash:</span>
 <span class="formula-value" id="cashDetailProductionCash">0.00</span>
 </div>
 <div class="formula-item">
@@ -1631,10 +1738,6 @@ Save Transaction
 <div class="formula-item">
 <span>Direct Customer Credits:</span>
 <span class="formula-value" id="salesReceivables">0.00</span>
-</div>
-<div class="formula-item">
-<span>Production Tab Credits:</span>
-<span class="formula-value" id="productionReceivables">0.00</span>
 </div>
 <div class="formula-item">
 <span>Representative Credits:</span>
@@ -1712,23 +1815,21 @@ Save Transaction
 <div class="report-grid" style="grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));">
 <div class="card highlight-card liquid-card">
 <h4>Net Cash Flow</h4>
-<p><span>Production Value:</span> <span class="rev-val" id="cash-prod-value">Rs 0.00</span></p>
-<p><span>Production Credits:</span> <span class="cost-val" id="cash-prod-credits">Rs 0.00</span></p>
-<p><span>Sales Tab Cash:</span> <span class="profit-val" id="cash-sales-cash">Rs 0.00</span></p>
-<p><span>Calculator Cash:</span> <span class="profit-val" id="cash-calculator-cash">Rs 0.00</span></p>
-<p><span>Payments In:</span> <span class="profit-val" id="cash-payments-in">Rs 0.00</span></p>
-<p><span>Payments Out:</span> <span class="cost-val" id="cash-payments-out">Rs 0.00</span></p>
-<p><span>Expenses:</span> <span class="cost-val" id="cash-expenses">Rs 0.00</span></p>
+<p><span>Production Value:</span> <span class="rev-val" id="cash-prod-value">Rs 0</span></p>
+<p><span>Sales Tab Cash:</span> <span class="profit-val" id="cash-sales-cash">Rs 0</span></p>
+<p><span>Calculator Cash:</span> <span class="profit-val" id="cash-calculator-cash">Rs 0</span></p>
+<p><span>Payments In:</span> <span class="profit-val" id="cash-payments-in">Rs 0</span></p>
+<p><span>Payments Out:</span> <span class="cost-val" id="cash-payments-out">Rs 0</span></p>
+<p><span>Expenses:</span> <span class="cost-val" id="cash-expenses">Rs 0</span></p>
 <hr style="margin: 10px 0;">
-<p><span>NET CASH:</span> <span class="profit-val" id="cash-net-total" style="font-size:1.2rem;">Rs 0.00</span></p>
+<p><span>NET CASH:</span> <span class="profit-val" id="cash-net-total" style="font-size:1.2rem;">Rs 0</span></p>
 </div>
 <div class="card liquid-card" style="background: linear-gradient(135deg, rgba(245, 158, 11, 0.1) 0%, rgba(245, 158, 11, 0.05) 100%); border-color: rgba(245, 158, 11, 0.3);">
 <h4 style="color:var(--warning);">TOTAL OUTSTANDING CREDITS</h4>
-<p><span>Production Tab Credits:</span> <span class="qty-val" id="credit-production">Rs 0.00</span></p>
-<p><span>Sales Tab Credits:</span> <span class="qty-val" id="credit-sales-tab">Rs 0.00</span></p>
-<p><span>Calculator Credits:</span> <span class="qty-val" id="credit-calculator">Rs 0.00</span></p>
+<p><span>Sales Tab Credits:</span> <span class="qty-val" id="credit-sales-tab">Rs 0</span></p>
+<p><span>Calculator Credits:</span> <span class="qty-val" id="credit-calculator">Rs 0</span></p>
 <hr style="margin: 10px 0; border-color: rgba(245, 158, 11, 0.2);">
-<p><span>TOTAL CREDITS:</span> <span class="cost-val" id="credit-total" style="font-size:1.2rem; color:var(--warning);">Rs 0.00</span></p>
+<p><span>TOTAL CREDITS:</span> <span class="cost-val" id="credit-total" style="font-size:1.2rem; color:var(--warning);">Rs 0</span></p>
 <div style="font-size:0.7rem; color:var(--text-muted); margin-top:8px;">
 <span class="update-indicator"></span> Credits awaiting collection
 </div>
@@ -1869,8 +1970,13 @@ No records found
 </div>
 </div>
 </div>
-<script src="business.js"></script>
-<script src="sync.js"></script>
-<script src="utilities.js"></script>
+<script src="constants.js" defer></script>
+<script src="business.js" defer></script>
+<script src="admin-data.js" defer></script>
+<script src="sync.js" defer></script>
+<script src="utilities.js" defer></script>
+<script src="factory.js" defer></script>
+<script src="customers.js" defer></script>
+<script src="rep-sales.js" defer></script>
 </body>
 </html>

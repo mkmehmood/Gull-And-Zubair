@@ -1,3 +1,11 @@
+function isRepSale(item) {
+  if (!item) return false;
+  if (item.isRepModeEntry === true) return true;
+  return false;
+}
+function isDirectSale(item) {
+  return !isRepSale(item);
+}
 async function toggleDarkMode() {
 const html = document.documentElement;
 const themeToggle = document.getElementById('themeToggle');
@@ -25,7 +33,7 @@ if (storeComparisonChart) storeComparisonChart.update();
 if (salesPerfChart) salesPerfChart.update();
 if (salesCompChart) salesCompChart.update();
 if (indPerformanceChart) indPerformanceChart.update();
-showToast(newTheme === 'dark' ? '🌙 Dark mode enabled' : '☀️ Light mode enabled', 'info', 2000);
+showToast(newTheme === 'dark' ? ' Dark mode enabled' : 'Light mode enabled', 'info', 2000);
 }
 const syncState = {
 lastUpdate: {
@@ -37,15 +45,14 @@ payments: 0,
 entities: 0
 },
 isRefreshing: false,
-syncInterval: null,
 pendingUpdates: new Set()
 };
 const OfflineQueue = {
 queue: [],
 deadLetterQueue: [],
 isProcessing: false,
-maxRetries: 10,
-retryDelay: 2000,
+maxRetries: APP_CONFIG.OFFLINE_MAX_RETRIES,
+retryDelay: APP_CONFIG.OFFLINE_RETRY_DELAY_MS,
 _dlKey: 'offline_dead_letter_queue',
 async init() {
 try {
@@ -98,7 +105,7 @@ async saveQueue() {
 try {
 await idb.set('offline_operation_queue', this.queue);
 } catch (error) {
-console.error('Failed to save data locally.', error);
+console.error('Failed to save data locally.', _safeErr(error));
 showToast('Failed to save data locally.', 'error');
 }
 },
@@ -106,7 +113,7 @@ async saveDeadLetterQueue() {
 try {
 await idb.set(this._dlKey, this.deadLetterQueue);
 } catch (error) {
-console.error('Failed to persist dead-letter queue.', error);
+console.error('Failed to persist dead-letter queue.', _safeErr(error));
 }
 },
 async processQueue() {
@@ -139,11 +146,11 @@ try {
 await this.executeOperation(item.operation);
 successfulIds.push(item.id);
 } catch (error) {
-console.error('Failed to save data locally.', error);
+console.error('Failed to save data locally.', _safeErr(error));
 item.retries++;
 item.lastAttempt = Date.now();
 item.error = error.message;
-const backoff = Math.min(this.retryDelay * Math.pow(2, item.retries - 1), 30000);
+const backoff = Math.min(this.retryDelay * Math.pow(2, item.retries - 1), APP_CONFIG.OFFLINE_MAX_BACKOFF_MS);
 await new Promise(resolve => setTimeout(resolve, backoff));
 }
 }
@@ -181,7 +188,6 @@ await this.saveDeadLetterQueue();
 this._renderDeadLetterPanel();
 showToast('All failed operations cleared', 'info', 2500);
 },
-
 dlqAutoRetryDelay: 30 * 60 * 1000,
 _dlqAutoRetryTimer: null,
 _scheduleDlqAutoRetry() {
@@ -207,7 +213,6 @@ _scheduleDlqAutoRetry() {
     }
   }, this.dlqAutoRetryDelay);
 },
-
 exportDeadLetterQueue() {
   if (this.deadLetterQueue.length === 0) { showToast('No failed operations to export', 'info', 2500); return; }
   const blob = new Blob([JSON.stringify(this.deadLetterQueue, null, 2)], { type: 'application/json' });
@@ -298,10 +303,15 @@ throw new Error('Database or user not available');
 const { collection, docId, data, action } = operation;
 const userRef = firebaseDB.collection('users').doc(currentUser.uid);
 switch (action) {
-case 'set':
-await userRef.collection(collection).doc(docId).set(data, { merge: true });
+case 'set': {
+const setData = (data && typeof data === 'object') ? { ...data } : data;
+if (setData && !setData.isMerged) {
+setData.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
+}
+await userRef.collection(collection).doc(docId).set(setData, { merge: true });
 trackFirestoreWrite(1);
 break;
+}
 case 'update':
 await userRef.collection(collection).doc(docId).update(data);
 trackFirestoreWrite(1);
@@ -433,7 +443,6 @@ return result;
 window.addEventListener('online', async () => {
 updateOfflineBanner();
 if (typeof firebaseDB !== 'undefined' && firebaseDB) {
-// Retry enableNetwork up to 3 times with back-off for flaky connections
 let retries = 0;
 const tryEnable = async () => {
 try {
@@ -479,25 +488,23 @@ isSyncing = false;
 }
 showToast('Offline — changes will be saved locally', 'warning', 4000);
 });
-
-// Re-sync when the tab becomes visible after being backgrounded (mobile resume, tab switch)
 document.addEventListener('visibilitychange', async () => {
 if (document.visibilityState !== 'visible') return;
+if (syncState.pendingUpdates.size > 0 && !syncState.isRefreshing) {
+requestAnimationFrame(() => processSync());
+}
 if (!navigator.onLine) return;
 if (typeof firebaseDB === 'undefined' || !firebaseDB) return;
 if (window._firestoreNetworkDisabled) {
 try {
 await firebaseDB.enableNetwork();
 window._firestoreNetworkDisabled = false;
-} catch(e) { /* ignore */ }
+} catch(e) {  }
 }
 setTimeout(() => {
 if (typeof triggerAutoSync === 'function') triggerAutoSync();
 }, 1500);
 });
-
-// Periodic connectivity probe: if browser says online but Firestore is disabled
-// (e.g. after a flaky reconnect) re-enable Firestore every 30 s
 setInterval(async () => {
 if (!navigator.onLine) return;
 if (typeof firebaseDB === 'undefined' || !firebaseDB) return;
@@ -507,13 +514,12 @@ await firebaseDB.enableNetwork();
 window._firestoreNetworkDisabled = false;
 if (typeof updateOfflineBanner === 'function') updateOfflineBanner();
 if (typeof triggerAutoSync === 'function') triggerAutoSync();
-} catch(e) { /* still offline at Firestore level */ }
-}, 30000);
-
+} catch(e) {  }
+}, APP_CONFIG.OFFLINE_MAX_BACKOFF_MS);
 function notifyDataChange(dataType) {
 syncState.lastUpdate[dataType] = Date.now();
 syncState.pendingUpdates.add(dataType);
-if (!syncState.isRefreshing) {
+if (!syncState.isRefreshing && !document.hidden) {
 requestAnimationFrame(() => processSync());
 }
 if (typeof triggerSeamlessBackup === 'function') {
@@ -548,8 +554,24 @@ factoryProductionHistory = ensureArray(results.get('factory_production_history')
 paymentEntities = ensureArray(results.get('payment_entities'));
 paymentTransactions = ensureArray(results.get('payment_transactions'));
 deletionRecordsArray = ensureArray(results.get('deletion_records'));
+deletionRecords = deletionRecordsArray;
 const deletedArr = ensureArray(results.get('deleted_records'));
 deletedRecordIds = new Set(deletedArr);
+if (deletedRecordIds.size > 0) {
+const _notDeleted = r => r && !deletedRecordIds.has(r.id);
+db = db.filter(_notDeleted);
+salesHistory = salesHistory.filter(_notDeleted);
+customerSales = customerSales.filter(_notDeleted);
+repSales = repSales.filter(_notDeleted);
+repCustomers = repCustomers.filter(_notDeleted);
+salesCustomers = salesCustomers.filter(_notDeleted);
+stockReturns = stockReturns.filter(_notDeleted);
+expenseRecords = expenseRecords.filter(_notDeleted);
+factoryInventoryData = factoryInventoryData.filter(_notDeleted);
+factoryProductionHistory = factoryProductionHistory.filter(_notDeleted);
+paymentEntities = paymentEntities.filter(_notDeleted);
+paymentTransactions = paymentTransactions.filter(_notDeleted);
+}
 const freshFormulas = results.get('factory_default_formulas');
 if (freshFormulas && typeof freshFormulas === 'object') factoryDefaultFormulas = freshFormulas;
 const freshCosts = results.get('factory_additional_costs');
@@ -565,9 +587,50 @@ if (freshSettings && typeof freshSettings === 'object') defaultSettings = freshS
 const freshCats = results.get('expense_categories');
 if (Array.isArray(freshCats)) expenseCategories = freshCats;
 } catch(e) {
-console.error('Failed to load expense categories.', e);
+console.error('Failed to load expense categories.', _safeErr(e));
 showToast('Failed to load expense categories.', 'error');
 }
+try {
+let _bfSalesChanged = false;
+const _bfSalesMap = new Map((Array.isArray(salesCustomers) ? salesCustomers : []).map(c => [c.name.toLowerCase(), c]));
+(Array.isArray(customerSales) ? customerSales : []).forEach(s => {
+if (!isDirectSale(s)) return;
+const _bfName = s && s.customerName;
+if (_bfName && _bfName.trim() && !_bfSalesMap.has(_bfName.toLowerCase())) {
+const _bfC = { id: generateUUID(), name: _bfName, phone: s.customerPhone || '', address: '', oldDebit: 0, createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
+_bfSalesMap.set(_bfName.toLowerCase(), _bfC);
+if (!Array.isArray(salesCustomers)) salesCustomers = [];
+salesCustomers.push(_bfC);
+_bfSalesChanged = true;
+}
+});
+if (_bfSalesChanged) {
+saveWithTracking('sales_customers', salesCustomers).catch(e => console.warn('Backfill sales_customers save failed:', e));
+}
+let _bfRepChanged = false;
+const _bfRepMap = new Map(
+(Array.isArray(repCustomers) ? repCustomers : [])
+.filter(c => c && c.name)
+.map(c => [`${(c.salesRep || '').toLowerCase()}::${c.name.toLowerCase()}`, c])
+);
+(Array.isArray(repSales) ? repSales : []).forEach(s => {
+const _bfRName = s && s.customerName;
+const _bfRRep = s && s.salesRep;
+if (_bfRName && _bfRName.trim() && _bfRRep && _bfRRep.trim()) {
+const _bfKey = `${_bfRRep.toLowerCase()}::${_bfRName.toLowerCase()}`;
+if (!_bfRepMap.has(_bfKey)) {
+const _bfRC = { id: generateUUID(), name: _bfRName, salesRep: _bfRRep, phone: s.customerPhone || '', address: '', oldDebit: 0, createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
+_bfRepMap.set(_bfKey, _bfRC);
+if (!Array.isArray(repCustomers)) repCustomers = [];
+repCustomers.push(_bfRC);
+_bfRepChanged = true;
+}
+}
+});
+if (_bfRepChanged) {
+saveWithTracking('rep_customers', repCustomers).catch(e => console.warn('Backfill rep_customers save failed:', e));
+}
+} catch (_bfErr) { console.warn('Customer registry backfill failed:', _bfErr); }
 }
 function triggerAutoSync() {
 if (typeof currentUser === 'undefined' || !currentUser) {
@@ -587,7 +650,7 @@ if (typeof isSyncing !== 'undefined' && isSyncing) return;
 try {
 await pushDataToCloud(true);
 } catch (error) {
-console.error('Sync failed. Check your connection.', error);
+console.error('Sync failed. Check your connection.', _safeErr(error));
 showToast('Sync failed. Check your connection.', 'error');
 }
 }, AUTO_SYNC_DELAY);
@@ -598,6 +661,7 @@ await idb.set(`${settingName}_timestamp`, timestamp);
 }
 const _tabSyncInProgress = {};
 function processSync() {
+if (document.hidden) return;
 if (syncState.isRefreshing || syncState.pendingUpdates.size === 0) return;
 syncState.isRefreshing = true;
 const updates = Array.from(syncState.pendingUpdates);
@@ -610,11 +674,23 @@ if (typeof syncProductionTab === 'function' && !_tabSyncInProgress['production']
 _tabSyncInProgress['production'] = true;
 syncProductionTab().finally(() => { _tabSyncInProgress['production'] = false; });
 }
+if (typeof syncSalesTab === 'function' && !_tabSyncInProgress['sales']) {
+_tabSyncInProgress['sales'] = true;
+syncSalesTab().finally(() => { _tabSyncInProgress['sales'] = false; });
+}
 break;
 case 'sales':
 if (typeof syncSalesTab === 'function' && !_tabSyncInProgress['sales']) {
 _tabSyncInProgress['sales'] = true;
 syncSalesTab().finally(() => { _tabSyncInProgress['sales'] = false; });
+}
+if (typeof syncProductionTab === 'function' && !_tabSyncInProgress['production']) {
+_tabSyncInProgress['production'] = true;
+syncProductionTab().finally(() => { _tabSyncInProgress['production'] = false; });
+}
+if (typeof syncCalculatorTab === 'function' && !_tabSyncInProgress['calculator']) {
+_tabSyncInProgress['calculator'] = true;
+syncCalculatorTab().finally(() => { _tabSyncInProgress['calculator'] = false; });
 }
 break;
 case 'calculator':
@@ -691,7 +767,7 @@ break;
 });
 syncCoreDisplays();
 } catch (error) {
-console.error('Tab sync failed.', error);
+console.error('Tab sync failed.', _safeErr(error));
 showToast('Tab sync failed.', 'error');
 } finally {
 syncState.isRefreshing = false;
@@ -720,7 +796,7 @@ if (typeof calculateCashTracker === 'function') {
 calculateCashTracker();
 }
 } catch (error) {
-console.error('Calculation failed.', error);
+console.error('Calculation failed.', _safeErr(error));
 showToast('Calculation failed.', 'error');
 }
 }
@@ -748,7 +824,7 @@ repSales = Array.from(map.values()).filter(r => !deletedRecordIds.has(r.id));
 if (typeof loadSalesData === 'function') await loadSalesData(currentCompMode);
 if (typeof autoFillTotalSoldQuantity === 'function') autoFillTotalSoldQuantity();
 } catch (error) {
-console.error('Failed to load sales data.', error);
+console.error('Failed to load sales data.', _safeErr(error));
 showToast('Failed to load sales data.', 'error');
 if (typeof loadSalesData === 'function') setTimeout(() => loadSalesData(currentCompMode), 500);
 }
@@ -763,14 +839,14 @@ const keys = ['factory_inventory_data', 'factory_production_history',
 const dataMap = await idb.getBatch(keys);
 const freshInv = dataMap.get('factory_inventory_data');
 if (Array.isArray(freshInv)) {
-const map = new Map(freshInv.map(r => [r.id, r]));
-(factoryInventoryData || []).forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
+const map = new Map((factoryInventoryData || []).filter(r => r && r.id).map(r => [r.id, r]));
+freshInv.forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
 factoryInventoryData = Array.from(map.values()).filter(r => !deletedRecordIds.has(r.id));
 }
 const freshHist = dataMap.get('factory_production_history');
 if (Array.isArray(freshHist)) {
-const map = new Map(freshHist.map(r => [r.id, r]));
-(factoryProductionHistory || []).forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
+const map = new Map((factoryProductionHistory || []).filter(r => r && r.id).map(r => [r.id, r]));
+freshHist.forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
 factoryProductionHistory = Array.from(map.values()).filter(r => !deletedRecordIds.has(r.id));
 }
 const freshFormulas = dataMap.get('factory_default_formulas');
@@ -788,7 +864,7 @@ if (typeof updateFactorySummaryCard === 'function') updateFactorySummaryCard();
 if (typeof renderFactoryInventory === 'function') renderFactoryInventory();
 if (typeof renderFactoryHistory === 'function') renderFactoryHistory();
 } catch (error) {
-console.error('Failed to render data.', error);
+console.error('Failed to render data.', _safeErr(error));
 showToast('Failed to render data.', 'error');
 if (typeof updateFactoryUnitsAvailableStats === 'function') setTimeout(updateFactoryUnitsAvailableStats, 500);
 }
@@ -799,26 +875,26 @@ await idb.init();
 const dataMap = await idb.getBatch(['expenses', 'payment_entities', 'payment_transactions']);
 const freshExp = dataMap.get('expenses');
 if (Array.isArray(freshExp)) {
-const map = new Map(freshExp.map(r => [r.id, r]));
-(expenseRecords || []).forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
+const map = new Map((expenseRecords || []).filter(r => r && r.id).map(r => [r.id, r]));
+freshExp.forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
 expenseRecords = Array.from(map.values()).filter(r => !deletedRecordIds.has(r.id));
 }
 const freshEnt = dataMap.get('payment_entities');
 if (Array.isArray(freshEnt)) {
-const map = new Map(freshEnt.map(r => [r.id, r]));
-(paymentEntities || []).forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
+const map = new Map((paymentEntities || []).filter(r => r && r.id).map(r => [r.id, r]));
+freshEnt.forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
 paymentEntities = Array.from(map.values()).filter(r => !deletedRecordIds.has(r.id));
 }
 const freshTx = dataMap.get('payment_transactions');
 if (Array.isArray(freshTx)) {
-const map = new Map(freshTx.map(r => [r.id, r]));
-(paymentTransactions || []).forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
+const map = new Map((paymentTransactions || []).filter(r => r && r.id).map(r => [r.id, r]));
+freshTx.forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
 paymentTransactions = Array.from(map.values()).filter(r => !deletedRecordIds.has(r.id));
 }
 if (typeof refreshPaymentTab === 'function') refreshPaymentTab();
 if (typeof renderEntityTable === 'function') renderEntityTable();
 } catch (error) {
-console.error('Payment tab refresh failed.', error);
+console.error('Payment tab refresh failed.', _safeErr(error));
 showToast('Payment tab refresh failed.', 'error');
 if (typeof refreshPaymentTab === 'function') setTimeout(refreshPaymentTab, 500);
 }
@@ -826,7 +902,7 @@ if (typeof refreshPaymentTab === 'function') setTimeout(refreshPaymentTab, 500);
 async function syncProductionTab() {
 try {
 await idb.init();
-const dataMap = await idb.getBatch(['mfg_pro_pkr', 'naswar_default_settings', 'stock_returns']);
+const dataMap = await idb.getBatch(['mfg_pro_pkr', 'naswar_default_settings', 'stock_returns', 'customer_sales']);
 const freshProd = dataMap.get('mfg_pro_pkr');
 if (Array.isArray(freshProd) && freshProd.length > 0) {
 let fixed = 0;
@@ -843,22 +919,29 @@ if (fixed > 0) {
 await idb.set('mfg_pro_pkr', validated);
 }
 validated.sort((a, b) => compareTimestamps(getRecordTimestamp(b), getRecordTimestamp(a)));
-const map = new Map(validated.map(r => [r.id, r]));
-(db || []).forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
+const map = new Map((db || []).filter(r => r && r.id).map(r => [r.id, r]));
+validated.forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
 db = Array.from(map.values()).filter(r => !deletedRecordIds.has(r.id));
 }
 const freshSettings = dataMap.get('naswar_default_settings');
 if (freshSettings && typeof freshSettings === 'object') defaultSettings = freshSettings;
 const freshReturns = dataMap.get('stock_returns');
 if (Array.isArray(freshReturns)) {
-const map = new Map(freshReturns.map(r => [r.id, r]));
-(stockReturns || []).forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
+const map = new Map((stockReturns || []).filter(r => r && r.id).map(r => [r.id, r]));
+freshReturns.forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
 stockReturns = Array.from(map.values()).filter(r => !deletedRecordIds.has(r.id));
+}
+const freshSalesForProd = dataMap.get('customer_sales');
+if (Array.isArray(freshSalesForProd)) {
+const map = new Map((customerSales || []).filter(r => r && r.id).map(r => [r.id, r]));
+freshSalesForProd.forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
+customerSales = Array.from(map.values()).filter(r => !deletedRecordIds.has(r.id));
 }
 if (typeof refreshUI === 'function') refreshUI();
 if (typeof updateMfgCharts === 'function') updateMfgCharts();
+if (typeof calculateCustomerSale === 'function') calculateCustomerSale();
 } catch (error) {
-console.error('UI refresh failed.', error);
+console.error('UI refresh failed.', _safeErr(error));
 showToast('UI refresh failed.', 'error');
 if (typeof refreshUI === 'function') setTimeout(refreshUI, 500);
 }
@@ -866,17 +949,31 @@ if (typeof refreshUI === 'function') setTimeout(refreshUI, 500);
 async function syncSalesTab() {
 try {
 await idb.init();
-const freshSales = await idb.get('customer_sales', []);
+const salesDataMap = await idb.getBatch(['customer_sales', 'mfg_pro_pkr', 'stock_returns']);
+const freshSales = salesDataMap.get('customer_sales');
 if (Array.isArray(freshSales)) {
 const validated = freshSales.map(r => ensureRecordIntegrity(r, false, true));
 validated.sort((a, b) => compareTimestamps(getRecordTimestamp(b), getRecordTimestamp(a)));
-const map = new Map(validated.map(r => [r.id, r]));
-(customerSales || []).forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
+const map = new Map((customerSales || []).filter(r => r && r.id).map(r => [r.id, r]));
+validated.forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
 customerSales = Array.from(map.values()).filter(r => !deletedRecordIds.has(r.id));
 }
+const freshProdForSales = salesDataMap.get('mfg_pro_pkr');
+if (Array.isArray(freshProdForSales) && freshProdForSales.length > 0) {
+const map = new Map((db || []).filter(r => r && r.id).map(r => [r.id, r]));
+freshProdForSales.forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
+db = Array.from(map.values()).filter(r => !deletedRecordIds.has(r.id));
+}
+const freshReturnsForSales = salesDataMap.get('stock_returns');
+if (Array.isArray(freshReturnsForSales)) {
+const map = new Map((stockReturns || []).filter(r => r && r.id).map(r => [r.id, r]));
+freshReturnsForSales.forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
+stockReturns = Array.from(map.values()).filter(r => !deletedRecordIds.has(r.id));
+}
+if (typeof calculateCustomerSale === 'function') calculateCustomerSale();
 if (typeof refreshCustomerSales === 'function') refreshCustomerSales();
 } catch (error) {
-console.error('Customer data operation failed.', error);
+console.error('Customer data operation failed.', _safeErr(error));
 showToast('Customer data operation failed.', 'error');
 if (typeof refreshCustomerSales === 'function') setTimeout(refreshCustomerSales, 500);
 }
@@ -907,8 +1004,8 @@ if (fixed > 0) {
 await idb.set('rep_sales', validated);
 }
 validated.sort((a, b) => compareTimestamps(getRecordTimestamp(b), getRecordTimestamp(a)));
-const map = new Map(validated.map(r => [r.id, r]));
-(repSales || []).forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
+const map = new Map((repSales || []).filter(r => r && r.id).map(r => [r.id, r]));
+validated.forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
 repSales = Array.from(map.values()).filter(r => !deletedRecordIds.has(r.id));
 }
 const freshRepCustomers = dataMap.get('rep_customers');
@@ -945,26 +1042,14 @@ if (freshTracking && typeof freshTracking === 'object') factoryUnitTracking = fr
 if (typeof refreshRepUI === 'function') refreshRepUI();
 if (typeof updateRepLiveMap === 'function' && appMode === 'admin') updateRepLiveMap();
 } catch (error) {
-console.error('An unexpected error occurred.', error);
+console.error('An unexpected error occurred.', _safeErr(error));
 showToast('An unexpected error occurred.', 'error');
 if (typeof refreshRepUI === 'function') setTimeout(refreshRepUI, 500);
 }
 }
 function startPeriodicSync() {
-if (syncState.syncInterval) {
-clearInterval(syncState.syncInterval);
-}
-syncState.syncInterval = setInterval(() => {
-if (syncState.pendingUpdates.size > 0) {
-processSync();
-}
-}, 2000);
 }
 function stopPeriodicSync() {
-if (syncState.syncInterval) {
-clearInterval(syncState.syncInterval);
-syncState.syncInterval = null;
-}
 }
 const RefreshDebouncer = {
 timers: {
@@ -1029,7 +1114,7 @@ async function reloadDataFromStorage() {
 try {
 await loadAllData();
 } catch (error) {
-console.error('Failed to load app data.', error);
+console.error('Failed to load app data.', _safeErr(error));
 showToast('Failed to load app data.', 'error');
 }
 }
@@ -1039,20 +1124,14 @@ syncState.pendingUpdates.add('all');
 processSync();
 };
 triggerAutoSync();
-const originalShowTab = window.showTab;
-if (typeof originalShowTab === 'function') {
-window.showTab = function(tab) {
-originalShowTab(tab);
+window._notifyOnTabChange = function(tab) {
 setTimeout(() => {
 if (typeof notifyDataChange === 'function') notifyDataChange(tab);
 }, 150);
 };
-}
 window.addEventListener('beforeunload', function() {
 if (typeof stopPeriodicSync === 'function') stopPeriodicSync();
 });
-let paymentEntities = [];
-let paymentTransactions = [];
 let defaultSettings = {
 production: {
 STORE_A: { cost: 0, sale: 0 },
@@ -1118,24 +1197,7 @@ document.getElementById('splash-author').textContent = `— ${randomQuote.author
 setTimeout(() => {
 }, 3800);
 }
-function selectProductionPayment(btn, value) {
-document.querySelectorAll('#paymentStatusContainer .toggle-opt').forEach(b => b.classList.remove('active'));
-btn.classList.add('active');
-window._productionPaymentType = value;
-}
 function updatePaymentStatusVisibility() {
-const storeSelector = document.getElementById('storeSelector');
-const paymentStatusContainer = document.getElementById('paymentStatusContainer');
-if (storeSelector.value === 'STORE_C') {
-paymentStatusContainer.classList.remove('hidden');
-} else {
-paymentStatusContainer.classList.add('hidden');
-const cashBtn = document.getElementById('production-payment-cash');
-const creditBtn = document.getElementById('production-payment-credit');
-if (cashBtn) { cashBtn.classList.add('active'); cashBtn.dataset.paymentValue = 'CASH'; }
-if (creditBtn) { creditBtn.classList.remove('active'); }
-window._productionPaymentType = 'CASH';
-}
 }
 async function recordEntry() {
 if (appMode === 'userrole' && !(window._userRoleAllowedTabs || []).includes('prod')) {
@@ -1187,9 +1249,6 @@ const totalCost = net * costData.dynamicCostPerKg;
 const totalSale = net * salePrice;
 const profit = totalSale - totalCost;
 let paymentStatus = 'CASH';
-if (store === 'STORE_C') {
-paymentStatus = window._productionPaymentType || 'CASH';
-}
 const now = new Date();
 let hours = now.getHours();
 const minutes = now.getMinutes();
@@ -1260,6 +1319,23 @@ calculateNetCash();
 calculateCashTracker();
 showToast("Production record saved successfully!", "success");
 }
+function _dedupDeletionRecordsLocal(arr) {
+  if (!Array.isArray(arr)) return [];
+  const seen = new Map();
+  arr.forEach(r => {
+    if (!r) return;
+    const key = String(r.id || r.recordId || '');
+    if (!key) return;
+    const existing = seen.get(key);
+    if (!existing
+        || (!existing.displayName && r.displayName)
+        || (!existing.snapshot && r.snapshot)
+        || (r.syncedToCloud && !existing.syncedToCloud)) {
+      seen.set(key, r);
+    }
+  });
+  return Array.from(seen.values());
+}
 async function registerDeletion(id, collectionName = 'unknown') {
 if (!id) {
 return;
@@ -1268,14 +1344,21 @@ if (!validateUUID(id)) {
 return;
 }
 const now = getTimestamp();
+const _snapshot = _captureRecordSnapshot(id, collectionName);
 const deletionRecord = {
 id: id,
+recordId: id,        
+recordType: collectionName, 
 deletedAt: now,
 collection: collectionName,
 syncedToCloud: false,
 tombstoned_at: now,
 deleted_by: 'user',
-deletion_version: '2.0'
+deletion_version: '2.0',
+displayName: _snapshot.displayName || null,
+displayDetail: _snapshot.displayDetail || null,
+displayAmount: _snapshot.displayAmount || null,
+snapshot: _snapshot.record || null,
 };
 if (!validateTimestamp(deletionRecord.deletedAt, false)) {
 deletionRecord.deletedAt = now;
@@ -1284,18 +1367,195 @@ deletionRecord.tombstoned_at = now;
 deletedRecordIds.add(id);
 let deletionRecords = await idb.get('deletion_records', []);
 if (!Array.isArray(deletionRecords)) deletionRecords = [];
-const existingIndex = deletionRecords.findIndex(r => r.id === id);
+const _sid = String(id);
+const existingIndex = deletionRecords.findIndex(r => String(r.id) === _sid || String(r.recordId) === _sid);
 if (existingIndex >= 0) {
 deletionRecords[existingIndex] = deletionRecord;
 } else {
 deletionRecords.push(deletionRecord);
 }
-await idb.set('deletion_records', deletionRecords);
+const _deduped = _dedupDeletionRecordsLocal(deletionRecords);
+await idb.set('deletion_records', _deduped);
 await idb.set('deleted_records', Array.from(deletedRecordIds));
 triggerAutoSync();
 await uploadDeletionToCloud(deletionRecord);
 await cleanupOldDeletions();
 }
+function _captureRecordSnapshot(id, collectionName) {
+  const result = { displayName: null, displayDetail: null, displayAmount: null, record: null };
+  try {
+    let record = null;
+    const searches = [
+      [customerSales,            r => r.id === id],
+      [paymentTransactions,      r => r.id === id],
+      [repSales,                 r => r.id === id],
+      [expenseRecords,           r => r.id === id],
+      [db,                       r => r.id === id],
+      [factoryProductionHistory, r => r.id === id],
+      [stockReturns,             r => r.id === id],
+      [salesHistory,             r => r.id === id],
+      [paymentEntities,          r => r.id === id],
+      [factoryInventoryData,     r => r.id === id],
+    ];
+    for (const [arr, pred] of searches) {
+      if (Array.isArray(arr)) { record = arr.find(pred); if (record) break; }
+    }
+    if (!record) return result;
+    result.record = record;
+    switch (collectionName) {
+      case 'sales':
+        result.displayName   = record.customerName || record.name || 'Unknown Customer';
+        result.displayDetail = [
+          record.supplyStore || record.store || '',
+          record.paymentType ? (record.paymentType === 'CASH' ? 'Cash' : record.paymentType === 'CREDIT' ? 'Credit' : record.paymentType) : '',
+          record.date || ''
+        ].filter(Boolean).join(' · ');
+        result.displayAmount = record.totalValue != null ? `₨${Number(record.totalValue).toLocaleString()}` : (record.quantity ? `${record.quantity} kg` : null);
+        break;
+      case 'transactions':
+        result.displayName   = record.entityName || record.description || record.name || 'Unknown Entity';
+        result.displayDetail = [
+          record.type === 'IN' ? '↓ IN' : record.type === 'OUT' ? '↑ OUT' : (record.type || ''),
+          record.date || ''
+        ].filter(Boolean).join(' · ');
+        result.displayAmount = record.amount != null ? `₨${Number(record.amount).toLocaleString()}` : (record.totalValue != null ? `₨${Number(record.totalValue).toLocaleString()}` : null);
+        break;
+      case 'rep_sales':
+        result.displayName   = record.customerName || record.name || 'Unknown Rep Customer';
+        result.displayDetail = [
+          record.salesRep ? `Rep: ${record.salesRep}` : '',
+          record.paymentType === 'COLLECTION' ? 'Collection' : record.paymentType === 'CREDIT' ? 'Credit' : record.paymentType === 'CASH' ? 'Cash' : (record.paymentType || ''),
+          record.date || ''
+        ].filter(Boolean).join(' · ');
+        result.displayAmount = record.totalValue != null ? `₨${Number(record.totalValue).toLocaleString()}` : (record.quantity ? `${record.quantity} kg` : null);
+        break;
+      case 'expenses':
+        result.displayName   = record.name || 'Unknown Expense';
+        result.displayDetail = record.category || '';
+        result.displayAmount = record.amount != null ? `₨${Number(record.amount).toLocaleString()}` : null;
+        break;
+      case 'production':
+        result.displayName   = record.store ? `Store ${record.store}` : 'Production Batch';
+        result.displayDetail = record.date || '';
+        result.displayAmount = record.net != null ? `${record.net} kg net` : null;
+        break;
+      case 'factory_history':
+        result.displayName   = record.store ? `Factory – ${record.store}` : 'Factory Production';
+        result.displayDetail = record.date || '';
+        result.displayAmount = record.units != null ? `${record.units} units` : null;
+        break;
+      case 'returns':
+        result.displayName   = record.store ? `Return – ${record.store}` : 'Stock Return';
+        result.displayDetail = record.date || '';
+        result.displayAmount = record.quantity != null ? `${record.quantity} kg` : null;
+        break;
+      case 'calculator_history':
+        result.displayName   = record.customerName || record.customer || 'Calculator Entry';
+        result.displayDetail = record.store || record.supplyStore || '';
+        result.displayAmount = record.totalValue != null ? `₨${Number(record.totalValue).toLocaleString()}` : null;
+        break;
+      case 'inventory':
+        result.displayName   = record.name || 'Inventory Item';
+        result.displayDetail = record.supplierName ? `Supplier: ${record.supplierName}` : '';
+        result.displayAmount = record.quantity != null ? `${record.quantity} kg` : null;
+        break;
+      case 'sales_customers':
+        result.displayName   = record.name || null;
+        result.displayDetail = record.phone ? `📞 ${record.phone}` : '';
+        result.displayAmount = null;
+        break;
+      case 'rep_customers':
+        result.displayName   = record.name || null;
+        result.displayDetail = [record.salesRep ? `Rep: ${record.salesRep}` : '', record.phone || ''].filter(Boolean).join(' · ');
+        result.displayAmount = null;
+        break;
+      case 'entities':
+        result.displayName   = record.name || 'Payment Entity';
+        result.displayDetail = record.phone ? `📞 ${record.phone}` : (record.type || '');
+        result.displayAmount = null;
+        break;
+      default:
+        result.displayName   = record.name || record.customerName || record.entityName || record.description || null;
+        result.displayDetail = record.date || null;
+        result.displayAmount = record.amount != null ? `₨${Number(record.amount).toLocaleString()}` : null;
+    }
+  } catch(e) {   }
+  return result;
+}
+_captureRecordSnapshot._fromObj = function(snapshotObj, collectionName) {
+  const result = { displayName: null, displayDetail: null, displayAmount: null };
+  if (!snapshotObj) return result;
+  const s = snapshotObj;
+  try {
+    switch (collectionName) {
+      case 'sales':
+        result.displayName   = s.customerName || s.name || null;
+        result.displayDetail = [s.supplyStore || s.store || '', s.paymentType || '', s.date || ''].filter(Boolean).join(' · ');
+        result.displayAmount = s.totalValue != null ? `₨${Number(s.totalValue).toLocaleString()}` : null;
+        break;
+      case 'rep_sales':
+        result.displayName   = s.customerName || s.name || null;
+        result.displayDetail = [s.salesRep ? `Rep: ${s.salesRep}` : '', s.paymentType || '', s.date || ''].filter(Boolean).join(' · ');
+        result.displayAmount = s.totalValue != null ? `₨${Number(s.totalValue).toLocaleString()}` : null;
+        break;
+      case 'transactions':
+        result.displayName   = s.entityName || s.description || s.name || null;
+        result.displayDetail = [s.type === 'IN' ? '↓ IN' : s.type === 'OUT' ? '↑ OUT' : (s.type || ''), s.date || ''].filter(Boolean).join(' · ');
+        result.displayAmount = s.amount != null ? `₨${Number(s.amount).toLocaleString()}` : null;
+        break;
+      case 'expenses':
+        result.displayName   = s.name || s.description || null;
+        result.displayDetail = [s.category || '', s.date || ''].filter(Boolean).join(' · ');
+        result.displayAmount = s.amount != null ? `₨${Number(s.amount).toLocaleString()}` : null;
+        break;
+      case 'production':
+        result.displayName   = s.store ? `Production – ${s.store}` : 'Production Batch';
+        result.displayDetail = s.date || '';
+        result.displayAmount = s.net != null ? `${s.net} kg` : null;
+        break;
+      case 'returns':
+        result.displayName   = s.store ? `Return – ${s.store}` : 'Stock Return';
+        result.displayDetail = s.date || '';
+        result.displayAmount = s.quantity != null ? `${s.quantity} kg` : null;
+        break;
+      case 'factory_history':
+        result.displayName   = s.store ? `Factory – ${s.store}` : 'Factory Production';
+        result.displayDetail = s.date || '';
+        result.displayAmount = s.units != null ? `${s.units} units` : null;
+        break;
+      case 'calculator_history':
+        result.displayName   = s.customerName || s.customer || s.name || 'Calculator Entry';
+        result.displayDetail = s.supplyStore || s.store || '';
+        result.displayAmount = s.totalValue != null ? `₨${Number(s.totalValue).toLocaleString()}` : null;
+        break;
+      case 'inventory':
+        result.displayName   = s.name || 'Inventory Item';
+        result.displayDetail = s.supplierName ? `Supplier: ${s.supplierName}` : '';
+        result.displayAmount = s.quantity != null ? `${s.quantity} kg` : null;
+        break;
+      case 'sales_customers':
+        result.displayName   = s.name || null;
+        result.displayDetail = s.phone ? `📞 ${s.phone}` : '';
+        result.displayAmount = null;
+        break;
+      case 'rep_customers':
+        result.displayName   = s.name || null;
+        result.displayDetail = [s.salesRep ? `Rep: ${s.salesRep}` : '', s.phone || ''].filter(Boolean).join(' · ');
+        result.displayAmount = null;
+        break;
+      case 'entities':
+        result.displayName   = s.name || 'Payment Entity';
+        result.displayDetail = s.phone ? `📞 ${s.phone}` : (s.type || '');
+        result.displayAmount = null;
+        break;
+      default:
+        result.displayName   = s.name || s.customerName || s.entityName || s.description || null;
+        result.displayDetail = s.date || null;
+        result.displayAmount = s.amount != null ? `₨${Number(s.amount).toLocaleString()}` : null;
+    }
+  } catch(e) {   }
+  return result;
+};
 async function uploadDeletionToCloud(deletionRecord) {
 if (!firebaseDB || typeof currentUser === 'undefined' || !currentUser) {
 return;
@@ -1322,7 +1582,13 @@ recordId: String(deletionRecord.id),
 deletedAt: firebase.firestore.Timestamp.fromMillis(deletionRecord.deletedAt),
 collection: deletionRecord.collection,
 recordType: deletionRecord.collection,
-expiresAt: firebase.firestore.Timestamp.fromMillis(deletionRecord.deletedAt + (90 * 24 * 60 * 60 * 1000))
+expiresAt: firebase.firestore.Timestamp.fromMillis(deletionRecord.deletedAt + (90 * 24 * 60 * 60 * 1000)),
+displayName: deletionRecord.displayName || null,
+displayDetail: deletionRecord.displayDetail || null,
+displayAmount: deletionRecord.displayAmount || null,
+snapshot: deletionRecord.snapshot ? (typeof sanitizeForFirestore === 'function' ? sanitizeForFirestore({...deletionRecord.snapshot}) : deletionRecord.snapshot) : null,
+deleted_by: deletionRecord.deleted_by || 'user',
+deletion_version: deletionRecord.deletion_version || '2.0'
 });
 if (deletionRecord.collection && deletionRecord.collection !== 'unknown') {
 const itemRef = userRef.collection(deletionRecord.collection).doc(String(deletionRecord.id));
@@ -1332,14 +1598,14 @@ await batch.commit();
 trackFirestoreWrite(2);
 let deletionRecords = await idb.get('deletion_records', []);
 if (Array.isArray(deletionRecords)) {
-const index = deletionRecords.findIndex(r => r.id === deletionRecord.id);
+const index = deletionRecords.findIndex(r => String(r.id) === String(deletionRecord.id) || String(r.recordId) === String(deletionRecord.id));
 if (index > -1) {
 deletionRecords[index].syncedToCloud = true;
 await idb.set('deletion_records', deletionRecords);
 }
 }
 } catch (error) {
-console.error('Failed to save data locally.', error);
+console.error('Failed to save data locally.', _safeErr(error));
 showToast('Failed to save data locally.', 'error');
 if (typeof OfflineQueue !== 'undefined') {
 await OfflineQueue.add({
@@ -1357,9 +1623,11 @@ const threeMonthsAgo = Date.now() - (90 * 24 * 60 * 60 * 1000);
 let deletionRecords = await idb.get('deletion_records', []);
 const validDeletions = deletionRecords.filter(record => record.deletedAt > threeMonthsAgo);
 if (validDeletions.length !== deletionRecords.length) {
+const expiredIds = new Set(
+  deletionRecords.filter(r => r.deletedAt <= threeMonthsAgo).map(r => r.id)
+);
+expiredIds.forEach(id => deletedRecordIds.delete(id));
 await idb.set('deletion_records', validDeletions);
-deletedRecordIds.clear();
-validDeletions.forEach(record => deletedRecordIds.add(record.id));
 await idb.set('deleted_records', Array.from(deletedRecordIds));
 }
 if (firebaseDB && typeof currentUser !== 'undefined' && currentUser) {
@@ -1376,7 +1644,7 @@ batch.delete(doc.ref);
 await batch.commit();
 }
 } catch (error) {
-console.error('Failed to save data locally.', error);
+console.error('Failed to save data locally.', _safeErr(error));
 showToast('Failed to save data locally.', 'error');
 }
 }
@@ -1434,9 +1702,9 @@ const totalOut = entityTransactions.filter(t => t.type === 'OUT').reduce((s, t) 
 const statsEl = document.getElementById('manageEntityStats');
 let balanceHtml = '';
 if (balance > 0) {
-balanceHtml = `<span class="u-danger-bold" >Payable: ${safeToFixed(balance, 2)}</span>`;
+balanceHtml = `<span class="u-danger-bold" >Payable: ${fmtAmt(balance)}</span>`;
 } else if (balance < 0) {
-balanceHtml = `<span class="u-text-emerald u-fw-800" >Receivable: ${safeToFixed(Math.abs(balance), 2)}</span>`;
+balanceHtml = `<span class="u-text-emerald u-fw-800" >Receivable: ${fmtAmt(Math.abs(balance))}</span>`;
 } else {
 balanceHtml = `<span class="u-text-accent u-fw-800" >Balance Settled</span>`;
 }
@@ -1444,10 +1712,10 @@ statsEl.innerHTML = `
 ${balanceHtml}
 <span style="display:inline-flex; gap:8px; margin-left:12px; flex-wrap:wrap;">
 <span style="background:rgba(52,217,116,0.15); color:var(--accent-emerald); padding:2px 8px; border-radius:10px; font-size:0.7rem; font-weight:700;">
-IN: ${safeToFixed(totalIn, 2)}
+IN: ${fmtAmt(totalIn)}
 </span>
 <span style="background:rgba(255,77,109,0.15); color:var(--danger); padding:2px 8px; border-radius:10px; font-size:0.7rem; font-weight:700;">
-OUT: ${safeToFixed(totalOut, 2)}
+OUT: ${fmtAmt(totalOut)}
 </span>
 </span>`;
 const list = document.getElementById('entityManagementHistoryList');
@@ -1496,7 +1764,7 @@ const badgeBg = isOut ? 'rgba(220, 38, 38, 0.1)' : 'rgba(5, 150, 105, 0.1)';
 const badgeColor = isOut ? 'var(--danger)' : 'var(--accent-emerald)';
 const label = isOut ? 'PAYMENT OUT' : 'PAYMENT IN';
 const item = document.createElement('div');
-item.className = 'cust-history-item';
+item.className = `cust-history-item${t.isSettled ? ' is-settled-record' : ''}`;
 item.innerHTML = `
 <div class="cust-history-info">
 <div class="u-mono-bold" >${formatDisplayDate(t.date)}</div>
@@ -1505,9 +1773,9 @@ ${t.isMerged ? _mergedBadgeHtml(t) : ''}
 </div>
 <div style="text-align:right; margin-right:10px;">
 <span style="background:${badgeBg}; color:${badgeColor}; padding:2px 6px; border-radius:4px; font-size:0.65rem; font-weight:700;">${label}</span>
-<div class="${colorClass}" style="font-size:0.9rem; margin-top:2px;">${safeToFixed(t.amount, 2)}</div>
+<div class="${colorClass}" style="font-size:0.9rem; margin-top:2px;">${fmtAmt(t.amount)}</div>
 </div>
-<button class="btn btn-sm btn-danger u-p-4-8" onclick="deleteEntityTransaction('${esc(t.id)}')">⌫</button>
+${t.isMerged ? '' : `<button class="btn btn-sm btn-danger u-p-4-8" onclick="deleteEntityTransaction('${esc(t.id)}')">⌫</button>`}
 `;
 list.appendChild(item);
 });
@@ -1637,72 +1905,16 @@ const _dtTypeLabel = _dt.type === 'IN' ? 'Payment Received (IN)' : 'Payment Made
 const _dtAmount = (parseFloat(_dt.amount) || 0).toFixed(2);
 const _dtDate = _dt.date || 'Unknown date';
 const _dtDesc = _dt.description ? `\nNote: ${_dt.description}` : '';
-const _dtPayable = _dt.isPayable === true && _dt.type === 'OUT';
-const _dtSupplierMats = _dtPayable
-? factoryInventoryData.filter(m => String(m.supplierId) === String(_dt.entityId))
-: [];
 let _dtMsg = `Delete this ${_dtTypeLabel}?`;
 _dtMsg += `\n\nEntity: ${_dtEntityName}`;
 _dtMsg += `\nAmount: ${_dtAmount}`;
 _dtMsg += `\nDate: ${_dtDate}`;
 if (_dtDesc) _dtMsg += _dtDesc;
-if (_dtPayable && _dtSupplierMats.length > 0) {
-_dtMsg += `\n\n↩ Supplier debt reversal: This payment will be unrecorded and ${_dtSupplierMats.length} raw material${_dtSupplierMats.length !== 1 ? 's' : ''} for "${_dtEntityName}" will revert to outstanding payable status.`;
-} else if (_dt.type === 'IN') {
-_dtMsg += `\n\n↩ This received payment will be removed from the entity balance.`;
-}
 _dtMsg += `\n\nThis cannot be undone.`;
 if (await showGlassConfirm(_dtMsg, { title: `Delete ${_dt.type === 'IN' ? 'Payment IN' : 'Payment OUT'}`, confirmText: "Delete", danger: true })) {
 try {
-const transaction = _dt;
-const supplierId = transaction.entityId;
-const wasPayable = transaction.isPayable === true;
-const transactionType = transaction.type;
-if (wasPayable && transactionType === 'OUT') {
-const supplierMaterials = factoryInventoryData.filter(m =>
-String(m.supplierId) === String(supplierId)
-);
-supplierMaterials.forEach(mat => {
-const originalAmount = parseFloat((mat.totalValue || (mat.purchaseCost && mat.purchaseQuantity ? mat.purchaseCost * mat.purchaseQuantity : mat.quantity * mat.cost) || 0).toFixed(2));
-mat.totalPayable = originalAmount;
-mat.paymentStatus = 'pending';
-delete mat.paidDate;
-mat.updatedAt = getTimestamp();
-});
-const remainingPayments = paymentTransactions
-.filter(t =>
-t.id !== id &&
-t.isPayable === true &&
-t.type === 'OUT' &&
-String(t.entityId) === String(supplierId)
-)
-.sort((a, b) => new Date(a.date || a.createdAt || 0) - new Date(b.date || b.createdAt || 0));
-const sortedMaterials = supplierMaterials.slice().sort((a, b) =>
-new Date(a.purchaseDate || a.date || a.createdAt || 0) -
-new Date(b.purchaseDate || b.date || b.createdAt || 0)
-);
-remainingPayments.forEach(payment => {
-let remaining = parseFloat(payment.amount) || 0;
-for (const mat of sortedMaterials) {
-if (remaining <= 0) break;
-if (mat.totalPayable <= 0) continue;
-if (remaining >= mat.totalPayable) {
-remaining -= mat.totalPayable;
-mat.totalPayable = 0;
-mat.paymentStatus = 'paid';
-mat.paidDate = payment.date;
-} else {
-mat.totalPayable = parseFloat((mat.totalPayable - remaining).toFixed(2));
-remaining = 0;
-}
-}
-});
-for (const mat of supplierMaterials) {
-await unifiedSave('factory_inventory_data', factoryInventoryData, mat);
-}
-}
 paymentTransactions = paymentTransactions.filter(t => t.id !== id);
-await unifiedDelete('payment_transactions', paymentTransactions, id);
+await unifiedDelete('payment_transactions', paymentTransactions, id, { strict: true });
 notifyDataChange('payments');
 triggerAutoSync();
 const entity = paymentEntities.find(e => String(e.id) === String(currentEntityId));
@@ -1721,34 +1933,52 @@ async function deleteCurrentEntity() {
 if(!currentEntityId) return;
 const _entityToDel = paymentEntities.find(e => String(e.id) === String(currentEntityId));
 const _entityName = _entityToDel ? _entityToDel.name : 'this entity';
+if (_entityToDel?.isArchived) {
+showToast('This entity is already archived', 'info');
+return;
+}
 const _entityTxs = paymentTransactions.filter(t => String(t.entityId) === String(currentEntityId));
 const hasTrans = _entityTxs.length > 0;
 const _totalIn = _entityTxs.filter(t => t.type === 'IN').reduce((s,t) => s + (parseFloat(t.amount)||0), 0);
 const _totalOut = _entityTxs.filter(t => t.type === 'OUT').reduce((s,t) => s + (parseFloat(t.amount)||0), 0);
-let msg = `Permanently delete "${_entityName}"?`;
+let msg = `Archive "${_entityName}"?`;
 if (hasTrans) {
-msg += `\n\n⚠ This entity has ${_entityTxs.length} transaction${_entityTxs.length !== 1 ? 's' : ''} on record`;
-if (_totalIn > 0) msg += `\n • Received: ${_totalIn.toFixed(2)}`;
-if (_totalOut > 0) msg += `\n • Paid out: ${_totalOut.toFixed(2)}`;
-msg += `\n\nAll transaction history will be permanently deleted.`;
+msg += `\n\n This entity has ${_entityTxs.length} transaction${_entityTxs.length !== 1 ? 's' : ''} on record`;
+if (_totalIn > 0) msg += `\n • Received: ${fmtAmt(_totalIn)}`;
+if (_totalOut > 0) msg += `\n • Paid out: ${fmtAmt(_totalOut)}`;
+msg += `\n\nAll transactions will be retained and marked as SETTLED.`;
 }
-msg += `\n\nThis cannot be undone.`;
-if (await showGlassConfirm(msg, { title: `Delete Entity`, confirmText: "Delete", danger: true })) {
+msg += `\n\nThe entity will be marked as Archived and hidden from active lists. History is preserved.`;
+if (await showGlassConfirm(msg, { title: `Archive Entity`, confirmText: "Archive", danger: false })) {
 try {
-const associatedTransactions = paymentTransactions.filter(t => t.entityId === currentEntityId);
-paymentEntities = paymentEntities.filter(e => e.id !== currentEntityId);
-paymentTransactions = paymentTransactions.filter(t => t.entityId !== currentEntityId);
-await unifiedDelete('payment_entities', paymentEntities, currentEntityId);
-for (const trans of associatedTransactions) {
-await deleteRecordFromFirestore('payment_transactions', trans.id);
+const entityIdx = paymentEntities.findIndex(e => String(e.id) === String(currentEntityId));
+if (entityIdx !== -1) {
+paymentEntities[entityIdx].isArchived = true;
+paymentEntities[entityIdx].archivedAt = getTimestamp();
+paymentEntities[entityIdx].updatedAt = getTimestamp();
+await saveWithTracking('payment_entities', paymentEntities);
+await saveRecordToFirestore('payment_entities', paymentEntities[entityIdx]);
 }
+for (const trans of _entityTxs) {
+if (!trans.isSettled) {
+trans.isSettled = true;
+trans.settledAt = getTimestamp();
+trans.settledBy = 'entity_archived';
+trans.updatedAt = getTimestamp();
+}
+}
+if (_entityTxs.length > 0) {
 await saveWithTracking('payment_transactions', paymentTransactions);
+for (const trans of _entityTxs) {
+await saveRecordToFirestore('payment_transactions', trans);
+}
+}
 notifyDataChange('entities');
 closeEntityDetailsOverlay();
 if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
-showToast("Entity deleted successfully", "success");
+showToast("Entity archived. History preserved.", "success");
 } catch (error) {
-showToast('Failed to delete entity. Please try again.', 'error');
+showToast('Failed to archive entity. Please try again.', 'error');
 }
 }
 }
@@ -1762,7 +1992,7 @@ let status = "Settled";
 if(bal > 0) status = "Payable (You Owe)";
 if(bal < 0) status = "Receivable (Owes You)";
 const safeName = safeReplace(e.name, /,/g, " ");
-csvContent += `"${safeName}","${e.type}","${e.phone || ''}",${safeToFixed(bal, 2)},"${status}"\n`;
+csvContent += `"${safeName}","${e.type}","${e.phone || ''}",${fmtAmt(bal)},"${status}"\n`;
 });
 const encodedUri = encodeURI(csvContent);
 const link = document.createElement("a");
@@ -1773,7 +2003,6 @@ link.click();
 document.body.removeChild(link);
 showToast("Entity list exported", "success");
 }
-
 function _pdfMergedPeriodLabel(record) {
   const ms = record.mergedSummary;
   const dr = ms && ms.dateRange;
@@ -1796,12 +2025,10 @@ function _pdfMergedPeriodLabel(record) {
   }
   return 'Prev. Year';
 }
-
 function _pdfMergedCountLabel(record) {
   const cnt = record.mergedRecordCount || (record.mergedSummary && record.mergedSummary.recordCount);
   return cnt ? `${cnt} txn${cnt !== 1 ? 's' : ''} merged` : 'year-end merge';
 }
-
 function _pdfDrawMergedSectionHeader(doc, yPos, pageW, label) {
   const purpleLight = [245, 235, 255];
   const purpleDark  = [126, 34, 206];
@@ -1915,15 +2142,15 @@ const buildTxRow = (t, runBal) => {
   runBal.val += isOut ? -amt : amt;
   let balDisplay;
   if (Math.abs(runBal.val) < 0.01) balDisplay = 'SETTLED';
-  else balDisplay = 'Rs ' + safeToFixed(Math.abs(runBal.val), 2);
+  else balDisplay = 'Rs ' + fmtAmt(Math.abs(runBal.val));
   let desc = (t.description || '-').substring(0, 35);
   if (isSupplierPmt) desc = '\u21a9 Supplier Pmt\n' + desc;
   return [
     formatDisplayDate(t.date),
     desc,
     t.type,
-    isOut ? 'Rs ' + safeToFixed(amt, 2) : '-',
-    !isOut ? 'Rs ' + safeToFixed(amt, 2) : '-',
+    isOut ? 'Rs ' + fmtAmt(amt) : '-',
+    !isOut ? 'Rs ' + fmtAmt(amt) : '-',
     balDisplay
   ];
 };
@@ -1932,12 +2159,11 @@ if (mergedTxns.length > 0) {
   const mergedRunBal = { val: 0 };
   const mergedRows = mergedTxns.map(t => {
     const row = buildTxRow(t, mergedRunBal);
-
     const ms = t.mergedSummary || {};
     const periodLabel = _pdfMergedPeriodLabel(t);
     const countLabel  = _pdfMergedCountLabel(t);
-    const origIn  = ms.originalIn  != null ? 'In: Rs '  + safeToFixed(ms.originalIn,  2) : '';
-    const origOut = ms.originalOut != null ? 'Out: Rs ' + safeToFixed(ms.originalOut, 2) : '';
+    const origIn  = ms.originalIn  != null ? 'In: Rs '  + fmtAmt(ms.originalIn) : '';
+    const origOut = ms.originalOut != null ? 'Out: Rs ' + fmtAmt(ms.originalOut) : '';
     const summary = [periodLabel, countLabel, origIn, origOut].filter(Boolean).join('\n');
     row[1] = summary.substring(0, 70);
     return row;
@@ -1945,8 +2171,8 @@ if (mergedTxns.length > 0) {
   const mTotOut = mergedTxns.filter(t => t.type === 'OUT').reduce((s,t) => s+(parseFloat(t.amount)||0), 0);
   const mTotIn  = mergedTxns.filter(t => t.type === 'IN' ).reduce((s,t) => s+(parseFloat(t.amount)||0), 0);
   const mFin    = mTotIn - mTotOut;
-  mergedRows.push(['', 'SUBTOTAL', '', 'Rs '+safeToFixed(mTotOut,2), 'Rs '+safeToFixed(mTotIn,2),
-    Math.abs(mFin)<0.01?'SETTLED':'Rs '+safeToFixed(Math.abs(mFin),2)]);
+  mergedRows.push(['', 'SUBTOTAL', '', 'Rs '+fmtAmt(mTotOut), 'Rs '+fmtAmt(mTotIn),
+    Math.abs(mFin)<0.01?'SETTLED':'Rs '+fmtAmt(Math.abs(mFin))]);
   doc.autoTable({
     startY: yPos,
     head: [['Date', 'Year Period / Summary', 'Type', 'Payment OUT', 'Payment IN', 'Balance']],
@@ -1994,14 +2220,14 @@ const totalIn  = normalTxns.filter(t => t.type === 'IN' ).reduce((s, t) => s + (
 const finalBal = totalIn - totalOut;
 let finalBalDisplay;
 if (Math.abs(finalBal) < 0.01) finalBalDisplay = 'SETTLED';
-else finalBalDisplay = 'Rs ' + safeToFixed(Math.abs(finalBal), 2);
+else finalBalDisplay = 'Rs ' + fmtAmt(Math.abs(finalBal));
 if (normalTxns.length > 0) {
   doc.setFontSize(8.5); doc.setFont(undefined, 'bold');
   doc.setTextColor(...headerColor);
   doc.text('INDIVIDUAL TRANSACTIONS', 14, yPos);
   doc.setTextColor(80, 80, 80); doc.setFont(undefined, 'normal');
   yPos += 5;
-  txRows.push(['', 'TOTAL', '', 'Rs ' + safeToFixed(totalOut, 2), 'Rs ' + safeToFixed(totalIn, 2), finalBalDisplay]);
+  txRows.push(['', 'TOTAL', '', 'Rs ' + fmtAmt(totalOut), 'Rs ' + fmtAmt(totalIn), finalBalDisplay]);
   doc.autoTable({
     startY: yPos,
     head: [['Date', 'Description', 'Type', 'Payment OUT', 'Payment IN', 'Running Balance']],
@@ -2038,9 +2264,9 @@ doc.setFillColor(245, 245, 245);
 doc.roundedRect(14, afterTx, pageW - 28, 14, 2, 2, 'F');
 doc.setFontSize(8.5); doc.setFont(undefined, 'normal');
 doc.setTextColor(220, 53, 69);
-doc.text(`Total OUT: Rs ${safeToFixed(totalOut, 2)}`, 20, afterTx + 9);
+doc.text(`Total OUT: Rs ${fmtAmt(totalOut)}`, 20, afterTx + 9);
 doc.setTextColor(40, 167, 69);
-doc.text(`Total IN: Rs ${safeToFixed(totalIn, 2)}`, 75, afterTx + 9);
+doc.text(`Total IN: Rs ${fmtAmt(totalIn)}`, 75, afterTx + 9);
 doc.setTextColor(Math.abs(finalBal) < 0.01 ? 100 : finalBal < 0 ? 220 : 40,
 Math.abs(finalBal) < 0.01 ? 100 : finalBal < 0 ? 53 : 167,
 Math.abs(finalBal) < 0.01 ? 100 : finalBal < 0 ? 69 : 69);
@@ -2087,23 +2313,23 @@ const status = mat.paymentStatus === 'paid' || remaining <= 0
 ? 'PARTIAL'
 : 'PENDING';
 const qtyStr = mat.purchaseQuantity && mat.purchaseUnitName && mat.conversionFactor && mat.conversionFactor !== 1
-? `${safeToFixed(mat.purchaseQuantity, 2)} ${mat.purchaseUnitName}\n(${safeToFixed(mat.quantity || 0, 2)} kg)`
-: `${safeToFixed(mat.quantity || 0, 2)} kg`;
+? `${fmtAmt(mat.purchaseQuantity)} ${mat.purchaseUnitName}\n(${fmtAmt(mat.quantity || 0)} kg)`
+: `${fmtAmt(mat.quantity || 0)} kg`;
 return [
 formatDisplayDate(mat.purchaseDate || mat.date || mat.createdAt || '') || '-',
 (mat.name || 'Material').substring(0, 25),
 qtyStr,
-'Rs ' + safeToFixed(originalAmt, 2),
-paid > 0 ? 'Rs ' + safeToFixed(paid, 2) : '-',
-remaining > 0 ? 'Rs ' + safeToFixed(remaining, 2) : '-',
+'Rs ' + fmtAmt(originalAmt),
+paid > 0 ? 'Rs ' + fmtAmt(paid) : '-',
+remaining > 0 ? 'Rs ' + fmtAmt(remaining) : '-',
 status
 ];
 });
 matRows.push([
 '', 'TOTAL', '',
-'Rs ' + safeToFixed(totalInvoice, 2),
-'Rs ' + safeToFixed(totalPaid, 2),
-'Rs ' + safeToFixed(totalRemaining, 2),
+'Rs ' + fmtAmt(totalInvoice),
+'Rs ' + fmtAmt(totalPaid),
+'Rs ' + fmtAmt(totalRemaining),
 totalRemaining <= 0 ? 'CLEARED' : ''
 ]);
 doc.autoTable({
@@ -2144,12 +2370,12 @@ doc.setFillColor(255, 245, 230);
 doc.roundedRect(14, afterMat, pageW - 28, 14, 2, 2, 'F');
 doc.setFontSize(8.5); doc.setFont(undefined, 'normal');
 doc.setTextColor(50, 50, 50);
-doc.text(`Total Invoiced: Rs ${safeToFixed(totalInvoice, 2)}`, 20, afterMat + 9);
+doc.text(`Total Invoiced: Rs ${fmtAmt(totalInvoice)}`, 20, afterMat + 9);
 doc.setTextColor(40, 167, 69);
-doc.text(`Paid: Rs ${safeToFixed(totalPaid, 2)}`, 88, afterMat + 9);
+doc.text(`Paid: Rs ${fmtAmt(totalPaid)}`, 88, afterMat + 9);
 doc.setTextColor(totalRemaining > 0 ? 220 : 100, totalRemaining > 0 ? 53 : 100, totalRemaining > 0 ? 69 : 100);
 doc.setFont(undefined, 'bold');
-doc.text(`Outstanding Payable: Rs ${safeToFixed(totalRemaining, 2)}`, 138, afterMat + 9);
+doc.text(`Outstanding Payable: Rs ${fmtAmt(totalRemaining)}`, 138, afterMat + 9);
 }
 }
 const pageCount = doc.internal.getNumberOfPages();
@@ -2190,13 +2416,13 @@ if (!window.jspdf || !window.jspdf.jsPDF) throw new Error("Failed to load PDF li
 let transactions = customerSales.filter(s =>
 s &&
 s.customerName === customerName &&
-s.isRepModeEntry !== true &&
-(!s.salesRep || s.salesRep === 'NONE')
+isDirectSale(s)
 );
 const now = new Date();
 const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 if (range !== 'all') {
 transactions = transactions.filter(t => {
+if (t.transactionType === 'OLD_DEBT') return true;
 if (!t.date) return false;
 const d = new Date(t.date);
 switch(range) {
@@ -2249,12 +2475,9 @@ doc.setDrawColor(...hdrColor); doc.setLineWidth(0.5);
 doc.line(14, yPos, pageW - 14, yPos);
 yPos += 5;
 if (transactions.length > 0) {
-// Use stored unitPrice (set at save/merge time) or fixed getSalePriceForStore —
-// never divide totalValue/quantity which gives a weighted average that changes
-// after partial payments and differs from the canonical factory setting.
 const getSalePrice = (t) => {
   if (t.unitPrice && t.unitPrice > 0) return t.unitPrice;
-  return getSalePriceForStore(t.supplyStore || 'STORE_A');
+  return getEffectiveSalePriceForCustomer(t.customerName, t.supplyStore || 'STORE_A');
 };
 const buildSaleRow = (t, runBal) => {
   const pt = t.paymentType || 'CASH';
@@ -2266,22 +2489,22 @@ const buildSaleRow = (t, runBal) => {
     typeLabel = 'OLD DEBT';
     detailLabel = t.notes || 'Brought forward from previous records';
   } else if (pt === 'CASH') {
-    const val = t.totalValue || (t.quantity || 0) * getSalePrice(t);
+    const val = getSaleTransactionValue(t);
     debit = val; credit = val;
     typeLabel = 'CASH';
-    detailLabel = `${safeToFixed(t.quantity||0,2)} kg \xd7 Rs ${safeToFixed(getSalePrice(t),0)}\n${t.supplyStore?getStoreLabel(t.supplyStore):''}`;
+    detailLabel = `${fmtAmt(t.quantity||0)} kg \xd7 Rs ${fmtAmt(getSalePrice(t))}\n${t.supplyStore?getStoreLabel(t.supplyStore):''}`;
   } else if (pt === 'CREDIT' && !t.creditReceived) {
-    const val = t.totalValue || (t.quantity || 0) * getSalePrice(t);
+    const val = getSaleTransactionValue(t);
     const partial = parseFloat(t.partialPaymentReceived) || 0;
     debit = val; credit = partial;
     typeLabel = partial > 0 ? 'CREDIT\n(PARTIAL)' : 'CREDIT';
-    detailLabel = `${safeToFixed(t.quantity||0,2)} kg \xd7 Rs ${safeToFixed(getSalePrice(t),0)}`;
-    if (partial > 0) detailLabel += `\nPaid: Rs ${safeToFixed(partial,2)} | Due: Rs ${safeToFixed(val-partial,2)}`;
+    detailLabel = `${fmtAmt(t.quantity||0)} kg \xd7 Rs ${fmtAmt(getSalePrice(t))}`;
+    if (partial > 0) detailLabel += `\nPaid: Rs ${fmtAmt(partial)} | Due: Rs ${fmtAmt(val-partial)}`;
   } else if (pt === 'CREDIT' && t.creditReceived) {
-    const val = t.totalValue || (t.quantity || 0) * getSalePrice(t);
+    const val = getSaleTransactionValue(t);
     debit = val; credit = val;
     typeLabel = 'CREDIT\n(PAID)';
-    detailLabel = `${safeToFixed(t.quantity||0,2)} kg \xd7 Rs ${safeToFixed(getSalePrice(t),0)}`;
+    detailLabel = `${fmtAmt(t.quantity||0)} kg \xd7 Rs ${fmtAmt(getSalePrice(t))}`;
     displayDate = formatDisplayDate(t.creditReceivedDate || t.date);
   } else if (pt === 'COLLECTION') {
     credit = parseFloat(t.totalValue) || 0;
@@ -2297,10 +2520,10 @@ const buildSaleRow = (t, runBal) => {
   runBal.val += (debit - credit);
   let balDisplay;
   if (Math.abs(runBal.val) < 0.01) balDisplay = 'SETTLED';
-  else if (runBal.val > 0) balDisplay = 'Rs ' + safeToFixed(runBal.val, 2);
-  else balDisplay = 'OVERPAID\nRs ' + safeToFixed(Math.abs(runBal.val), 2);
+  else if (runBal.val > 0) balDisplay = 'Rs ' + fmtAmt(runBal.val);
+  else balDisplay = 'OVERPAID\nRs ' + fmtAmt(Math.abs(runBal.val));
   return { row: [displayDate, typeLabel, detailLabel.substring(0,55),
-    debit>0?'Rs '+safeToFixed(debit,2):'-', credit>0?'Rs '+safeToFixed(credit,2):'-', balDisplay],
+    debit>0?'Rs '+fmtAmt(debit):'-', credit>0?'Rs '+fmtAmt(credit):'-', balDisplay],
     debit, credit, qty: t.quantity||0 };
 };
 const mergedSalesTxns = transactions.filter(t => t.isMerged === true);
@@ -2318,21 +2541,21 @@ if (mergedSalesTxns.length > 0) {
     const details = [
       periodLabel,
       countLabel,
-      cashS > 0 ? `Cash sales: Rs ${safeToFixed(cashS,2)}` : '',
-      !isSettled ? `Net due: Rs ${safeToFixed(netOut,2)}` : 'Settled'
+      cashS > 0 ? `Cash sales: Rs ${fmtAmt(cashS)}` : '',
+      !isSettled ? `Net due: Rs ${fmtAmt(netOut)}` : 'Settled'
     ].filter(Boolean).join('\n');
     mRunBal.val += netOut;
-    const balTxt = isSettled ? 'SETTLED' : 'Rs ' + safeToFixed(netOut, 2);
+    const balTxt = isSettled ? 'SETTLED' : 'Rs ' + fmtAmt(netOut);
     const pt = t.paymentType || 'CASH';
     const typeLabel = isSettled ? 'SETTLED\n(MERGED)' : (pt === 'CREDIT' ? 'CREDIT\n(MERGED)' : 'CASH\n(MERGED)');
     return [formatDisplayDate(t.date), typeLabel, details.substring(0,70),
-      netOut>0?'Rs '+safeToFixed(netOut,2):'-', isSettled?'Rs '+safeToFixed(cashS,2):'-', balTxt];
+      netOut>0?'Rs '+fmtAmt(netOut):'-', isSettled?'Rs '+fmtAmt(cashS):'-', balTxt];
   });
   const mNetTotal = mergedSalesTxns.reduce((s,t)=>{
     const ms=t.mergedSummary||{}; return s+(ms.netOutstanding||t.totalValue||0);},0);
   mergedRows.push(['','SUBTOTAL',`${mergedSalesTxns.length} year-end record${mergedSalesTxns.length!==1?'s':''}`,
-    mNetTotal>0?'Rs '+safeToFixed(mNetTotal,2):'-','',
-    mNetTotal<=0.01?'SETTLED':'Rs '+safeToFixed(mNetTotal,2)]);
+    mNetTotal>0?'Rs '+fmtAmt(mNetTotal):'-','',
+    mNetTotal<=0.01?'SETTLED':'Rs '+fmtAmt(mNetTotal)]);
   doc.autoTable({
     startY: yPos,
     head: [['Date', 'Type', 'Year Period / Summary', 'Outstanding', 'Settled', 'Balance']],
@@ -2378,9 +2601,9 @@ if (normalSalesTxns.length > 0) {
   doc.text('INDIVIDUAL TRANSACTIONS', 14, yPos);
   doc.setTextColor(80,80,80); doc.setFont(undefined,'normal');
   yPos += 5;
-  txRows.push(['TOTALS','',`${safeToFixed(totQty,2)} kg total`,
-    'Rs '+safeToFixed(totDebit,2),'Rs '+safeToFixed(totCredit,2),
-    Math.abs(finalBal)<0.01?'SETTLED':(finalBal>0?'DUE\nRs '+safeToFixed(finalBal,2):'OVERPAID\nRs '+safeToFixed(Math.abs(finalBal),2))]);
+  txRows.push(['TOTALS','',`${fmtAmt(totQty)} kg total`,
+    'Rs '+fmtAmt(totDebit),'Rs '+fmtAmt(totCredit),
+    Math.abs(finalBal)<0.01?'SETTLED':(finalBal>0?'DUE\nRs '+fmtAmt(finalBal):'OVERPAID\nRs '+fmtAmt(Math.abs(finalBal)))]);
   doc.autoTable({
     startY: yPos,
     head: [['Date', 'Type', 'Details', 'Debit (Sale)', 'Credit (Rcvd)', 'Balance']],
@@ -2422,16 +2645,16 @@ doc.setDrawColor(...hdrColor); doc.setLineWidth(0.3);
 doc.roundedRect(14, afterY, pageW - 28, 20, 2, 2, 'S');
 doc.setFontSize(8); doc.setFont(undefined, 'normal');
 doc.setTextColor(220, 53, 69);
-doc.text(`Total Debit (Sales): Rs ${safeToFixed(totDebit, 2)}`, 20, afterY + 7);
+doc.text(`Total Debit (Sales): Rs ${fmtAmt(totDebit)}`, 20, afterY + 7);
 doc.setTextColor(40, 167, 69);
-doc.text(`Total Credit (Rcvd): Rs ${safeToFixed(totCredit, 2)}`, 20, afterY + 14);
+doc.text(`Total Credit (Rcvd): Rs ${fmtAmt(totCredit)}`, 20, afterY + 14);
 doc.setTextColor(Math.abs(finalBal) < 0.01 ? 100 : finalBal > 0 ? 220 : 40,
 Math.abs(finalBal) < 0.01 ? 100 : finalBal > 0 ? 53 : 167,
 Math.abs(finalBal) < 0.01 ? 100 : finalBal > 0 ? 69 : 69);
 doc.setFont(undefined, 'bold');
 const balStr = Math.abs(finalBal) < 0.01 ? 'SETTLED'
-: finalBal > 0 ? `Outstanding Due: Rs ${safeToFixed(finalBal, 2)}`
-: `Overpaid by: Rs ${safeToFixed(Math.abs(finalBal), 2)}`;
+: finalBal > 0 ? `Outstanding Due: Rs ${fmtAmt(finalBal)}`
+: `Overpaid by: Rs ${fmtAmt(Math.abs(finalBal))}`;
 doc.text(balStr, 110, afterY + 10.5);
 }
 } else {
@@ -2456,32 +2679,20 @@ showToast("PDF exported successfully", "success");
 showToast("Error generating PDF: " + error.message, "error");
 }
 }
-
-// SRI hashes only for self-hosted / pinned builds where the hash is known-good.
-// Chart.js is loaded WITHOUT an integrity hash — CDN-served JS can vary between
-// patch builds even at the same semver URL, making SRI hashes unreliable on CDNs.
 const SCRIPT_INTEGRITY = {
   'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js':
     'sha256-4C8gBRoAE0XFxW0C7SsQ+X/TBkHSFM3YMwVaF4F8hk=',
   'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js':
     'sha256-0ZQJSA5vPBL+6L5uyIjovZ/m7VBpAOUGc7BHOH/RBHE='
-  // Chart.js intentionally omitted — no SRI, loaded by URL only
 };
-
-// Track in-flight script loads to prevent duplicate injection
 const _scriptLoadPromises = {};
-
 function loadScript(url, integrity) {
-  // If already resolved (script tag present and presumably executed)
   const existing = document.querySelector('script[src="' + url + '"]');
   if (existing && !existing.dataset.failed) {
-    // If it's already in the DOM and not marked failed, wait for it or resolve
     if (_scriptLoadPromises[url]) return _scriptLoadPromises[url];
     return Promise.resolve();
   }
-  // If there's already an in-flight promise for this URL, reuse it
   if (_scriptLoadPromises[url]) return _scriptLoadPromises[url];
-
   _scriptLoadPromises[url] = new Promise((resolve, reject) => {
     const script = document.createElement('script');
     script.src = url;
@@ -2495,12 +2706,10 @@ function loadScript(url, integrity) {
       resolve();
     };
     script.onerror = () => {
-      // Mark failed and remove so a clean retry can be attempted
       script.dataset.failed = '1';
       document.head.removeChild(script);
       delete _scriptLoadPromises[url];
       if (sri) {
-        // SRI mismatch — retry once without the integrity attribute
         const fallback = document.createElement('script');
         fallback.src = url;
         fallback.crossOrigin = 'anonymous';
@@ -2513,32 +2722,26 @@ function loadScript(url, integrity) {
     };
     document.head.appendChild(script);
   });
-
   return _scriptLoadPromises[url];
 }
-
-// Chart.js CDN URLs in priority order — first reachable one wins
 const _CHARTJS_URLS = [
   'https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js',
   'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js',
   'https://unpkg.com/chart.js@4.4.4/dist/chart.umd.min.js'
 ];
-
 let _chartJsPromise = null;
 function loadChartJs() {
   if (window.Chart) return Promise.resolve();
   if (_chartJsPromise) return _chartJsPromise;
-  // Try each CDN URL in sequence — no SRI on any of them
   _chartJsPromise = (async () => {
     for (const url of _CHARTJS_URLS) {
       try {
         await loadScript(url);
-        if (window.Chart) return; // success
+        if (window.Chart) return; 
       } catch (e) {
         console.warn('Chart.js CDN failed, trying next:', url, e.message);
       }
     }
-    // All CDNs failed
     _chartJsPromise = null;
     throw new Error('Chart.js could not be loaded from any CDN.');
   })();
@@ -2582,13 +2785,8 @@ endDate = new Date('2100-12-31');
 let rawData = {
 totalProductionValue: 0,
 totalProductionQuantity: 0,
-productionCredits: 0,
-totalSalesValue: 0,
-totalSalesQuantity: 0,
 salesCash: 0,
 salesCredits: 0,
-repSalesValue: 0,
-repSalesQuantity: 0,
 repSalesCash: 0,
 repSalesCredits: 0,
 calculatorCash: 0,
@@ -2604,21 +2802,12 @@ const itemDate = new Date(item.date);
 if (itemDate >= startDate && itemDate <= endDate) {
 rawData.totalProductionValue += item.totalSale || 0;
 rawData.totalProductionQuantity += item.net || 0;
-if (item.store === 'STORE_C') {
-  if (item.isMerged) {
-    rawData.productionCredits += (item.creditSaleNet || 0);
-  } else if (item.paymentStatus === 'CREDIT') {
-    rawData.productionCredits += item.totalSale || 0;
-  }
-}
 }
 });
 customerSales.forEach(sale => {
 const saleDate = new Date(sale.date);
 if (saleDate >= startDate && saleDate <= endDate) {
 if (!isDirectSale(sale)) return; 
-rawData.totalSalesValue += sale.totalValue || 0;
-rawData.totalSalesQuantity += sale.quantity || 0;
 if (sale.isMerged && sale.mergedSummary) {
 const ms = sale.mergedSummary;
 rawData.salesCash    += (ms.cashSales    || 0);
@@ -2626,7 +2815,14 @@ rawData.salesCredits += (ms.unpaidCredit || 0);
 } else if (sale.paymentType === 'CASH' || sale.creditReceived) {
 rawData.salesCash += sale.totalValue || 0;
 } else if (sale.paymentType === 'CREDIT' && !sale.creditReceived) {
-rawData.salesCredits += sale.totalValue || 0;
+const partialPaid = sale.partialPaymentReceived || 0;
+rawData.salesCredits += Math.max(0, (sale.totalValue || 0) - partialPaid);
+} else if (sale.paymentType === 'COLLECTION') {
+rawData.salesCash += sale.totalValue || 0;
+rawData.salesCredits -= sale.totalValue || 0;
+} else if (sale.paymentType === 'PARTIAL_PAYMENT') {
+rawData.salesCash += sale.totalValue || 0;
+rawData.salesCredits -= sale.totalValue || 0;
 }
 }
 });
@@ -2653,7 +2849,6 @@ rawData.paymentsOut += transaction.amount;
 }
 }
 });
-
 if (Array.isArray(expenseRecords)) {
 expenseRecords.forEach(exp => {
 if (exp.isMerged !== true) return; 
@@ -2664,15 +2859,12 @@ rawData.expenses += (parseFloat(exp.amount) || 0);
 }
 });
 }
-const netProductionValue = Math.max(0, rawData.totalProductionValue - rawData.totalSalesValue);
 const netSalesCash = rawData.salesCash - rawData.repSalesCash;
 const netSalesCredits = rawData.salesCredits - rawData.repSalesCredits;
 const netCalculatorDebt = rawData.calculatorCredits - rawData.calculatorRecovered;
-const netProductionQuantity = Math.max(0, rawData.totalProductionQuantity - rawData.totalSalesQuantity);
 const finalTotals = {
-productionValue: netProductionValue,
-productionQuantity: netProductionQuantity,
-productionCredits: rawData.productionCredits,
+productionValue: rawData.totalProductionValue,
+productionQuantity: rawData.totalProductionQuantity,
 salesTabCash: netSalesCash,
 salesTabCredits: netSalesCredits,
 calculatorCash: rawData.calculatorCash,
@@ -2681,29 +2873,26 @@ paymentsIn: rawData.paymentsIn,
 paymentsOut: rawData.paymentsOut,
 expenses: rawData.expenses
 };
-const netCash = finalTotals.productionValue - finalTotals.productionCredits +
+const netCash = finalTotals.productionValue +
 finalTotals.salesTabCash + finalTotals.calculatorCash +
 finalTotals.paymentsIn - finalTotals.paymentsOut - finalTotals.expenses;
 const totalCredits = finalTotals.salesTabCredits +
-finalTotals.calculatorCredits +
-finalTotals.productionCredits;
+finalTotals.calculatorCredits;
 const elCashProdValue = document.getElementById('cash-prod-value');
-if (elCashProdValue) elCashProdValue.textContent = `Rs ${safeValue(finalTotals.productionValue).toFixed(2)}`;
-const elCashProdCredits = document.getElementById('cash-prod-credits');
-if (elCashProdCredits) elCashProdCredits.textContent = `Rs ${safeValue(finalTotals.productionCredits).toFixed(2)}`;
+if (elCashProdValue) elCashProdValue.textContent = `Rs ${fmtAmt(safeValue(finalTotals.productionValue))}`;
 const elCashSalesCash = document.getElementById('cash-sales-cash');
-if (elCashSalesCash) elCashSalesCash.textContent = `Rs ${safeValue(finalTotals.salesTabCash).toFixed(2)}`;
+if (elCashSalesCash) elCashSalesCash.textContent = `Rs ${fmtAmt(safeValue(finalTotals.salesTabCash))}`;
 const elCashCalcCash = document.getElementById('cash-calculator-cash');
-if (elCashCalcCash) elCashCalcCash.textContent = `Rs ${safeValue(finalTotals.calculatorCash).toFixed(2)}`;
+if (elCashCalcCash) elCashCalcCash.textContent = `Rs ${fmtAmt(safeValue(finalTotals.calculatorCash))}`;
 const elCashPayIn = document.getElementById('cash-payments-in');
-if (elCashPayIn) elCashPayIn.textContent = `Rs ${safeValue(finalTotals.paymentsIn).toFixed(2)}`;
+if (elCashPayIn) elCashPayIn.textContent = `Rs ${fmtAmt(safeValue(finalTotals.paymentsIn))}`;
 const elCashPayOut = document.getElementById('cash-payments-out');
-if (elCashPayOut) elCashPayOut.textContent = `Rs ${safeValue(finalTotals.paymentsOut).toFixed(2)}`;
+if (elCashPayOut) elCashPayOut.textContent = `Rs ${fmtAmt(safeValue(finalTotals.paymentsOut))}`;
 const elCashExpenses = document.getElementById('cash-expenses');
-if (elCashExpenses) elCashExpenses.textContent = `Rs ${safeValue(finalTotals.expenses).toFixed(2)}`;
+if (elCashExpenses) elCashExpenses.textContent = `Rs ${fmtAmt(safeValue(finalTotals.expenses))}`;
 const elCashNet = document.getElementById('cash-net-total');
 if (elCashNet) {
-elCashNet.textContent = `Rs ${safeValue(netCash).toFixed(2)}`;
+elCashNet.textContent = `Rs ${fmtAmt(safeValue(netCash))}`;
 if (netCash < 0) {
 elCashNet.style.color = 'var(--danger)';
 } else {
@@ -2711,36 +2900,32 @@ elCashNet.style.color = 'var(--accent-emerald)';
 }
 }
 const elCreditSales = document.getElementById('credit-sales-tab');
-if (elCreditSales) elCreditSales.textContent = `Rs ${safeValue(finalTotals.salesTabCredits).toFixed(2)}`;
+if (elCreditSales) elCreditSales.textContent = `Rs ${fmtAmt(safeValue(finalTotals.salesTabCredits))}`;
 const elCreditCalc = document.getElementById('credit-calculator');
-if (elCreditCalc) elCreditCalc.textContent = `Rs ${safeValue(finalTotals.calculatorCredits).toFixed(2)}`;
-const productionCreditsElement = document.getElementById('credit-production');
-if (productionCreditsElement) {
-productionCreditsElement.textContent = `Rs ${safeValue(finalTotals.productionCredits).toFixed(2)}`;
-}
+if (elCreditCalc) elCreditCalc.textContent = `Rs ${fmtAmt(safeValue(finalTotals.calculatorCredits))}`;
 const elCreditTotal = document.getElementById('credit-total');
-if (elCreditTotal) elCreditTotal.textContent = `Rs ${safeValue(totalCredits).toFixed(2)}`;
+if (elCreditTotal) elCreditTotal.textContent = `Rs ${fmtAmt(safeValue(totalCredits))}`;
 return finalTotals;
 }
 function updateEconomicDashboardWithNetValues(totals, totalCredits) {
 const operatingCashFlow = totals.salesTabCash + totals.calculatorCash;
 const operatingCashElement = document.getElementById('operatingCashFlow');
 if (operatingCashElement) {
-operatingCashElement.textContent = `${safeValue(operatingCashFlow).toFixed(2)}`;
+operatingCashElement.textContent = `${fmtAmt(safeValue(operatingCashFlow))}`;
 }
-document.getElementById('cashDetailDirectSales').textContent = `${safeValue(totals.salesTabCash).toFixed(2)}`;
-document.getElementById('cashDetailRepCollections').textContent = `${safeValue(totals.calculatorCash).toFixed(2)}`;
+document.getElementById('cashDetailDirectSales').textContent = `${fmtAmt(safeValue(totals.salesTabCash))}`;
+document.getElementById('cashDetailRepCollections').textContent = `${fmtAmt(safeValue(totals.calculatorCash))}`;
 const creditTotalElement = document.getElementById('formulaSalesCredit');
 if (creditTotalElement) {
-creditTotalElement.textContent = `${safeValue(totalCredits).toFixed(2)}`;
+creditTotalElement.textContent = `${fmtAmt(safeValue(totalCredits))}`;
 }
 const salesReceivablesElement = document.getElementById('salesReceivables');
 if (salesReceivablesElement) {
-salesReceivablesElement.textContent = `${safeValue(totals.salesTabCredits).toFixed(2)}`;
+salesReceivablesElement.textContent = `${fmtAmt(safeValue(totals.salesTabCredits))}`;
 }
 const productionValueElement = document.getElementById('formulaProdTotal');
 if (productionValueElement) {
-productionValueElement.textContent = `${safeValue(totals.productionValue).toFixed(2)}`;
+productionValueElement.textContent = `${fmtAmt(safeValue(totals.productionValue))}`;
 }
 }
 function openEntityTransactions(entityId) {
@@ -2756,9 +2941,9 @@ else if (t.type === 'OUT') totalOut += amount;
 const netBalance = totalIn - totalOut;
 const _setTC = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
 _setTC('entityTransactionsTitle', `${entity.name || 'Unknown'} - Transactions`);
-_setTC('entityTotalIn', `${safeToFixed(totalIn, 2)}`);
-_setTC('entityTotalOut', `${safeToFixed(totalOut, 2)}`);
-_setTC('entityNetBalance', `${safeToFixed(netBalance, 2)}`);
+_setTC('entityTotalIn', `${fmtAmt(totalIn)}`);
+_setTC('entityTotalOut', `${fmtAmt(totalOut)}`);
+_setTC('entityNetBalance', `${fmtAmt(netBalance)}`);
 _setTC('entityTotalTransactions', entityTransactions.length);
 const transactionsList = document.getElementById('entityTransactionsList');
 transactionsList.innerHTML = '';
@@ -2786,7 +2971,7 @@ ${esc(transaction.description || 'No description')}
 </div>
 <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--glass-border);">
 <span class="u-fs-sm2 u-text-muted" >Amount:</span>
-<span class="${amountClass}" style="font-size: 1.1rem; font-weight: 800;">${safeAmount.toFixed(2)}</span>
+<span class="${amountClass}" style="font-size: 1.1rem; font-weight: 800;">${fmtAmt(safeAmount)}</span>
 </div>
 `;
 transactionsList.appendChild(transactionCard);
@@ -2953,20 +3138,11 @@ const _dpEntityName = _dpEntity ? _dpEntity.name : 'Unknown Entity';
 const _dpTypeLabel = _dpTx?.type === 'IN' ? 'Payment Received (IN)' : 'Payment Made (OUT)';
 const _dpAmount = (parseFloat(_dpTx?.amount) || 0).toFixed(2);
 const _dpDate = _dpTx?.date || 'Unknown date';
-const _dpIsPayable = _dpTx?.isPayable === true && _dpTx?.type === 'OUT';
-const _dpSupMats = _dpIsPayable ? factoryInventoryData.filter(m => String(m.supplierId) === String(_dpTx?.entityId)) : [];
 let _dpMsg = `Delete this ${_dpTypeLabel}?`;
 _dpMsg += `\n\nEntity: ${_dpEntityName}`;
 _dpMsg += `\nAmount: ${_dpAmount}`;
 _dpMsg += `\nDate: ${_dpDate}`;
 if (_dpTx?.description) _dpMsg += `\nNote: ${_dpTx.description}`;
-if (_dpIsPayable && _dpSupMats.length > 0) {
-_dpMsg += `\n\n↩ Supplier payable reversal: This payment will be unrecorded and ${_dpSupMats.length} raw material${_dpSupMats.length !== 1 ? 's' : ''} linked to "${_dpEntityName}" will revert to outstanding payable status.`;
-} else if (_dpTx?.type === 'IN') {
-_dpMsg += `\n\n↩ This received payment will be removed and the entity's receivable balance will be restored.`;
-} else {
-_dpMsg += `\n\n↩ This outgoing payment will be removed from the entity's payment history.`;
-}
 _dpMsg += `\n\nThis cannot be undone.`;
 if (await showGlassConfirm(_dpMsg, { title: `Delete ${_dpTx?.type === 'IN' ? 'Payment IN' : 'Payment OUT'}`, confirmText: "Delete", danger: true })) {
 try {
@@ -2976,64 +3152,8 @@ if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
 if (typeof calculateNetCash === 'function') calculateNetCash();
 return;
 }
-const supplierId = transaction.entityId;
-const wasPayable = transaction.isPayable === true;
-const transactionType = transaction.type;
-if (wasPayable && transactionType === 'OUT') {
-const supplierMaterials = factoryInventoryData.filter(m =>
-String(m.supplierId) === String(supplierId)
-);
-supplierMaterials.forEach(mat => {
-const originalAmount = parseFloat((mat.totalValue || (mat.purchaseCost && mat.purchaseQuantity ? mat.purchaseCost * mat.purchaseQuantity : mat.quantity * mat.cost) || 0).toFixed(2));
-mat.totalPayable = originalAmount;
-mat.paymentStatus = 'pending';
-delete mat.paidDate;
-mat.updatedAt = getTimestamp();
-});
-const remainingPayments = paymentTransactions
-.filter(t =>
-t.id !== id &&
-t.isPayable === true &&
-t.type === 'OUT' &&
-String(t.entityId) === String(supplierId)
-)
-.sort((a, b) => new Date(a.date || a.createdAt || 0) - new Date(b.date || b.createdAt || 0));
-const sortedMaterials = supplierMaterials.slice().sort((a, b) =>
-new Date(a.purchaseDate || a.date || a.createdAt || 0) -
-new Date(b.purchaseDate || b.date || b.createdAt || 0)
-);
-remainingPayments.forEach(payment => {
-let remaining = parseFloat(payment.amount) || 0;
-for (const mat of sortedMaterials) {
-if (remaining <= 0) break;
-if (mat.totalPayable <= 0) continue;
-if (remaining >= mat.totalPayable) {
-remaining -= mat.totalPayable;
-mat.totalPayable = 0;
-mat.paymentStatus = 'paid';
-mat.paidDate = payment.date;
-} else {
-mat.totalPayable = parseFloat((mat.totalPayable - remaining).toFixed(2));
-remaining = 0;
-}
-}
-});
-for (const mat of supplierMaterials) {
-await unifiedSave('factory_inventory_data', factoryInventoryData, mat);
-}
-}
-if (transaction.expenseId) {
-const expense = expenseRecords.find(e => e.id === transaction.expenseId);
-if (expense) {
-expense.paid = false;
-delete expense.paidDate;
-expense.updatedAt = getTimestamp();
-await saveWithTracking('expenses', expenseRecords);
-await saveRecordToFirestore('expenses', expense);
-}
-}
 paymentTransactions = paymentTransactions.filter(t => t.id !== id);
-await unifiedDelete('payment_transactions', paymentTransactions, id);
+await unifiedDelete('payment_transactions', paymentTransactions, id, { strict: true });
 notifyDataChange('payments');
 if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
 if (typeof calculateNetCash === 'function') calculateNetCash();
@@ -3063,13 +3183,8 @@ try {
 let rawData = {
 totalProductionValue: 0,
 totalProductionQuantity: 0,
-productionCredits: 0,
-totalSalesValue: 0,
-totalSalesQuantity: 0,
 salesCash: 0,
 salesCredits: 0,
-repSalesValue: 0,
-repSalesQuantity: 0,
 repSalesCash: 0,
 repSalesCredits: 0,
 calculatorCash: 0,
@@ -3082,18 +3197,9 @@ db.forEach(item => {
 if (item.isReturn) return; 
 rawData.totalProductionValue += item.totalSale || 0;
 rawData.totalProductionQuantity += item.net || 0;
-if (item.store === 'STORE_C') {
-  if (item.isMerged) {
-    rawData.productionCredits += (item.creditSaleNet || 0);
-  } else if (item.paymentStatus === 'CREDIT') {
-    rawData.productionCredits += item.totalSale || 0;
-  }
-}
 });
 customerSales.forEach(sale => {
 if (!isDirectSale(sale)) return; 
-rawData.totalSalesValue += sale.totalValue || 0;
-rawData.totalSalesQuantity += sale.quantity || 0;
 if (sale.isMerged && sale.mergedSummary) {
 const ms = sale.mergedSummary;
 rawData.salesCash    += (ms.cashSales    || 0);
@@ -3101,7 +3207,14 @@ rawData.salesCredits += (ms.unpaidCredit || 0);
 } else if (sale.paymentType === 'CASH' || sale.creditReceived) {
 rawData.salesCash += sale.totalValue || 0;
 } else if (sale.paymentType === 'CREDIT' && !sale.creditReceived) {
-rawData.salesCredits += sale.totalValue || 0;
+const partialPaid = sale.partialPaymentReceived || 0;
+rawData.salesCredits += Math.max(0, (sale.totalValue || 0) - partialPaid);
+} else if (sale.paymentType === 'COLLECTION') {
+rawData.salesCash += sale.totalValue || 0;
+rawData.salesCredits -= sale.totalValue || 0;
+} else if (sale.paymentType === 'PARTIAL_PAYMENT') {
+rawData.salesCash += sale.totalValue || 0;
+rawData.salesCredits -= sale.totalValue || 0;
 }
 });
 salesHistory.forEach(item => {
@@ -3122,7 +3235,6 @@ rawData.paymentsOut += trans.amount;
 }
 }
 });
-
 if (Array.isArray(expenseRecords)) {
 expenseRecords.forEach(exp => {
 if (exp.isMerged !== true) return; 
@@ -3131,21 +3243,18 @@ totalExpenses += (parseFloat(exp.amount) || 0);
 }
 });
 }
-const netProductionValue = Math.max(0, rawData.totalProductionValue - rawData.totalSalesValue);
 const netSalesCash = rawData.salesCash - rawData.repSalesCash;
 const netSalesCredits = rawData.salesCredits - rawData.repSalesCredits;
 const combinedMarketDebt = rawData.calculatorTotalIssued - rawData.calculatorTotalRecovered;
-const cashInHand = netProductionValue - rawData.productionCredits +
+const cashInHand = rawData.totalProductionValue +
 netSalesCash + rawData.calculatorCash +
 rawData.paymentsIn - rawData.paymentsOut;
 let AccountsReceivable = {
-productionCredits: rawData.productionCredits,
 salesTabCredit: netSalesCredits,
 calculatorCredit: Math.max(0, combinedMarketDebt),
 total: 0
 };
-AccountsReceivable.total = AccountsReceivable.productionCredits +
-AccountsReceivable.salesTabCredit +
+AccountsReceivable.total = AccountsReceivable.salesTabCredit +
 AccountsReceivable.calculatorCredit;
 let RawMaterialsValue = 0;
 factoryInventoryData.forEach(item => {
@@ -3225,7 +3334,6 @@ if (trans.isExpense && trans.category === 'operating') {
 CurrentLiabilities.accountsPayable.otherPayables.operating += trans.amount;
 }
 });
-
 if (Array.isArray(expenseRecords)) {
 expenseRecords.forEach(exp => {
 if (exp.isMerged !== true) return; 
@@ -3252,12 +3360,12 @@ const indicators = {
 cashInHand: cashInHand,
 cashDetails: {
 directSales: netSalesCash,
-productionCash: netProductionValue - rawData.productionCredits,
+productionCash: rawData.totalProductionValue,
 repCollections: rawData.calculatorCash,
 paymentsIn: rawData.paymentsIn,
 paymentsOut: rawData.paymentsOut
 },
-operatingCashFlow: netSalesCash + (netProductionValue - rawData.productionCredits) + rawData.calculatorCash,
+operatingCashFlow: netSalesCash + rawData.totalProductionValue + rawData.calculatorCash,
 assets: {
 cash: cashInHand,
 rawMaterials: RawMaterialsValue,
@@ -3266,7 +3374,6 @@ accountsReceivable: AccountsReceivable.total,
 currentAssetsTotal: CURRENT_ASSETS
 },
 receivables: {
-productionCredits: AccountsReceivable.productionCredits,
 salesTab: AccountsReceivable.salesTabCredit,
 calculator: AccountsReceivable.calculatorCredit,
 total: AccountsReceivable.total
@@ -3294,58 +3401,54 @@ return null;
 function updateEconomicDashboard(indicators) {
 const netCashValueElement = document.getElementById('netCashValue');
 if (netCashValueElement) {
-netCashValueElement.textContent = `${safeValue(indicators.cashInHand).toFixed(2)}`;
+netCashValueElement.textContent = `${fmtAmt(safeValue(indicators.cashInHand))}`;
 netCashValueElement.style.color = indicators.cashInHand < 0 ? 'var(--danger)' :
 indicators.cashInHand < 10000 ? 'var(--warning)' :
 'var(--accent-emerald)';
 }
 const operatingCashElement = document.getElementById('operatingCashFlow');
 if (operatingCashElement) {
-operatingCashElement.textContent = `${safeValue(indicators.operatingCashFlow).toFixed(2)}`;
+operatingCashElement.textContent = `${fmtAmt(safeValue(indicators.operatingCashFlow))}`;
 }
-document.getElementById('cashDetailDirectSales').textContent = `${safeValue(indicators.cashDetails.directSales).toFixed(2)}`;
-document.getElementById('cashDetailProductionCash').textContent = `${safeValue(indicators.cashDetails.productionCash).toFixed(2)}`;
-document.getElementById('cashDetailRepCollections').textContent = `${safeValue(indicators.cashDetails.repCollections).toFixed(2)}`;
-document.getElementById('cashDetailPaymentsIn').textContent = `${safeValue(indicators.cashDetails.paymentsIn).toFixed(2)}`;
-document.getElementById('cashDetailPaymentsOut').textContent = `${safeValue(indicators.cashDetails.paymentsOut).toFixed(2)}`;
-document.getElementById('cashDetailNet').textContent = `${safeValue(indicators.cashInHand).toFixed(2)}`;
-document.getElementById('formulaProdTotal').textContent = `${safeValue(indicators.assets.cash).toFixed(2)}`;
-document.getElementById('formulaRawMaterials').textContent = `${safeValue(indicators.assets.rawMaterials).toFixed(2)}`;
-document.getElementById('formulaUnitsValue').textContent = `${safeValue(indicators.assets.formulaUnits).toFixed(2)}`;
-const productionCreditsElement = document.getElementById('productionReceivables');
-if (productionCreditsElement) {
-productionCreditsElement.textContent = `${safeValue(indicators.receivables.productionCredits).toFixed(2)}`;
-}
+document.getElementById('cashDetailDirectSales').textContent = `${fmtAmt(safeValue(indicators.cashDetails.directSales))}`;
+document.getElementById('cashDetailProductionCash').textContent = `${fmtAmt(safeValue(indicators.cashDetails.productionCash))}`;
+document.getElementById('cashDetailRepCollections').textContent = `${fmtAmt(safeValue(indicators.cashDetails.repCollections))}`;
+document.getElementById('cashDetailPaymentsIn').textContent = `${fmtAmt(safeValue(indicators.cashDetails.paymentsIn))}`;
+document.getElementById('cashDetailPaymentsOut').textContent = `${fmtAmt(safeValue(indicators.cashDetails.paymentsOut))}`;
+document.getElementById('cashDetailNet').textContent = `${fmtAmt(safeValue(indicators.cashInHand))}`;
+document.getElementById('formulaProdTotal').textContent = `${fmtAmt(safeValue(indicators.assets.cash))}`;
+document.getElementById('formulaRawMaterials').textContent = `${fmtAmt(safeValue(indicators.assets.rawMaterials))}`;
+document.getElementById('formulaUnitsValue').textContent = `${fmtAmt(safeValue(indicators.assets.formulaUnits))}`;
 const salesReceivablesEl = document.getElementById('salesReceivables');
 const calculatorReceivablesEl = document.getElementById('calculatorReceivables');
 const formulaReceivablesEl = document.getElementById('formulaReceivables');
-if (salesReceivablesEl) salesReceivablesEl.textContent = `${safeValue(indicators.receivables.salesTab).toFixed(2)}`;
-if (calculatorReceivablesEl) calculatorReceivablesEl.textContent = `${safeValue(indicators.receivables.calculator).toFixed(2)}`;
-if (formulaReceivablesEl) formulaReceivablesEl.textContent = `${safeValue(indicators.receivables.total).toFixed(2)}`;
+if (salesReceivablesEl) salesReceivablesEl.textContent = `${fmtAmt(safeValue(indicators.receivables.salesTab))}`;
+if (calculatorReceivablesEl) calculatorReceivablesEl.textContent = `${fmtAmt(safeValue(indicators.receivables.calculator))}`;
+if (formulaReceivablesEl) formulaReceivablesEl.textContent = `${fmtAmt(safeValue(indicators.receivables.total))}`;
 const supplierPayablesEl = document.getElementById('supplierPayables');
 const entityPayablesEl = document.getElementById('entityPayables');
 const otherPayablesOperatingEl = document.getElementById('otherPayablesOperating');
 const formulaPayOutEl = document.getElementById('formulaPayOut');
-if (supplierPayablesEl) supplierPayablesEl.textContent = `${safeValue(indicators.liabilities.accountsPayable.supplierPayables).toFixed(2)}`;
-if (entityPayablesEl) entityPayablesEl.textContent = `${safeValue(indicators.liabilities.accountsPayable.entityPayables).toFixed(2)}`;
-if (otherPayablesOperatingEl) otherPayablesOperatingEl.textContent = `${safeValue(indicators.liabilities.accountsPayable.otherPayables.operating).toFixed(2)}`;
-if (formulaPayOutEl) formulaPayOutEl.textContent = `${safeValue(indicators.liabilities.accountsPayable.total).toFixed(2)}`;
+if (supplierPayablesEl) supplierPayablesEl.textContent = `${fmtAmt(safeValue(indicators.liabilities.accountsPayable.supplierPayables))}`;
+if (entityPayablesEl) entityPayablesEl.textContent = `${fmtAmt(safeValue(indicators.liabilities.accountsPayable.entityPayables))}`;
+if (otherPayablesOperatingEl) otherPayablesOperatingEl.textContent = `${fmtAmt(safeValue(indicators.liabilities.accountsPayable.otherPayables.operating))}`;
+if (formulaPayOutEl) formulaPayOutEl.textContent = `${fmtAmt(safeValue(indicators.liabilities.accountsPayable.total))}`;
 const currentAssetsTotalEl = document.getElementById('currentAssetsTotal');
 const currentLiabilitiesTotalEl = document.getElementById('currentLiabilitiesTotal');
-if (currentAssetsTotalEl) currentAssetsTotalEl.textContent = `${safeValue(indicators.assets.currentAssetsTotal).toFixed(2)}`;
-if (currentLiabilitiesTotalEl) currentLiabilitiesTotalEl.textContent = `${safeValue(indicators.liabilities.total).toFixed(2)}`;
+if (currentAssetsTotalEl) currentAssetsTotalEl.textContent = `${fmtAmt(safeValue(indicators.assets.currentAssetsTotal))}`;
+if (currentLiabilitiesTotalEl) currentLiabilitiesTotalEl.textContent = `${fmtAmt(safeValue(indicators.liabilities.total))}`;
 const workingCapitalElement = document.getElementById('formulaPayIn');
 if (workingCapitalElement) {
-workingCapitalElement.textContent = `${safeValue(indicators.workingCapital).toFixed(2)}`;
+workingCapitalElement.textContent = `${fmtAmt(safeValue(indicators.workingCapital))}`;
 workingCapitalElement.style.color = indicators.workingCapital < 0 ? 'var(--danger)' :
 indicators.workingCapital < 50000 ? 'var(--warning)' :
 'var(--accent-emerald)';
 }
-document.getElementById('formulaFinal').textContent = `${safeValue(indicators.totalEnterpriseValue).toFixed(2)}`;
+document.getElementById('formulaFinal').textContent = `${fmtAmt(safeValue(indicators.totalEnterpriseValue))}`;
 const currentRatioElement = document.getElementById('formulaCalcDisc');
 if (currentRatioElement) {
 const currentRatio = safeNumber(parseFloat(indicators.liquidityRatios?.currentRatio), 0);
-currentRatioElement.textContent = currentRatio.toFixed(2);
+currentRatioElement.textContent = safeNumber(currentRatio, 0).toFixed(2);
 currentRatioElement.style.color = currentRatio < 1 ? 'var(--danger)' :
 currentRatio < 2 ? 'var(--warning)' :
 'var(--accent-emerald)';
@@ -3353,1630 +3456,12 @@ currentRatio < 2 ? 'var(--warning)' :
 const quickRatioElement = document.getElementById('quickRatio');
 if (quickRatioElement) {
 const quickRatio = safeNumber(parseFloat(indicators.liquidityRatios?.quickRatio), 0);
-quickRatioElement.textContent = quickRatio.toFixed(2);
+quickRatioElement.textContent = safeNumber(quickRatio, 0).toFixed(2);
 }
 const cashRatioElement = document.getElementById('cashRatio');
 if (cashRatioElement) {
 const cashRatio = safeNumber(parseFloat(indicators.liquidityRatios?.cashRatio), 0);
-cashRatioElement.textContent = cashRatio.toFixed(2);
-}
-}
-function getCostPerUnit(storeType) {
-const formula = factoryDefaultFormulas[storeType];
-if (!formula || formula.length === 0) return 0;
-let totalMaterialCost = 0;
-formula.forEach(item => {
-totalMaterialCost += (item.cost * item.quantity);
-});
-const additionalCost = factoryAdditionalCosts[storeType] || 0;
-return totalMaterialCost + additionalCost;
-}
-function calculateFactoryInventoryValue() {
-let totalValue = 0;
-if (factoryInventoryData && factoryInventoryData.length > 0) {
-factoryInventoryData.forEach(item => {
-totalValue += (item.quantity * item.cost) || 0;
-});
-}
-const stdTracking = factoryUnitTracking?.standard || { available: 0 };
-const asaanTracking = factoryUnitTracking?.asaan || { available: 0 };
-const stdCostPerUnit = getCostPerUnit('standard');
-const asaanCostPerUnit = getCostPerUnit('asaan');
-totalValue += (stdTracking.available * stdCostPerUnit);
-totalValue += (asaanTracking.available * asaanCostPerUnit);
-return totalValue;
-}
-function updateFactoryInventoryDisplay() {
-const factoryValue = calculateFactoryInventoryValue();
-let rawMaterialsValue = 0;
-if (factoryInventoryData && factoryInventoryData.length > 0) {
-factoryInventoryData.forEach(item => {
-rawMaterialsValue += (item.quantity * item.cost) || 0;
-});
-}
-const stdTracking = factoryUnitTracking?.standard || { available: 0 };
-const asaanTracking = factoryUnitTracking?.asaan || { available: 0 };
-const stdCostPerUnit = getCostPerUnit('standard');
-const asaanCostPerUnit = getCostPerUnit('asaan');
-const formulaUnitsValue = (stdTracking.available * stdCostPerUnit) +
-(asaanTracking.available * asaanCostPerUnit);
-const rawMaterialsEl = document.getElementById('formulaRawMaterials');
-const unitsValueEl = document.getElementById('formulaUnitsValue');
-if (rawMaterialsEl) rawMaterialsEl.textContent = `${safeValue(rawMaterialsValue).toFixed(2)}`;
-if (unitsValueEl) unitsValueEl.textContent = `${safeValue(formulaUnitsValue).toFixed(2)}`;
-}
-function calculatePaymentSummaries() {
-const today = new Date().toISOString().split('T')[0];
-const todayObj = new Date();
-const year = todayObj.getFullYear();
-const month = todayObj.getMonth();
-const day = todayObj.getDate();
-const weekStart = new Date(todayObj);
-weekStart.setDate(day - 6);
-const summaries = {
-day: { in: 0, out: 0, count: 0 },
-week: { in: 0, out: 0, count: 0 },
-month: { in: 0, out: 0, count: 0 },
-year: { in: 0, out: 0, count: 0 }
-};
-paymentTransactions.forEach(transaction => {
-const transDate = new Date(transaction.date);
-const transYear = transDate.getFullYear();
-const transMonth = transDate.getMonth();
-const transDay = transDate.getDate();
-if (transaction.date === today) {
-if (transaction.type === 'IN') summaries.day.in += transaction.amount;
-else summaries.day.out += transaction.amount;
-summaries.day.count++;
-}
-if (transDate >= weekStart && transDate <= todayObj) {
-if (transaction.type === 'IN') summaries.week.in += transaction.amount;
-else summaries.week.out += transaction.amount;
-summaries.week.count++;
-}
-if (transYear === year && transMonth === month) {
-if (transaction.type === 'IN') summaries.month.in += transaction.amount;
-else summaries.month.out += transaction.amount;
-summaries.month.count++;
-}
-if (transYear === year) {
-if (transaction.type === 'IN') summaries.year.in += transaction.amount;
-else summaries.year.out += transaction.amount;
-summaries.year.count++;
-}
-});
-const updateSummary = (prefix, data) => {
-const inEl = document.getElementById(`${prefix}-in`);
-const outEl = document.getElementById(`${prefix}-out`);
-const netEl = document.getElementById(`${prefix}-net`);
-const countEl = document.getElementById(`${prefix}-count`);
-if (inEl) inEl.textContent = `${safeValue(data.in).toFixed(2)}`;
-if (outEl) outEl.textContent = `${safeValue(data.out).toFixed(2)}`;
-if (netEl) netEl.textContent = `${safeValue(data.in - data.out).toFixed(2)}`;
-if (countEl) countEl.textContent = data.count;
-};
-updateSummary('payments-day', summaries.day);
-updateSummary('payments-week', summaries.week);
-updateSummary('payments-month', summaries.month);
-updateSummary('payments-year', summaries.year);
-}
-async function openFactorySettings() {
-try {
-const [
-loadedFormulas,
-loadedCosts,
-loadedFactor,
-loadedPrices,
-loadedTracking
-] = await Promise.all([
-idb.get('factory_default_formulas'),
-idb.get('factory_additional_costs'),
-idb.get('factory_cost_adjustment_factor'),
-idb.get('factory_sale_prices'),
-idb.get('factory_unit_tracking')
-]);
-if (loadedFormulas && typeof loadedFormulas === 'object' &&
-('standard' in loadedFormulas) && ('asaan' in loadedFormulas)) {
-factoryDefaultFormulas = loadedFormulas;
-} else {
-factoryDefaultFormulas = { standard: [], asaan: [] };
-}
-if (loadedCosts && typeof loadedCosts === 'object' &&
-('standard' in loadedCosts) && ('asaan' in loadedCosts)) {
-factoryAdditionalCosts = loadedCosts;
-} else {
-factoryAdditionalCosts = { standard: 0, asaan: 0 };
-}
-if (loadedFactor && typeof loadedFactor === 'object' &&
-('standard' in loadedFactor) && ('asaan' in loadedFactor)) {
-factoryCostAdjustmentFactor = loadedFactor;
-} else {
-factoryCostAdjustmentFactor = { standard: 1, asaan: 1 };
-}
-if (loadedPrices && typeof loadedPrices === 'object' &&
-('standard' in loadedPrices) && ('asaan' in loadedPrices)) {
-factorySalePrices = loadedPrices;
-} else {
-factorySalePrices = { standard: 0, asaan: 0 };
-}
-if (loadedTracking && typeof loadedTracking === 'object' &&
-('standard' in loadedTracking) && ('asaan' in loadedTracking)) {
-factoryUnitTracking = loadedTracking;
-} else {
-factoryUnitTracking = {
-standard: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] },
-asaan: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] }
-};
-}
-} catch (error) {
-showToast('Error loading factory settings. Using defaults.', 'warning');
-factoryDefaultFormulas = { standard: [], asaan: [] };
-factoryAdditionalCosts = { standard: 0, asaan: 0 };
-factoryCostAdjustmentFactor = { standard: 1, asaan: 1 };
-factorySalePrices = { standard: 0, asaan: 0 };
-factoryUnitTracking = {
-standard: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] },
-asaan: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] }
-};
-}
-requestAnimationFrame(() => {
-document.body.style.overflow = 'hidden';
-document.documentElement.style.overflow = 'hidden';
-document.getElementById('factorySettingsOverlay').style.display = 'flex';
-});
-await renderFactorySettingsRows();
-}
-function closeFactorySettings() {
-requestAnimationFrame(() => {
-document.body.style.overflow = '';
-document.documentElement.style.overflow = '';
-document.getElementById('factorySettingsOverlay').style.display = 'none';
-});
-}
-function selectFactoryStore(store, el) {
-currentFactorySettingsStore = store;
-document.querySelectorAll('#factorySettingsOverlay .factory-store-opt').forEach(o => o.classList.remove('active'));
-if(el) el.classList.add('active');
-const container = document.getElementById('factoryRawMaterialsContainer');
-if (container) container.style.opacity = '0.35';
-renderFactorySettingsRows().then(() => {
-requestAnimationFrame(() => {
-if (container) container.style.opacity = '1';
-});
-});
-}
-async function refreshFactorySettingsOverlay() {
-const overlay = document.getElementById('factorySettingsOverlay');
-if (overlay && overlay.style.display === 'flex') {
-await renderFactorySettingsRows();
-}
-}
-async function renderFactorySettingsRows() {
-const container = document.getElementById('factoryRawMaterialsContainer');
-try {
-const [
-savedFormulas,
-savedAdditionalCosts,
-savedCostAdjustmentFactor,
-savedSalePrices,
-savedUnitTracking
-] = await Promise.all([
-idb.get('factory_default_formulas'),
-idb.get('factory_additional_costs'),
-idb.get('factory_cost_adjustment_factor'),
-idb.get('factory_sale_prices'),
-idb.get('factory_unit_tracking')
-]);
-if (savedFormulas && typeof savedFormulas === 'object' &&
-('standard' in savedFormulas) && ('asaan' in savedFormulas)) {
-factoryDefaultFormulas = savedFormulas;
-}
-if (savedAdditionalCosts && typeof savedAdditionalCosts === 'object' &&
-('standard' in savedAdditionalCosts) && ('asaan' in savedAdditionalCosts)) {
-factoryAdditionalCosts = savedAdditionalCosts;
-}
-if (savedCostAdjustmentFactor && typeof savedCostAdjustmentFactor === 'object' &&
-('standard' in savedCostAdjustmentFactor) && ('asaan' in savedCostAdjustmentFactor)) {
-factoryCostAdjustmentFactor = savedCostAdjustmentFactor;
-}
-if (savedSalePrices && typeof savedSalePrices === 'object' &&
-('standard' in savedSalePrices) && ('asaan' in savedSalePrices)) {
-factorySalePrices = savedSalePrices;
-}
-if (savedUnitTracking && typeof savedUnitTracking === 'object' &&
-('standard' in savedUnitTracking) && ('asaan' in savedUnitTracking)) {
-factoryUnitTracking = savedUnitTracking;
-}
-} catch (e) {
-console.error('An unexpected error occurred.', e);
-showToast('An unexpected error occurred.', 'error');
-}
-if (!factoryDefaultFormulas || typeof factoryDefaultFormulas !== 'object') {
-factoryDefaultFormulas = { standard: [], asaan: [] };
-}
-const formula = factoryDefaultFormulas[currentFactorySettingsStore];
-if (!formula || !Array.isArray(formula)) {
-factoryDefaultFormulas[currentFactorySettingsStore] = [];
-}
-let totalRawCost = 0, totalWeight = 0;
-container.innerHTML = '';
-const safeFormula = factoryDefaultFormulas[currentFactorySettingsStore] || [];
-if(safeFormula.length > 0) {
-safeFormula.forEach(ing => {
-totalRawCost += (ing.cost * ing.quantity);
-totalWeight += ing.quantity;
-createFactorySettingRow(container, ing.id, ing.quantity);
-});
-}
-if (!factoryUnitTracking || typeof factoryUnitTracking !== 'object') {
-factoryUnitTracking = {
-standard: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] },
-asaan: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] }
-};
-}
-const available = factoryUnitTracking[currentFactorySettingsStore]?.available || 0;
-if (!factoryAdditionalCosts || typeof factoryAdditionalCosts !== 'object') {
-factoryAdditionalCosts = { standard: 0, asaan: 0 };
-}
-const additionalCost = factoryAdditionalCosts[currentFactorySettingsStore] || 0;
-document.getElementById('additional-cost-per-unit').value = additionalCost;
-if (!factoryCostAdjustmentFactor || typeof factoryCostAdjustmentFactor !== 'object') {
-factoryCostAdjustmentFactor = { standard: 1, asaan: 1 };
-}
-const adjustmentFactor = factoryCostAdjustmentFactor[currentFactorySettingsStore] || 1;
-document.getElementById('cost-adjustment-factor').value = adjustmentFactor;
-if (!factorySalePrices || typeof factorySalePrices !== 'object') {
-factorySalePrices = { standard: 0, asaan: 0 };
-}
-const salePriceStandard = factorySalePrices.standard || 0;
-const salePriceAsaan = factorySalePrices.asaan || 0;
-document.getElementById('sale-price-standard').value = salePriceStandard;
-document.getElementById('sale-price-asaan').value = salePriceAsaan;
-const perUnitCost = totalRawCost + additionalCost;
-const salesCostPerKg = adjustmentFactor > 0 ? perUnitCost / adjustmentFactor : perUnitCost;
-const safeTotalWeight = parseFloat(totalWeight) || 0;
-const _setFS1 = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
-_setFS1('factorySettingsUnitWeight', safeTotalWeight.toFixed(2) + ' kg');
-_setFS1('factorySettingsRawCostPerUnit', await formatCurrency(totalRawCost));
-_setFS1('factorySettingsPerUnit', await formatCurrency(perUnitCost));
-_setFS1('factorySettingsAvailableUnits', available);
-_setFS1('factorySettingsSalesCostPerKg', await formatCurrency(salesCostPerKg));
-}
-function createFactorySettingRow(container, selectedId = '', qtyVal = '') {
-const div = document.createElement('div');
-div.className = 'factory-formula-grid';
-let options = '<option value="">Select Material</option>';
-factoryInventoryData.forEach((i, index) => {
-options += `<option value="${esc(String(i.id))}" ${i.id == selectedId ? 'selected' : ''} data-cost="${i.cost}">${esc(i.name)}</option>`;
-});
-let currentCost = 0;
-if(selectedId) {
-const m = factoryInventoryData.find(i => i.id == selectedId);
-if(m) currentCost = m.cost;
-}
-div.innerHTML = `
-<div class="u-flex-col" >
-<label style="font-size:0.6rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em;">Material</label>
-<select class="factory-mat-select" onchange="updateFactoryRowCost(this)">${options}</select>
-</div>
-<div class="u-flex-col" >
-<label style="font-size:0.6rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em;">Cost (Per Unit)</label>
-<input type="number" class="factory-mat-cost" value="${currentCost}" readonly style="background:rgba(0,0,0,0.05); color:var(--text-muted);">
-</div>
-<div class="u-flex-col" >
-<label style="font-size:0.6rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em;">Qty (kg)</label>
-<input type="number" class="factory-mat-qty" value="${esc(String(qtyVal))}" placeholder="0">
-</div>
-`;
-container.appendChild(div);
-}
-function getColumnLabel(index) {
-let label = '';
-let num = index;
-while (num >= 0) {
-label = String.fromCharCode(65 + (num % 26)) + label;
-num = Math.floor(num / 26) - 1;
-}
-return label;
-}
-function addFactoryMaterialRow() {
-const container = document.getElementById('factoryRawMaterialsContainer');
-createFactorySettingRow(container);
-}
-function updateFactoryRowCost(selectEl) {
-const costInput = selectEl.closest('.factory-formula-grid').querySelector('.factory-mat-cost');
-const selectedOption = selectEl.options[selectEl.selectedIndex];
-const cost = selectedOption.getAttribute('data-cost');
-costInput.value = cost || 0;
-updateFactoryFormulasSummary();
-}
-async function updateFactoryFormulasSummary() {
-const container = document.getElementById('factoryRawMaterialsContainer');
-const rows = container.querySelectorAll('.factory-formula-grid');
-let totalRawCost = 0, totalWeight = 0;
-rows.forEach(row => {
-const sel = row.querySelector('.factory-mat-select');
-const qtyIn = row.querySelector('.factory-mat-qty');
-const costIn = row.querySelector('.factory-mat-cost');
-if(sel && sel.value && qtyIn.value > 0 && costIn.value > 0) {
-totalRawCost += (parseFloat(costIn.value) * parseFloat(qtyIn.value));
-totalWeight += parseFloat(qtyIn.value);
-}
-});
-const additionalCost = parseFloat(document.getElementById('additional-cost-per-unit').value) || 0;
-const adjustmentFactor = parseFloat(document.getElementById('cost-adjustment-factor').value) || 1;
-const perUnitCost = totalRawCost + additionalCost;
-const available = factoryUnitTracking[currentFactorySettingsStore]?.available || 0;
-const salesCostPerKg = adjustmentFactor > 0 ? perUnitCost / adjustmentFactor : perUnitCost;
-const safeTotalWeight = parseFloat(totalWeight) || 0;
-const _setFS = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
-_setFS('factorySettingsUnitWeight', safeTotalWeight.toFixed(2) + ' kg');
-_setFS('factorySettingsRawCostPerUnit', await formatCurrency(totalRawCost));
-_setFS('factorySettingsPerUnit', await formatCurrency(perUnitCost));
-_setFS('factorySettingsAvailableUnits', available);
-_setFS('factorySettingsSalesCostPerKg', await formatCurrency(salesCostPerKg));
-}
-async function saveFactoryFormulas() {
-const container = document.getElementById('factoryRawMaterialsContainer');
-const rows = container.querySelectorAll('.factory-formula-grid');
-const newFormula = [];
-rows.forEach(row => {
-const sel = row.querySelector('.factory-mat-select');
-const qtyIn = row.querySelector('.factory-mat-qty');
-const costIn = row.querySelector('.factory-mat-cost');
-if(sel && sel.value && qtyIn.value > 0 && costIn.value > 0) {
-const item = factoryInventoryData.find(i => i.id == sel.value);
-if(item) {
-newFormula.push({
-id: item.id,
-name: item.name,
-cost: parseFloat(costIn.value),
-quantity: parseFloat(qtyIn.value)
-});
-}
-}
-});
-factoryDefaultFormulas[currentFactorySettingsStore] = newFormula;
-const additionalCost = parseFloat(document.getElementById('additional-cost-per-unit').value) || 0;
-factoryAdditionalCosts[currentFactorySettingsStore] = additionalCost;
-const adjustmentFactor = parseFloat(document.getElementById('cost-adjustment-factor').value) || 1;
-factoryCostAdjustmentFactor[currentFactorySettingsStore] = adjustmentFactor;
-const salePriceStandard = parseFloat(document.getElementById('sale-price-standard').value) || 0;
-const salePriceAsaan = parseFloat(document.getElementById('sale-price-asaan').value) || 0;
-factorySalePrices.standard = salePriceStandard;
-factorySalePrices.asaan = salePriceAsaan;
-try {
-const timestamp = getTimestamp();
-await idb.setBatch([
-['factory_default_formulas', factoryDefaultFormulas],
-['factory_default_formulas_timestamp', timestamp],
-['factory_additional_costs', factoryAdditionalCosts],
-['factory_additional_costs_timestamp', timestamp],
-['factory_cost_adjustment_factor', factoryCostAdjustmentFactor],
-['factory_cost_adjustment_factor_timestamp', timestamp],
-['factory_sale_prices', factorySalePrices],
-['factory_sale_prices_timestamp', timestamp]
-]);
-} catch (e) {
-showToast('Failed to save settings. Please try again.', 'error', 4000);
-return;
-}
-notifyDataChange('all');
-if (database && currentUser) {
-if (window._firestoreNetworkDisabled || !navigator.onLine) {
-const timestamp = getTimestamp();
-const factorySettingsPayload = sanitizeForFirestore({
-default_formulas: factoryDefaultFormulas,
-default_formulas_timestamp: timestamp,
-additional_costs: factoryAdditionalCosts,
-additional_costs_timestamp: timestamp,
-cost_adjustment_factor: factoryCostAdjustmentFactor,
-cost_adjustment_factor_timestamp: timestamp,
-sale_prices: factorySalePrices,
-sale_prices_timestamp: timestamp,
-last_synced: new Date().toISOString()
-});
-if (typeof OfflineQueue !== 'undefined') {
-await OfflineQueue.add({
-action: 'set-doc',
-collection: 'factorySettings',
-docId: 'config',
-data: factorySettingsPayload
-});
-}
-showToast('Settings saved locally — will sync when online', 'warning');
-} else {
-try {
-await pushDataToCloud(true);
-emitSyncUpdate({
-factory_default_formulas: factoryDefaultFormulas,
-factory_sale_prices: factorySalePrices,
-factory_additional_costs: factoryAdditionalCosts,
-factory_cost_adjustment_factor: factoryCostAdjustmentFactor
-});
-} catch (error) {
-const timestamp = getTimestamp();
-if (typeof OfflineQueue !== 'undefined') {
-await OfflineQueue.add({
-action: 'set-doc',
-collection: 'factorySettings',
-docId: 'config',
-data: sanitizeForFirestore({
-default_formulas: factoryDefaultFormulas,
-default_formulas_timestamp: timestamp,
-additional_costs: factoryAdditionalCosts,
-additional_costs_timestamp: timestamp,
-cost_adjustment_factor: factoryCostAdjustmentFactor,
-cost_adjustment_factor_timestamp: timestamp,
-sale_prices: factorySalePrices,
-sale_prices_timestamp: timestamp,
-last_synced: new Date().toISOString()
-})
-});
-}
-showToast('Settings saved locally. Cloud sync will retry automatically.', 'warning');
-}
-}
-}
-triggerAutoSync();
-calculateFactoryProduction();
-updateAllTabsWithFactoryCosts();
-closeFactorySettings();
-showToast('Formula saved successfully!', 'success', 3000);
-}
-function openFactoryInventoryModal() {
-requestAnimationFrame(() => {
-document.body.style.overflow = 'hidden';
-document.documentElement.style.overflow = 'hidden';
-document.getElementById('factoryInventoryOverlay').style.display = 'flex';
-});
-const _facInvT1 = document.getElementById('factoryInventoryModalTitle'); if (_facInvT1) _facInvT1.innerText = 'Add Raw Material';
-const _delBtnHide = document.getElementById('deleteFactoryInventoryBtn'); if (_delBtnHide) _delBtnHide.style.display = 'none';
-clearFactoryInventoryForm();
-editingFactoryInventoryId = null;
-const qtyInput = document.getElementById('factoryMaterialQuantity');
-const conversionInput = document.getElementById('factoryMaterialConversionFactor');
-const costInput = document.getElementById('factoryMaterialCost');
-if (qtyInput && conversionInput && costInput) {
-qtyInput.removeEventListener('input', updateFactoryKgCalculation);
-conversionInput.removeEventListener('input', updateFactoryKgCalculation);
-costInput.removeEventListener('input', updateFactoryKgCalculation);
-qtyInput.addEventListener('input', updateFactoryKgCalculation);
-conversionInput.addEventListener('input', updateFactoryKgCalculation);
-costInput.addEventListener('input', updateFactoryKgCalculation);
-}
-}
-function closeFactoryInventoryModal() {
-requestAnimationFrame(() => {
-document.body.style.overflow = '';
-document.documentElement.style.overflow = '';
-document.getElementById('factoryInventoryOverlay').style.display = 'none';
-});
-}
-function clearFactoryInventoryForm() {
-document.getElementById('factoryMaterialName').value = '';
-document.getElementById('factoryMaterialQuantity').value = '';
-document.getElementById('factoryMaterialConversionFactor').value = '1';
-document.getElementById('factoryMaterialUnitName').value = '';
-document.getElementById('factoryMaterialCost').value = '';
-updateFactoryKgCalculation();
-}
-function editFactoryInventoryItem(id) {
-const item = factoryInventoryData.find(i => i.id === id);
-if(item) {
-openFactoryInventoryModal();
-const _facInvT2 = document.getElementById('factoryInventoryModalTitle'); if (_facInvT2) _facInvT2.innerText = 'Edit Material';
-const _delBtn = document.getElementById('deleteFactoryInventoryBtn');
-if (_delBtn) _delBtn.style.display = '';
-document.getElementById('factoryMaterialName').value = item.name;
-if (item.purchaseQuantity && item.conversionFactor) {
-document.getElementById('factoryMaterialQuantity').value = item.purchaseQuantity;
-document.getElementById('factoryMaterialCost').value = item.purchaseCost;
-document.getElementById('factoryMaterialConversionFactor').value = item.conversionFactor;
-document.getElementById('factoryMaterialUnitName').value = item.purchaseUnitName || '';
-} else {
-document.getElementById('factoryMaterialQuantity').value = item.quantity;
-document.getElementById('factoryMaterialCost').value = item.cost;
-document.getElementById('factoryMaterialConversionFactor').value = 1;
-document.getElementById('factoryMaterialUnitName').value = '';
-}
-updateFactoryKgCalculation();
-const supplierTypeSelect = document.getElementById('factoryMaterialSupplierType');
-const existingSupplierSection = document.getElementById('existingSupplierSection');
-const newSupplierSection = document.getElementById('newSupplierSection');
-if (item.supplierId) {
-supplierTypeSelect.value = 'existing';
-existingSupplierSection.classList.remove('hidden');
-newSupplierSection.classList.add('hidden');
-const supplierInput = document.getElementById('factoryExistingSupplier');
-const supplier = paymentEntities.find(e => String(e.id) === String(item.supplierId));
-if (supplier && supplierInput) {
-supplierInput.value = supplier.name;
-supplierInput.setAttribute('data-supplier-id', item.supplierId);
-}
-showSupplierUnlinkOption(item);
-} else {
-supplierTypeSelect.value = 'none';
-existingSupplierSection.classList.add('hidden');
-newSupplierSection.classList.add('hidden');
-}
-editingFactoryInventoryId = id;
-}
-}
-function updateFactoryKgCalculation() {
-const qty = parseFloat(document.getElementById('factoryMaterialQuantity').value) || 0;
-const conversionFactor = parseFloat(document.getElementById('factoryMaterialConversionFactor').value) || 1;
-const cost = parseFloat(document.getElementById('factoryMaterialCost').value) || 0;
-const totalKg = qty * conversionFactor;
-const totalAmount = qty * cost;
-const kgDisplayElement = document.getElementById('factoryCalculatedKg');
-const amountDisplayElement = document.getElementById('factoryCalculatedAmount');
-if (kgDisplayElement) {
-kgDisplayElement.textContent = totalKg.toFixed(2) + ' kg';
-}
-if (amountDisplayElement) {
-amountDisplayElement.textContent = totalAmount.toFixed(2);
-}
-}
-function showSupplierUnlinkOption(material) {
-const existingSupplierSection = document.getElementById('existingSupplierSection');
-let unlinkButton = existingSupplierSection.querySelector('.unlink-supplier-btn');
-if (!unlinkButton) {
-unlinkButton = document.createElement('button');
-unlinkButton.className = 'btn btn-danger unlink-supplier-btn';
-unlinkButton.style.cssText = 'width: 100%; margin-top: 10px; font-size: 0.8rem;';
-unlinkButton.innerHTML = ' Unlink Supplier & Reverse Transactions';
-unlinkButton.onclick = function(e) {
-e.preventDefault();
-unlinkSupplierConfirmation(material);
-};
-existingSupplierSection.appendChild(unlinkButton);
-}
-}
-async function unlinkSupplierConfirmation(material) {
-const linkedTransactions = paymentTransactions.filter(t =>
-t.materialId === material.id &&
-t.entityId === material.supplierId &&
-t.isPayable === true
-);
-let confirmMsg = ` Unlink ${material.supplierName} from ${material.name}?\n\n`;
-confirmMsg += `This will:\n`;
-confirmMsg += ` Remove supplier association\n`;
-confirmMsg += ` Reset payment status to 'pending'\n`;
-if (linkedTransactions.length > 0) {
-const totalReversed = linkedTransactions.reduce((sum, t) => sum + t.amount, 0);
-confirmMsg += ` Reverse ${linkedTransactions.length} payment transaction(s) totaling ${safeNumber(totalReversed, 0).toFixed(2)}\n`;
-}
-confirmMsg += `\nThe material will be ready to link with a different supplier.`;
-confirmMsg += `\n\nThis cannot be undone.`;
-if (await showGlassConfirm(confirmMsg, { title: `Unlink ${esc(material.supplierName)}`, confirmText: "Unlink", danger: true })) {
-await unlinkSupplierFromMaterial(material, true);
-closeFactoryInventoryModal();
-setTimeout(() => editFactoryInventoryItem(material.id), 100);
-refreshPaymentTab();
-calculateNetCash();
-renderFactoryInventory();
-}
-}
-async function saveFactoryInventoryItem() {
-const name = document.getElementById('factoryMaterialName').value;
-const qty = parseFloat(document.getElementById('factoryMaterialQuantity').value) || 0;
-const cost = parseFloat(document.getElementById('factoryMaterialCost').value) || 0;
-const conversionFactor = parseFloat(document.getElementById('factoryMaterialConversionFactor').value) || 1;
-const unitName = document.getElementById('factoryMaterialUnitName').value.trim() || '';
-const supplierType = document.getElementById('factoryMaterialSupplierType').value;
-if(!name) return showToast("Name required", 'warning');
-try {
-const quantityInKg = qty * conversionFactor;
-const costPerKg = conversionFactor > 0 ? cost / conversionFactor : cost;
-const totalValue = qty * cost;
-const materialId = editingFactoryInventoryId || generateUUID('mat');
-let existingMaterial = null;
-if(editingFactoryInventoryId) {
-const idx = factoryInventoryData.findIndex(i => i.id === editingFactoryInventoryId);
-if(idx !== -1) {
-existingMaterial = factoryInventoryData[idx];
-const oldSupplierId = existingMaterial.supplierId;
-const supplierInput = document.getElementById('factoryExistingSupplier');
-const newSupplierId = supplierInput.getAttribute('data-supplier-id') || supplierInput.value;
-const isSupplierChanging = (supplierType === 'none' && oldSupplierId) ||
-(supplierType === 'existing' && oldSupplierId && String(oldSupplierId) !== String(newSupplierId));
-if (isSupplierChanging) {
-await unlinkSupplierFromMaterial(existingMaterial);
-}
-factoryInventoryData[idx] = {
-...factoryInventoryData[idx],
-name,
-quantity: quantityInKg,
-cost: costPerKg,
-unit: 'kg',
-totalValue,
-purchaseQuantity: qty,
-purchaseCost: cost,
-conversionFactor: conversionFactor,
-purchaseUnitName: unitName
-};
-}
-} else {
-factoryInventoryData.push({
-id: materialId,
-name,
-quantity: quantityInKg,
-cost: costPerKg,
-unit: 'kg',
-totalValue,
-paymentStatus: 'pending',
-syncedAt: new Date().toISOString(),
-purchaseQuantity: qty,
-purchaseCost: cost,
-conversionFactor: conversionFactor,
-purchaseUnitName: unitName
-});
-}
-if (supplierType === 'none') {
-const material = factoryInventoryData.find(m => m.id === materialId);
-if (material) {
-delete material.supplierId;
-delete material.supplierName;
-delete material.supplierContact;
-delete material.supplierType;
-material.paymentStatus = 'pending';
-delete material.totalPayable;
-}
-}
-else if (supplierType === 'existing') {
-const supplierInput = document.getElementById('factoryExistingSupplier');
-const existingSupplierId = supplierInput.getAttribute('data-supplier-id') || supplierInput.value;
-if (existingSupplierId) {
-await linkMaterialToSupplier(materialId, existingSupplierId, totalValue);
-}
-}
-else if (supplierType === 'new') {
-const supplierName = document.getElementById('factorySupplierName').value.trim();
-const supplierPhone = document.getElementById('factorySupplierPhone').value.trim();
-if (supplierName) {
-const newSupplier = await createSupplierFromMaterial({
-name: supplierName,
-phone: supplierPhone,
-materialId: materialId,
-materialName: name,
-materialTotal: totalValue
-});
-if (newSupplier && newSupplier.id) {
-await linkMaterialToSupplier(materialId, newSupplier.id, totalValue);
-}
-}
-}
-const savedMaterial = factoryInventoryData.find(m => m.id === materialId);
-await unifiedSave('factory_inventory_data', factoryInventoryData, savedMaterial);
-notifyDataChange('inventory');
-emitSyncUpdate({ factory_inventory_data: factoryInventoryData });
-if (typeof renderFactoryInventory === 'function') renderFactoryInventory();
-closeFactoryInventoryModal();
-if (typeof calculateNetCash === 'function') calculateNetCash();
-showToast("Material saved successfully!", 'success');
-} catch (error) {
-showToast('Failed to save material. Please try again.', 'error');
-}
-}
-async function unlinkSupplierFromMaterial(material, showToastOnNoSupplier = false) {
-if (!material) {
-showToast('Invalid material data', 'error');
-return;
-}
-if (!material.supplierId) {
-if (showToastOnNoSupplier) {
-showToast('No supplier to unlink', 'info');
-}
-return;
-}
-const supplierId = material.supplierId;
-const materialId = material.id;
-const supplierName = material.supplierName || 'Unknown Supplier';
-const linkedTransactions = paymentTransactions.filter(t =>
-t.materialId === materialId &&
-t.entityId === supplierId &&
-t.isPayable === true
-);
-if (linkedTransactions.length > 0) {
-linkedTransactions.forEach(transaction => {
-paymentTransactions = paymentTransactions.filter(t => t.id !== transaction.id);
-});
-await saveWithTracking('payment_transactions', paymentTransactions);
-for (const removedTx of linkedTransactions) {
-await deleteRecordFromFirestore('payment_transactions', removedTx.id);
-}
-}
-delete material.supplierId;
-delete material.supplierName;
-delete material.supplierContact;
-delete material.supplierType;
-material.paymentStatus = 'pending';
-delete material.totalPayable;
-delete material.paidDate;
-await unifiedSave('factory_inventory_data', factoryInventoryData, material);
-notifyDataChange('all');
-triggerAutoSync();
-await renderFactoryInventory();
-await refreshPaymentTab();
-calculateNetCash();
-showToast(`Unlinked from ${esc(material.name)}`, 'success');
-}
-async function createSupplierFromMaterial(supplierData) {
-const existingSupplier = paymentEntities.find(e =>
-e && e.name && supplierData && supplierData.name && e.name.toLowerCase() === supplierData.name.toLowerCase() && e.type === 'payee'
-);
-if (existingSupplier) {
-return existingSupplier;
-}
-let suppId = generateUUID('supp');
-if (!validateUUID(suppId)) {
-suppId = generateUUID('supp');
-}
-const suppCreatedAt = getTimestamp();
-let supplierEntity = {
-id: suppId,
-name: supplierData.name,
-type: 'payee',
-phone: supplierData.phone || '',
-wallet: '',
-createdAt: suppCreatedAt,
-updatedAt: suppCreatedAt,
-timestamp: suppCreatedAt,
-isSupplier: true,
-supplierCategory: 'raw_materials'
-};
-supplierEntity = ensureRecordIntegrity(supplierEntity, false);
-paymentEntities.push(supplierEntity);
-await unifiedSave('payment_entities', paymentEntities, supplierEntity);
-notifyDataChange('entities');
-triggerAutoSync();
-if (typeof renderFactoryInventory === 'function') await renderFactoryInventory();
-if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
-return supplierEntity;
-}
-async function renderFactoryInventory() {
-const tbody = document.getElementById('factoryInventoryTableBody');
-let totalVal = 0;
-if (factoryInventoryData.length === 0) {
-tbody.innerHTML = '<tr><td class="u-empty-state-md" colspan="5" >No items in inventory</td></tr>';
-GNDVirtualScroll.destroy('vs-scroller-factory-inventory');
-const _invEl = document.getElementById('factoryTotalInventoryValue'); if (_invEl) _invEl.innerText = await formatCurrency(0);
-return;
-}
-// Pre-build all rows (async currency formatting required)
-const prebuiltRows = [];
-for (const item of factoryInventoryData) {
-const itemTotalValue = (item.quantity * item.cost) || 0;
-totalVal += itemTotalValue;
-let supplierHtml = '';
-if (item.supplierName) {
-const originalAmount = item.totalValue || (item.purchaseCost && item.purchaseQuantity ? item.purchaseCost * item.purchaseQuantity : item.quantity * item.cost) || 0;
-const remainingPayable = item.totalPayable || 0;
-const isFullyPaid = item.paymentStatus === 'paid' || remainingPayable <= 0;
-const isPartial = !isFullyPaid && remainingPayable < originalAmount && remainingPayable > 0;
-const paymentStatus = isFullyPaid
-? '<span style="color:var(--accent-emerald); font-weight:600;"> PAID</span>'
-: isPartial
-? '<span style="color:var(--accent); font-weight:600;">PARTIAL</span>'
-: '<span class="u-text-warning u-fw-600" >PENDING</span>';
-const payableDisplay = isFullyPaid
-? `<span class="u-text-emerald" >0.00</span>`
-: isPartial
-? `<span style="font-weight:600; color:var(--accent);">${remainingPayable.toFixed(2)}</span>`
-: `<span style="font-weight:600;">${remainingPayable.toFixed(2)}</span>`;
-supplierHtml = `
-<div style="font-size:0.65rem; color:var(--text-muted); margin-top:4px;">
-<div style="background:rgba(0, 122, 255, 0.1); color:var(--accent); padding:3px 8px; border-radius:4px; display:inline-block; margin-bottom:3px; font-weight:600;">
-SUPPLIER: ${String(item.supplierName).replace(/'/g, "&#39;").replace(/"/g, "&quot;")}
-</div>
-<div style="margin-top:3px; font-size:0.7rem;">
-${paymentStatus} | ${payableDisplay}
-</div>
-</div>
-`;
-} else {
-supplierHtml = `
-<div style="font-size:0.65rem; color:var(--text-muted); margin-top:4px; font-style:italic; opacity:0.6;">
-No supplier linked
-</div>
-`;
-}
-let quantityHtml = '';
-if (item.purchaseQuantity && item.purchaseUnitName && item.conversionFactor && item.conversionFactor !== 1) {
-quantityHtml = `
-<div class="u-text-center" >
-<div class="u-fs-sm3 u-text-main u-fw-600" >
-${(item.purchaseQuantity || 0).toFixed(2)}
-</div>
-<div class="u-fs-sm u-text-muted" >
-${esc(item.purchaseUnitName)}
-</div>
-<div style="font-size:0.65rem; color:var(--text-muted); margin-top:2px;">
-(${(item.quantity || 0).toFixed(2)})
-</div>
-</div>
-`;
-} else if (item.purchaseQuantity && item.conversionFactor && item.conversionFactor !== 1) {
-quantityHtml = `
-<div class="u-text-center" >
-<div class="u-fs-sm3 u-text-main u-fw-600" >
-${(item.purchaseQuantity || 0).toFixed(2)}
-</div>
-<div class="u-fs-sm u-text-muted" >
-units
-</div>
-<div style="font-size:0.65rem; color:var(--text-muted); margin-top:2px;">
-(${(item.quantity || 0).toFixed(2)})
-</div>
-</div>
-`;
-} else {
-quantityHtml = `
-<div class="u-text-center" >
-<div class="u-fs-sm3 u-text-main u-fw-600" >
-${(item.quantity || 0).toFixed(2)}
-</div>
-<div class="u-fs-sm u-text-muted" >
-kg
-</div>
-</div>
-`;
-}
-let costHtml = '';
-if (item.purchaseCost && item.purchaseUnitName && item.conversionFactor && item.conversionFactor !== 1) {
-costHtml = `
-<div class="u-text-center" >
-<div class="u-fs-sm2 u-text-main" >
-${await formatCurrency(item.purchaseCost)}
-</div>
-<div class="u-fs-sm u-text-muted" >
-${esc(item.purchaseUnitName)}
-</div>
-</div>
-`;
-} else if (item.purchaseCost && item.conversionFactor && item.conversionFactor !== 1) {
-costHtml = `
-<div class="u-text-center" >
-<div class="u-fs-sm2 u-text-main" >
-${await formatCurrency(item.purchaseCost)}
-</div>
-<div class="u-fs-sm u-text-muted" >
-unit
-</div>
-</div>
-`;
-} else {
-costHtml = `
-<div class="u-text-center" >
-<div class="u-fs-sm2 u-text-main" >
-${await formatCurrency(item.cost)}
-</div>
-<div class="u-fs-sm u-text-muted" >
-kg
-</div>
-</div>
-`;
-}
-const totalValueStr = await formatCurrency(itemTotalValue);
-const itemId = esc(item.id);
-const itemName = esc(item.name);
-// Build tr element (pre-rendered, handed to scroller as literal elements)
-const tr = document.createElement('tr');
-tr.style.borderBottom = '1px solid var(--glass-border)';
-tr.innerHTML = `
-<td style="padding: 8px 2px;">
-<div style="font-weight:600; font-size:0.8rem; color:var(--text-main);">${itemName}</div>
-${supplierHtml}
-</td>
-<td style="text-align:center; padding: 8px 2px;">
-${quantityHtml}
-</td>
-<td style="text-align:right; padding: 8px 2px; font-size:0.75rem; color:var(--text-muted);">${costHtml}</td>
-<td style="text-align:right; padding: 8px 2px; font-size:0.8rem; font-weight:700; color:var(--accent);">${totalValueStr}</td>
-<td style="text-align:center; padding: 6px 2px;">
-<button class="tbl-action-btn" onclick="editFactoryInventoryItem('${itemId}')">Edit</button>
-</td>
-`;
-prebuiltRows.push(tr);
-}
-// Hand pre-built elements to scroller (identity builder — elements already constructed)
-GNDVirtualScroll.mount('vs-scroller-factory-inventory', prebuiltRows, function(el) { return el; }, tbody);
-const _invEl = document.getElementById('factoryTotalInventoryValue'); if (_invEl) _invEl.innerText = await formatCurrency(totalVal);
-}
-async function unlinkSupplierFromMaterialById(materialId) {
-let material = factoryInventoryData.find(m => m.id === materialId);
-if (!material) {
-const reloadedData = await idb.get('factory_inventory_data');
-if (Array.isArray(reloadedData)) {
-factoryInventoryData = reloadedData;
-material = factoryInventoryData.find(m => m.id === materialId);
-}
-}
-if (!material) {
-showToast("Material not found", 'error');
-return;
-}
-if (!material.supplierId) {
-showToast("No supplier linked", 'warning');
-return;
-}
-const linkedTransactions = paymentTransactions.filter(t =>
-t.materialId === materialId &&
-t.entityId === material.supplierId &&
-t.isPayable === true
-);
-const _us2Total = linkedTransactions.reduce((sum, t) => sum + (parseFloat(t.amount)||0), 0);
-let confirmMsg = `Unlink ${material.supplierName} from "${material.name}"?`;
-confirmMsg += `\nCurrent Stock: ${(material.quantity||0).toFixed(2)} kg`;
-if (material.totalPayable) confirmMsg += `\nOutstanding Payable: ${(material.totalPayable||0).toFixed(2)}`;
-if (linkedTransactions.length > 0) {
-confirmMsg += `\n\n\u21a9 ${linkedTransactions.length} payment transaction${linkedTransactions.length !== 1 ? 's' : ''} totaling ${_us2Total.toFixed(2)} will be reversed and the material reverted to "Pending Payable" status.`;
-}
-confirmMsg += `\n\nThe material will be available to link with a different supplier.`;
-confirmMsg += `\n\nThis cannot be undone.`;
-if (await showGlassConfirm(confirmMsg, { title: `Unlink ${esc(material.supplierName)}`, confirmText: "Unlink", danger: true })) {
-await unlinkSupplierFromMaterial(material, true);
-}
-}
-function toggleSupplierFields() {
-const supplierType = document.getElementById('factoryMaterialSupplierType').value;
-const existingSection = document.getElementById('existingSupplierSection');
-const newSection = document.getElementById('newSupplierSection');
-if (existingSection) existingSection.classList.add('hidden');
-if (newSection) newSection.classList.add('hidden');
-if (supplierType === 'existing') {
-if (existingSection) {
-existingSection.classList.remove('hidden');
-}
-} else if (supplierType === 'new') {
-if (newSection) newSection.classList.remove('hidden');
-}
-}
-function loadExistingSuppliers() {
-const selectElement = document.getElementById('factoryExistingSupplier');
-if (!selectElement) return;
-selectElement.innerHTML = '<option value="">Choose Supplier</option>';
-const suppliers = paymentEntities.filter(entity => entity.type === 'payee');
-suppliers.forEach(supplier => {
-const option = document.createElement('option');
-option.value = supplier.id;
-option.textContent = `${supplier.name || 'Unknown'} ${supplier.phone ? `(${supplier.phone})` : ''}`;
-selectElement.appendChild(option);
-});
-if (suppliers.length === 0) {
-const option = document.createElement('option');
-option.value = "";
-option.textContent = "No suppliers found. Create a new one.";
-option.disabled = true;
-selectElement.appendChild(option);
-}
-}
-async function linkMaterialToSupplier(materialId, supplierId, totalCost) {
-let material = factoryInventoryData.find(m => m.id === materialId);
-if (!material) {
-const reloadedData = await idb.get('factory_inventory_data');
-if (Array.isArray(reloadedData)) {
-factoryInventoryData = reloadedData;
-material = factoryInventoryData.find(m => m.id === materialId);
-}
-}
-if (!material) {
-showToast('Material not found. Try refreshing.', 'error');
-return;
-}
-const supplierIdToMatch = supplierId;
-let supplier = paymentEntities.find(e =>
-e.id === supplierIdToMatch ||
-String(e.id) === String(supplierIdToMatch)
-);
-if (!supplier) {
-const supplierTransaction = paymentTransactions.find(t =>
-t.entityId === supplierIdToMatch ||
-String(t.entityId) === String(supplierIdToMatch)
-);
-if (supplierTransaction) {
-supplier = {
-id: supplierIdToMatch,
-name: supplierTransaction.entityName || 'Supplier',
-type: 'payee',
-phone: ''
-};
-} else {
-showToast('Supplier not found. Please refresh and try again.', 'error');
-return;
-}
-}
-if (material.supplierId && String(material.supplierId) !== String(supplierIdToMatch)) {
-await unlinkSupplierFromMaterial(material);
-}
-material.supplierId = supplier.id;
-material.supplierName = supplier.name;
-material.supplierContact = supplier.phone || '';
-material.supplierType = 'payee';
-material.paymentStatus = 'pending';
-material.totalPayable = totalCost;
-await unifiedSave('factory_inventory_data', factoryInventoryData, material);
-notifyDataChange('all');
-triggerAutoSync();
-await renderFactoryInventory();
-await refreshPaymentTab();
-calculateNetCash();
-showToast(`Linked to ${esc(supplier.name)}`, 'success');
-}
-function selectFactoryEntryStore(store, el) {
-currentFactoryEntryStore = store;
-document.querySelectorAll('.factory-store-selector .factory-store-opt').forEach(o => o.classList.remove('active'));
-if(el) el.classList.add('active');
-calculateFactoryProduction();
-}
-
-function getSalePriceForStore(store) {
-
-	
-	if (!store) return 0;
-	if (store === 'STORE_C') {
-		return factorySalePrices.asaan || 0;
-	}
-
-	return factorySalePrices.standard || 0;
-}
-
-function getCostPriceForStore(store) {
-
-	
-	if (!store) return 0;
-	const formulaStore = (store === 'STORE_C') ? 'asaan' : 'standard';
-	return calculateSalesCostPerKg(formulaStore);
-}
-
-function getStorePricing(store) {
-
-	return {
-		salePrice: getSalePriceForStore(store),
-		costPrice: getCostPriceForStore(store)
-	};
-}
-
-async function calculateFactoryProduction() {
-const units = parseInt(document.getElementById('factoryProductionUnits').value) || 1;
-const settings = factoryDefaultFormulas[currentFactoryEntryStore];
-const additionalCost = factoryAdditionalCosts[currentFactoryEntryStore] || 0;
-let baseCost = 0;
-let rawMaterialsUsed = 0;
-let html = `<h4 style="margin:0 0 5px 0; font-size:0.9rem;">${currentFactoryEntryStore.toUpperCase()} Formula (${units} Units)</h4>`;
-if (settings && settings.length > 0) {
-for (const i of settings) {
-const lineTotal = i.cost * i.quantity * units;
-baseCost += lineTotal;
-rawMaterialsUsed += i.quantity * units;
-html += `<div style="display:flex; justify-content:space-between; font-size:0.8rem; margin-bottom:2px;">
-<span>${i.name} (${i.quantity * units} kg)</span>
-<span>${await formatCurrency(lineTotal)}</span>
-</div>`;
-}
-const totalAdditionalCost = additionalCost * units;
-if (totalAdditionalCost > 0) {
-html += `<div style="display:flex; justify-content:space-between; font-size:0.8rem; margin-bottom:2px; color:var(--danger);">
-<span>Additional Cost (${additionalCost} per unit)</span>
-<span>${await formatCurrency(totalAdditionalCost)}</span>
-</div>`;
-baseCost += totalAdditionalCost;
-}
-} else {
-html += `<div class="u-text-muted" >No formula set.</div>`;
-}
-document.getElementById('factoryFormulaDisplay').innerHTML = html;
-const _prodCostEl = document.getElementById('factoryTotalProductionCostDisplay'); if (_prodCostEl) _prodCostEl.innerText = await formatCurrency(baseCost);
-}
-async function saveFactoryProductionEntry() {
-if (appMode === 'userrole' && !(window._userRoleAllowedTabs || []).includes('factory')) {
-showToast('Access Denied — Factory not in your assigned tabs', 'warning', 3000); return;
-}
-const units = parseInt(document.getElementById('factoryProductionUnits').value) || 0;
-if(units <= 0) return showToast('Invalid units', 'warning', 3000);
-const inventorySnapshot = JSON.parse(JSON.stringify(factoryInventoryData));
-const historySnapshot = [...factoryProductionHistory];
-try {
-const settings = factoryDefaultFormulas[currentFactoryEntryStore];
-const additionalCost = factoryAdditionalCosts[currentFactoryEntryStore] || 0;
-let baseCost = 0;
-let rawMat = 0;
-if(settings) {
-baseCost = settings.reduce((acc, cur) => acc + (cur.cost * cur.quantity), 0) * units;
-rawMat = settings.reduce((acc, cur) => acc + cur.quantity, 0) * units;
-}
-const totalAdditionalCost = additionalCost * units;
-const totalCost = baseCost + totalAdditionalCost;
-let inventoryUpdated = false;
-if(settings && settings.length > 0) {
-settings.forEach(item => {
-const materialUsed = item.quantity * units;
-const inventoryItem = factoryInventoryData.find(i => i.id === item.id);
-if(inventoryItem) {
-if(inventoryItem.quantity >= materialUsed) {
-inventoryItem.quantity -= materialUsed;
-inventoryItem.totalValue = inventoryItem.quantity * inventoryItem.cost;
-inventoryUpdated = true;
-} else {
-throw new Error(`Insufficient ${inventoryItem.name} in inventory! Available: ${inventoryItem.quantity}, Required: ${materialUsed}`);
-}
-}
-});
-}
-let factProdId = generateUUID('fact_prod');
-if (!validateUUID(factProdId)) {
-factProdId = generateUUID('fact_prod');
-}
-const factProdCreatedAt = getTimestamp();
-const productionRecord = {
-id: factProdId,
-date: new Date().toISOString().split('T')[0],
-time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
-store: currentFactoryEntryStore,
-units,
-totalCost,
-materialsCost: baseCost,
-additionalCost: totalAdditionalCost,
-rawMaterialsUsed: rawMat,
-createdAt: factProdCreatedAt,
-updatedAt: factProdCreatedAt,
-timestamp: factProdCreatedAt,
-syncedAt: new Date().toISOString(),
-managedBy: (appMode === 'factory' && window._assignedManagerName) ? window._assignedManagerName : null
-};
-const validatedRecord = ensureRecordIntegrity(productionRecord);
-factoryProductionHistory.unshift(validatedRecord);
-await Promise.all([
-saveWithTracking('factory_inventory_data', factoryInventoryData),
-saveWithTracking('factory_production_history', factoryProductionHistory)
-]);
-notifyDataChange('factory');
-emitSyncUpdate({
-factory_inventory_data: factoryInventoryData,
-factory_production_history: factoryProductionHistory
-});
-await syncFactoryProductionStats();
-await refreshFactoryTab();
-calculateNetCash();
-calculateCashTracker();
-document.getElementById('factoryProductionUnits').value = '1';
-showToast("Production saved successfully!", "success");
-const cloudWrites = [
-saveRecordToFirestore('factory_production_history', validatedRecord)
-];
-if (inventoryUpdated) {
-for (const item of factoryInventoryData) {
-cloudWrites.push(saveRecordToFirestore('factory_inventory_data', item));
-}
-}
-Promise.all(cloudWrites)
-.then(() => triggerAutoSync())
-.catch(err => console.warn(' Background Firestore sync failed (will retry):', err));
-} catch (error) {
-factoryInventoryData.length = 0;
-factoryInventoryData.push(...inventorySnapshot);
-factoryProductionHistory.length = 0;
-factoryProductionHistory.push(...historySnapshot);
-try {
-await idb.setBatch([
-['factory_inventory_data', factoryInventoryData],
-['factory_production_history', factoryProductionHistory]
-]);
-} catch (rollbackError) {
-console.error('Failed to save data locally.', rollbackError);
-showToast('Failed to save data locally.', 'error');
-}
-showToast(error.message || 'Failed to save production data. Please try again.', 'error', 4000);
-}
-}
-function setFactorySummaryMode(mode, el) {
-currentFactorySummaryMode = mode;
-document.querySelectorAll('#tab-factory .toggle-group .toggle-opt').forEach(opt => opt.classList.remove('active'));
-if(el) el.classList.add('active');
-updateFactorySummaryCard();
-_filterFactoryHistoryByMode(mode);
-}
-function setFactoryAvailableStore(store, el) {
-document.getElementById('factoryAvailStatsStandard').classList.add('hidden');
-document.getElementById('factoryAvailStatsStandard').style.display = 'none';
-document.getElementById('factoryAvailStatsAsaan').style.display = 'none';
-const statsElement = document.getElementById('factoryAvailStats' + (store === 'standard' ? 'Standard' : 'Asaan'));
-if (statsElement) {
-statsElement.classList.remove('hidden');
-statsElement.style.display = 'grid';
-}
-const parent = el.parentElement;
-parent.querySelectorAll('.toggle-opt').forEach(t => t.classList.remove('active'));
-el.classList.add('active');
-updateFactoryUnitsAvailableStats();
-}
-async function renderFactoryHistory() {
-const list = document.getElementById('factoryHistoryList');
-list.innerHTML = '';
-if (factoryProductionHistory.length === 0) {
-list.innerHTML = '<div class="u-empty-state-sm" >No recent activity</div>';
-return;
-}
-const recent = [...factoryProductionHistory].sort((a, b) => {
-const timeA = a.timestamp || new Date(a.date + ' ' + a.time).getTime();
-const timeB = b.timestamp || new Date(b.date + ' ' + b.time).getTime();
-return timeB - timeA;
-});
-for (const entry of recent) {
-const dateObj = new Date(entry.date);
-const dateStr = (() => {
-const month = dateObj.toLocaleDateString('en-US', { month: 'short' });
-const day = String(dateObj.getDate()).padStart(2, '0');
-const year = String(dateObj.getFullYear()).slice(-2);
-return `${month} ${day} ${year} ${esc(entry.time || '')}`;
-})();
-const badgeClass = entry.store === 'standard' ? 'factory-badge-std' : 'factory-badge-asn';
-const storeLabel = entry.store === 'standard' ? 'STD' : 'ASN';
-const perUnitCost = entry.units > 0 ? entry.totalCost / entry.units : 0;
-const additionalCostPerUnit = factoryAdditionalCosts[entry.store] || 0;
-const totalAdditionalCost = additionalCostPerUnit * entry.units;
-const div = document.createElement('div');
-div.className = 'factory-history-item';
-if (entry.date) div.setAttribute('data-date', entry.date);
-div.innerHTML = `
-<div style="display:flex; justify-content:space-between; margin-bottom:8px; border-bottom:1px solid var(--glass-border); padding-bottom:5px;">
-<span class="u-fs-sm2 u-text-muted" >${dateStr}</span>
-<div style="display:flex; gap:6px; align-items:center;">
-${_mergedBadgeHtml(entry)}
-<span class="factory-badge ${badgeClass}">${esc(storeLabel)}</span>
-</div>
-</div>
-${entry.managedBy ? `<div style="margin-bottom:8px;"><span style="display:inline-flex;align-items:center;gap:4px;padding:2px 9px;font-size:0.65rem;font-weight:700;letter-spacing:0.04em;color:var(--accent-purple);background:rgba(206,147,216,0.10);border:1px solid rgba(206,147,216,0.28);border-radius:999px;">${esc(entry.managedBy)}</span></div>` : ''}
-<div class="factory-summary-row">
-<span class="factory-summary-label">Units Produced</span>
-<span class="qty-val">${entry.units}</span>
-</div>
-<div class="factory-summary-row">
-<span class="factory-summary-label">Material Cost</span>
-<span class="cost-val">${await formatCurrency(entry.materialsCost || 0)}</span>
-</div>
-${totalAdditionalCost > 0 ? `<div class="factory-summary-row">
-<span class="factory-summary-label">Additional Cost</span>
-<span class="cost-val">${await formatCurrency(totalAdditionalCost)}</span>
-</div>` : ''}
-<div class="factory-summary-row">
-<span class="factory-summary-label">Per Unit Cost</span>
-<span class="cost-val">${await formatCurrency(perUnitCost)}</span>
-</div>
-<div class="factory-summary-row">
-<span class="factory-summary-label">Total Cost</span>
-<span class="rev-val">${await formatCurrency(entry.totalCost)}</span>
-</div>
-<div class="factory-summary-row">
-<span class="factory-summary-label">Raw Materials Used</span>
-<span class="qty-val">${safeNumber(entry.rawMaterialsUsed, 0).toFixed(2)} kg</span>
-</div>
-${entry.isMerged ? '' : `<button class="tbl-action-btn danger u-w-full u-mt-8" onclick="deleteFactoryEntry('${entry.id}')">Delete & Restore Inventory</button>`}
-`;
-list.appendChild(div);
-}
-_filterFactoryHistoryByMode(currentFactorySummaryMode || 'all');
-}
-async function deleteFactoryEntry(id) {
-if (!id || !validateUUID(id)) {
-showToast('Invalid factory entry ID', 'error');
-return;
-}
-const entryIndex = factoryProductionHistory.findIndex(e => e.id === id);
-if (entryIndex === -1) {
-await refreshFactoryTab();
-return;
-}
-const entry = factoryProductionHistory[entryIndex];
-if (entry.isMerged) {
-showToast('Merged opening balance records cannot be deleted', 'warning');
-return;
-}
-const _feStoreLabel = getStoreLabel(entry.store) || entry.store;
-const _feFormula = factoryDefaultFormulas[entry.store] || [];
-const _feMatsDetail = _feFormula.length > 0
-? _feFormula.map(f => { const inv = factoryInventoryData.find(i => i.id === f.id); return ` 2022 ${inv?.name || 'Material'}: ${(f.quantity * entry.units).toFixed(2)} kg restored`; }).join('\n')
-: '';
-let _feMsg = `Delete this factory production batch permanently?`;
-_feMsg += `\nStore: ${_feStoreLabel}`;
-_feMsg += `\nDate: ${entry.date}`;
-_feMsg += `\nUnits Produced: ${entry.units}`;
-if (entry.totalCost) _feMsg += `\nTotal Cost: ${(entry.totalCost||0).toFixed(2)}`;
-if (_feMatsDetail) _feMsg += `\n\n21a9 Raw materials restored to inventory:\n${_feMatsDetail}`;
-else _feMsg += `\n\n21a9 Raw materials used in this batch will be restored to inventory.`;
-_feMsg += `\n\n26a0 Sales already made from this batch will NOT be reversed 2014 but available stock will change.`;
-_feMsg += `\n\nThis cannot be undone.`;
-if (await showGlassConfirm(_feMsg, { title: "Delete Factory Production", confirmText: "Delete", danger: true })) {
-try {
-if (entry) {
-entry.deletedAt = getTimestamp();
-entry.updatedAt = getTimestamp();
-}
-await registerDeletion(id, 'factory_history');
-let restoredMaterials = [];
-const formula = factoryDefaultFormulas[entry.store];
-if (formula && formula.length > 0) {
-let inventoryUpdated = false;
-formula.forEach(formulaItem => {
-const materialToRestore = formulaItem.quantity * entry.units;
-const inventoryItem = factoryInventoryData.find(i => i.id === formulaItem.id);
-if (inventoryItem) {
-inventoryItem.quantity += materialToRestore;
-inventoryItem.totalValue = inventoryItem.quantity * inventoryItem.cost;
-inventoryItem.updatedAt = getTimestamp();
-inventoryUpdated = true;
-restoredMaterials.push({
-name: inventoryItem.name || 'Unknown',
-quantity: materialToRestore
-});
-}
-});
-}
-factoryProductionHistory.splice(entryIndex, 1);
-await Promise.all([
-unifiedDelete('factory_production_history', factoryProductionHistory, id),
-saveWithTracking('factory_inventory_data', factoryInventoryData)
-]);
-await refreshFactoryTab();
-calculateNetCash();
-calculateCashTracker();
-notifyDataChange('factory');
-if (restoredMaterials.length > 0) {
-const materialsList = restoredMaterials.map(m => `${m.name}: +${m.quantity.toFixed(2)} kg`).join(', ');
-showToast(` Entry deleted! Raw materials restored: ${materialsList}`, "success");
-} else {
-showToast(" Entry deleted and inventory restored.", "success");
-}
-const cloudWrites = factoryInventoryData
-.filter(item => item && item.id)
-.map(item => saveRecordToFirestore('factory_inventory_data', item));
-Promise.all(cloudWrites)
-.then(() => triggerAutoSync())
-.catch(err => console.warn(' Background Firestore sync failed on delete (will retry):', err));
-} catch (error) {
-showToast(" Failed to delete entry. Please try again.", "error");
-}
-}
-}
-function calculateDynamicCost(storeType, formulaUnits, netWeight) {
-let formulaStore = 'standard';
-if (storeType === 'STORE_C' || storeType === 'asaan') {
-formulaStore = 'asaan';
-} else if (storeType !== 'STORE_A' && storeType !== 'STORE_B' && storeType !== 'standard') {
-return {
-costPerUnit: 0,
-totalFormulaCost: 0,
-dynamicCostPerKg: 0,
-formulaStore: storeType,
-rawMaterialCost: 0
-};
-}
-const formula = factoryDefaultFormulas[formulaStore];
-if (!formula || formula.length === 0 || netWeight <= 0) {
-return {
-costPerUnit: 0,
-totalFormulaCost: 0,
-dynamicCostPerKg: 0,
-formulaStore: formulaStore,
-rawMaterialCost: 0
-};
-}
-let totalMaterialCost = 0;
-let totalWeight = 0;
-formula.forEach(item => {
-totalMaterialCost += (item.cost * item.quantity);
-totalWeight += item.quantity;
-});
-const additionalCost = factoryAdditionalCosts[formulaStore] || 0;
-const costPerUnit = totalMaterialCost + additionalCost;
-const dynamicCostPerKg = formulaUnits > 0 ? (costPerUnit * formulaUnits) / netWeight : 0;
-return {
-costPerUnit: costPerUnit,
-totalMaterialCost: totalMaterialCost,
-additionalCost: additionalCost,
-totalFormulaCost: costPerUnit * formulaUnits,
-dynamicCostPerKg: dynamicCostPerKg,
-formulaStore: formulaStore,
-rawMaterialCost: totalMaterialCost,
-unitWeight: totalWeight
-};
-}
-function calculateSalesCostPerKg(formulaStore) {
-const formula = factoryDefaultFormulas[formulaStore];
-if (!formula || formula.length === 0) {
-return 0;
-}
-let rawMaterialCost = 0;
-formula.forEach(item => {
-rawMaterialCost += (item.cost * item.quantity);
-});
-const additionalCost = factoryAdditionalCosts[formulaStore] || 0;
-const totalCostPerUnit = rawMaterialCost + additionalCost;
-const adjustmentFactor = factoryCostAdjustmentFactor[formulaStore] || 1;
-const costPerKgForSales = adjustmentFactor > 0 ? totalCostPerUnit / adjustmentFactor : totalCostPerUnit;
-return costPerKgForSales;
-}
-async function updateFormulaInventory() {
-const tracking = {
-standard: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] },
-asaan: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] }
-};
-factoryProductionHistory.forEach(entry => {
-if (entry.store && entry.units > 0) {
-tracking[entry.store].produced += entry.units;
-if (entry.totalCost && entry.units > 0) {
-tracking[entry.store].unitCostHistory.push({
-date: entry.date,
-costPerUnit: entry.totalCost / entry.units,
-units: entry.units
-});
-}
-}
-});
-db.forEach(entry => {
-let formulaStore = 'standard';
-if (entry.store === 'STORE_C') {
-formulaStore = 'asaan';
-}
-if (entry.formulaUnits) {
-tracking[formulaStore].consumed += entry.formulaUnits;
-}
-});
-tracking.standard.available = Math.max(0, tracking.standard.produced - tracking.standard.consumed);
-tracking.asaan.available = Math.max(0, tracking.asaan.produced - tracking.asaan.consumed);
-factoryUnitTracking = tracking;
-const timestamp = Date.now();
-await idb.set('factory_unit_tracking', factoryUnitTracking);
-await idb.set('factory_unit_tracking_timestamp', timestamp);
-return tracking;
-}
-async function syncFactoryProductionStats() {
-const tracking = await updateFormulaInventory();
-updateUnitsAvailableIndicator();
-updateFactoryUnitsAvailableStats();
-updateFactorySummaryCard();
-return tracking;
-}
-function validateFormulaAvailability(storeType, requestedUnits) {
-let formulaStore = 'standard';
-if (storeType === 'STORE_C' || storeType === 'asaan') {
-formulaStore = 'asaan';
-}
-const available = factoryUnitTracking[formulaStore]?.available || 0;
-return {
-available: available,
-sufficient: available >= requestedUnits,
-deficit: Math.max(0, requestedUnits - available)
-};
-}
-function updateUnitsAvailableIndicator() {
-const store = document.getElementById('storeSelector').value;
-let formulaStore = 'standard';
-if (store === 'STORE_C') {
-formulaStore = 'asaan';
-}
-const available = factoryUnitTracking[formulaStore]?.available || 0;
-const indicator = document.getElementById('currentUnitsAvailable');
-const warning = document.getElementById('insufficientUnitsWarning');
-let indicatorClass = 'units-available-good';
-if (available < 10) {
-indicatorClass = 'units-available-warning';
-}
-if (available <= 0) {
-indicatorClass = 'units-available-danger';
-}
-if (indicator) {
-indicator.className = `units-available-indicator ${indicatorClass}`;
-indicator.textContent = `${(available || 0).toFixed(2)} units available`;
-}
-const requestedUnits = parseFloat(document.getElementById('formula-units')?.value) || 0;
-if (warning) {
-if (requestedUnits > available) {
-warning.classList.remove('hidden');
-} else {
-warning.classList.add('hidden');
-}
-}
-}
-function calculateDynamicProductionCost() {
-const net = parseFloat(document.getElementById('net-wt').value) || 0;
-const store = document.getElementById('storeSelector').value;
-const formulaUnits = parseFloat(document.getElementById('formula-units').value) || 0;
-const costData = calculateDynamicCost(store, formulaUnits, net);
-// getSalePriceForStore handles all three stores:
-// STORE_C → asaan price, STORE_A / STORE_B → standard price
-const salePrice = getSalePriceForStore(store);
-const _setProd = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
-_setProd('formula-unit-cost-display', `${safeValue(costData.costPerUnit).toFixed(2)}/unit`);
-_setProd('total-formula-cost-display', `${safeValue(costData.totalFormulaCost).toFixed(2)}`);
-_setProd('dynamic-cost-per-kg', `${safeValue(costData.dynamicCostPerKg).toFixed(2)}/kg`);
-_setProd('factory-cost-price', `${safeValue(costData.dynamicCostPerKg).toFixed(2)}/kg`);
-_setProd('production-sale-price-display', `${safeValue(salePrice).toFixed(2)}/kg`);
-_setProd('profit-sale-price', `${safeValue(salePrice).toFixed(2)}/kg`);
-const totalCost = net * costData.dynamicCostPerKg;
-_setProd('display-cost-value', `${safeValue(totalCost).toFixed(2)}`);
-const profitPerKg = salePrice - costData.dynamicCostPerKg;
-_setProd('profit-per-kg', `${safeValue(profitPerKg).toFixed(2)}`);
-updateUnitsAvailableIndicator();
-}
-function updateProductionCostOnStoreChange() {
-const store = document.getElementById('storeSelector').value;
-currentStore = store;
-// getSalePriceForStore handles all three stores:
-// STORE_C → asaan price, STORE_A / STORE_B → standard price
-const salePrice = getSalePriceForStore(store);
-const _setStore = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
-_setStore('production-sale-price-display', `${safeValue(salePrice).toFixed(2)}/kg`);
-_setStore('profit-sale-price', `${safeValue(salePrice).toFixed(2)}/kg`);
-calculateDynamicProductionCost();
-updatePaymentStatusVisibility();
-if (typeof refreshUI === 'function') refreshUI();
-}
-function calcNet() {
-const g = parseFloat(document.getElementById('gross-wt').value) || 0;
-const c = parseFloat(document.getElementById('cont-wt').value) || 0;
-const net = Math.max(0, g - c);
-document.getElementById('net-wt').value = safeNumber(net, 0).toFixed(2);
-calculateDynamicProductionCost();
-}
-async function deleteProdEntry(id) {
-if (!id || !validateUUID(id)) {
-showToast('Invalid production record ID', 'error');
-return;
-}
-const entryToDelete = db.find(item => item.id === id);
-if (!entryToDelete) return;
-if (entryToDelete.isMerged) {
-showToast('Merged opening balance records cannot be deleted', 'warning');
-return;
-}
-const isReturn = entryToDelete.isReturn === true;
-const _dpStoreLabel = getStoreLabel(entryToDelete.store) || entryToDelete.store;
-const _dpSalesOnDate = (typeof customerSales !== 'undefined' ? customerSales : []).filter(s => s.date === entryToDelete.date && s.store === entryToDelete.store).length;
-let confirmMsg;
-if (isReturn) {
-confirmMsg = `Remove this stock return record?`;
-confirmMsg += `\nStore: ${_dpStoreLabel}`;
-confirmMsg += `\nDate: ${entryToDelete.date}`;
-confirmMsg += `\nQty Returned: ${entryToDelete.net} kg`;
-confirmMsg += `\n\n\u21a9 This will DECREASE available stock by ${entryToDelete.net} kg on ${entryToDelete.date}.`;
-if (_dpSalesOnDate > 0) confirmMsg += ` ${_dpSalesOnDate} sale${_dpSalesOnDate !== 1 ? 's' : ''} exist on this date — those records may be affected.`;
-} else {
-confirmMsg = `Permanently delete this production record?`;
-confirmMsg += `\nStore: ${_dpStoreLabel}`;
-confirmMsg += `\nDate: ${entryToDelete.date}`;
-confirmMsg += `\nNet Qty: ${entryToDelete.net} kg`;
-if (entryToDelete.gross) confirmMsg += `\nGross / Tare: ${entryToDelete.gross} / ${((entryToDelete.gross||0) - (entryToDelete.net||0)).toFixed(2)} kg`;
-confirmMsg += `\n\n\u21a9 ${entryToDelete.net} kg will be removed from ${entryToDelete.date} inventory.`;
-if (_dpSalesOnDate > 0) confirmMsg += `\n\n\u26a0 ${_dpSalesOnDate} sale${_dpSalesOnDate !== 1 ? 's' : ''} on this date for ${_dpStoreLabel} will remain on record, but available stock will drop.`;
-}
-confirmMsg += `\n\nThis cannot be undone.`;
-if (await showGlassConfirm(confirmMsg, { title: isReturn ? "Remove Return" : "Delete Production", confirmText: isReturn ? "Remove" : "Delete", danger: true })) {
-try {
-const deletedDate = entryToDelete.date;
-const deletedStore = entryToDelete.store;
-const deletedQuantity = entryToDelete.net || 0;
-const record = db.find(item => item.id === id);
-if (record) {
-record.deletedAt = getTimestamp();
-record.updatedAt = getTimestamp();
-}
-db = db.filter(item => item.id !== id);
-await unifiedDelete('mfg_pro_pkr', db, id);
-notifyDataChange('production');
-syncFactoryProductionStats();
-await refreshUI();
-calculateNetCash();
-calculateCashTracker();
-if (isReturn) {
-showToast(` Return record removed. ${deletedQuantity} kg removed from ${deletedDate} stock.`, "success");
-} else {
-showToast(` Production deleted. ${deletedQuantity} kg removed from ${deletedDate} inventory. Sales on this date may be affected.`, "success");
-}
-} catch (error) {
-showToast(" Failed to delete entry. Please try again.", "error");
-}
+cashRatioElement.textContent = safeNumber(cashRatio, 0).toFixed(2);
 }
 }
 async function saveCustomerSale() {
@@ -5019,8 +3504,7 @@ storeSpecificProduction += production.net || 0;
 });
 let storeSpecificSales = 0;
 customerSales.forEach(sale => {
-
-if (isRepSale(sale)) return;
+if (!isDirectSale(sale)) return; 
 if (sale.date === date && sale.supplyStore === store) {
 storeSpecificSales += sale.quantity || 0;
 }
@@ -5048,30 +3532,37 @@ return;
 }
 const costData = calculateSalesCost(store, quantity);
 const totalCost = costData.totalCost;
-const totalValue = costData.totalValue;
+const _effectiveSalePrice = getEffectiveSalePriceForCustomer(name, store);
+const totalValue = quantity * _effectiveSalePrice;
 const profit = totalValue - totalCost;
 const existingCustomer = customerSales.find(s => s && s.customerName && name && s.customerName.toLowerCase() === name.toLowerCase());
 let existingCredit = 0;
 if (existingCustomer) {
 customerSales.forEach(sale => {
-if (sale && sale.customerName && name && sale.customerName.toLowerCase() === name.toLowerCase() &&
-sale.paymentType === 'CREDIT' &&
-!sale.creditReceived) {
+if (!(sale && sale.customerName && name && sale.customerName.toLowerCase() === name.toLowerCase())) return;
+if (sale.transactionType === 'OLD_DEBT' && !sale.creditReceived) {
+existingCredit += getSaleTransactionValue(sale) - (sale.partialPaymentReceived || 0);
+} else if (sale.paymentType === 'CREDIT' && !sale.creditReceived) {
 if (sale.isMerged && typeof sale.creditValue === 'number') {
 existingCredit += sale.creditValue;
 } else {
-existingCredit += (sale.totalValue || 0) - (sale.partialPaymentReceived || 0);
+existingCredit += getSaleTransactionValue(sale) - (sale.partialPaymentReceived || 0);
 }
+} else if (sale.paymentType === 'COLLECTION') {
+existingCredit -= (sale.totalValue || 0);
+} else if (sale.paymentType === 'PARTIAL_PAYMENT') {
+existingCredit -= (sale.totalValue || 0);
 }
 });
+existingCredit = Math.max(0, existingCredit);
 }
 if (paymentType === 'CREDIT') {
 const creditWarningThreshold = 5000;
 if (existingCredit > creditWarningThreshold) {
 const _cwMsg = `${name} already has an outstanding credit balance.
-Current unpaid balance: ${safeNumber(existingCredit, 0).toFixed(2)}
-This new credit sale: ${safeNumber(totalValue, 0).toFixed(2)}
-New total if you proceed: ${safeNumber(existingCredit + totalValue, 0).toFixed(2)}
+Current unpaid balance: ${fmtAmt(safeNumber(existingCredit, 0))}
+This new credit sale: ${fmtAmt(safeNumber(totalValue, 0))}
+New total if you proceed: ${fmtAmt(safeNumber(existingCredit + totalValue, 0))}
 ⚠ Consider collecting the existing balance before adding more credit. Proceeding will increase their total debt beyond the threshold.`;
 if (!(await showGlassConfirm(_cwMsg, { title: "⚠ High Credit Warning", confirmText: "Add Credit Anyway", cancelText: "Cancel" }))) {
 return;
@@ -5108,9 +3599,7 @@ salesRep: salesRep,
 totalCost: totalCost,
 totalValue: totalValue,
 profit: profit,
-// Store the canonical sale price per kg at the time of the transaction.
-// getSalePriceForStore returns the fixed factory setting — not a computed average.
-unitPrice: costData.salePricePerKg || getSalePriceForStore(store),
+unitPrice: _effectiveSalePrice,
 creditReceived: paymentType === 'CASH' ? true : false,
 syncedAt: new Date().toISOString(),
 isRepModeEntry: false
@@ -5121,6 +3610,21 @@ try {
 customerSales.push(validatedRecord);
 await saveWithTracking('customer_sales', customerSales);
 await saveRecordToFirestore('customer_sales', validatedRecord);
+try {
+const _scName = validatedRecord.customerName;
+const _scPhone = validatedRecord.customerPhone || '';
+if (_scName && _scName.trim()) {
+const _scIdx = Array.isArray(salesCustomers) ? salesCustomers.findIndex(c => c && c.name && c.name.toLowerCase() === _scName.toLowerCase()) : -1;
+if (_scIdx === -1) {
+const _scContact = { id: generateUUID(), name: _scName, phone: _scPhone, address: '', oldDebit: 0, customSalePrice: 0, createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
+if (!Array.isArray(salesCustomers)) salesCustomers = [];
+salesCustomers.push(_scContact);
+await saveWithTracking('sales_customers', salesCustomers);
+await saveRecordToFirestore('sales_customers', _scContact);
+} else {
+}
+}
+} catch (_scErr) { console.warn('Auto-register sales customer failed:', _scErr); }
 notifyDataChange('sales');
 triggerAutoSync();
 if (typeof calculateCashTracker === 'function') calculateCashTracker();
@@ -5128,12 +3632,16 @@ if (typeof calculateNetCash === 'function') calculateNetCash();
 emitSyncUpdate({ customer_sales: customerSales });
 document.getElementById('cust-name').value = '';
 document.getElementById('cust-quantity').value = '';
+selectSalesRep(document.querySelector('#sales-rep-toggle-group .toggle-opt'), 'NONE');
 selectPaymentType(document.getElementById('btn-payment-cash'), 'CASH');
 selectSupplyStore(document.getElementById('btn-supply-store-a'), 'STORE_A');
 if (phoneInput) phoneInput.value = '';
 document.getElementById('new-customer-phone-container').classList.add('hidden');
 if (typeof renderCustomersTable === 'function') {
 renderCustomersTable();
+}
+if (typeof refreshCustomerSales === 'function') {
+refreshCustomerSales();
 }
 refreshEntityList();
 showToast(` Sale recorded successfully! ${name} - ${safeNumber(quantity, 0).toFixed(2)} kg`, "success");
@@ -5193,10 +3701,14 @@ function calculateCustomerSale() {
 const quantity = parseFloat(document.getElementById('cust-quantity').value) || 0;
 const date = document.getElementById('cust-date').value;
 const store = document.getElementById('supply-store-value').value;
+const customerName = (document.getElementById('cust-name')?.value || '').trim();
 const costData = calculateSalesCost(store, quantity);
-document.getElementById('cust-total-cost').textContent = safeNumber(costData?.totalCost, 0).toFixed(2);
-document.getElementById('cust-total-value').textContent = safeNumber(costData?.totalValue, 0).toFixed(2);
-document.getElementById('cust-profit').textContent = safeNumber((costData?.totalValue || 0) - (costData?.totalCost || 0), 0).toFixed(2);
+const effectiveSalePrice = getEffectiveSalePriceForCustomer(customerName, store);
+const totalValue = quantity * effectiveSalePrice;
+const totalCost = costData?.totalCost || 0;
+document.getElementById('cust-total-cost').textContent = fmtAmt(safeNumber(totalCost, 0));
+document.getElementById('cust-total-value').textContent = fmtAmt(safeNumber(totalValue, 0));
+document.getElementById('cust-profit').textContent = fmtAmt(safeNumber(totalValue - totalCost, 0));
 if (date) {
 let storeProduction = 0;
 db.forEach(production => {
@@ -5212,6 +3724,7 @@ storeReturns += returnEntry.quantity || 0;
 });
 let storeSales = 0;
 customerSales.forEach(sale => {
+if (!isDirectSale(sale)) return;
 if (sale.date === date && sale.supplyStore === store) {
 storeSales += sale.quantity || 0;
 }
@@ -5242,6 +3755,7 @@ document.querySelectorAll('#sales-rep-toggle-group .toggle-opt').forEach(b => b.
 btn.classList.add('active');
 document.getElementById('sales-rep-value').value = value;
 autoFillCustomerName();
+calculateCustomerSale();
 }
 function selectSupplyStore(btn, value) {
 document.querySelectorAll('#btn-supply-store-a, #btn-supply-store-b, #btn-supply-store-c').forEach(b => b.classList.remove('active'));
@@ -5254,6 +3768,7 @@ if (!btn) return;
 document.querySelectorAll('#btn-payment-cash, #btn-payment-credit').forEach(b => b.classList.remove('active'));
 btn.classList.add('active');
 document.getElementById('payment-type-value').value = value;
+calculateCustomerSale();
 }
 function selectRepPaymentType(btn, value) {
 document.querySelectorAll('#btn-rep-pay-credit, #btn-rep-pay-cash').forEach(b => b.classList.remove('active'));
@@ -5317,7 +3832,6 @@ if (recordToDelete.isMerged) {
 showToast('Merged opening balance records cannot be deleted', 'warning');
 return;
 }
-const recordTime = getRecordTimestamp(recordToDelete);
 const recordDate = recordToDelete.date || 'Unknown date';
 const _dcStoreLabel = recordToDelete.supplyStore ? getStoreLabel(recordToDelete.supplyStore) : '';
 const _dcIsCredit = recordToDelete.paymentType === 'CREDIT';
@@ -5328,12 +3842,12 @@ let _dcMsg = `Permanently delete this ${_dcPayLabel}?`;
 _dcMsg += `\nCustomer: ${recordToDelete.customerName || 'Unknown'}`;
 _dcMsg += `\nDate: ${recordDate}`;
 _dcMsg += `\nQty: ${recordToDelete.quantity || 0} kg`;
-if (recordToDelete.totalValue) _dcMsg += `\nValue: ${(recordToDelete.totalValue||0).toFixed(2)}`;
+if (recordToDelete.totalValue) _dcMsg += `\nValue: ${fmtAmt(recordToDelete.totalValue||0)}`;
 if (_dcStoreLabel) _dcMsg += `\nStore: ${_dcStoreLabel}`;
 if (_dcIsCredit) {
-if (_dcIsPaid) _dcMsg += `\n\n\u2714 This sale is already marked PAID. Deleting will erase the payment record from the customer's history.`;
-else if (_dcPartialPaid > 0) _dcMsg += `\n\n\u26a0 ${_dcPartialPaid.toFixed(2)} partially collected. Deleting will erase both the sale and the partial payment.`;
-else _dcMsg += `\n\n\u26a0 This credit sale is UNPAID. Deleting will permanently remove the outstanding balance of ${(recordToDelete.totalValue||0).toFixed(2)} from this customer's account.`;
+if (_dcIsPaid) _dcMsg += `\n\n\u2714 This sale is already marked PAID. Deleting will erase the payment record.`;
+else if (_dcPartialPaid > 0) _dcMsg += `\n\n\u26a0 ${fmtAmt(_dcPartialPaid)} partially collected. Deleting will erase the sale and partial payment.`;
+else _dcMsg += `\n\n\u26a0 This credit sale is UNPAID. Deleting removes the outstanding balance of ${fmtAmt(recordToDelete.totalValue||0)}.`;
 } else {
 _dcMsg += `\n\n\u21a9 ${(recordToDelete.quantity||0).toFixed(2)} kg will be restored to ${recordDate} inventory.`;
 }
@@ -5343,9 +3857,7 @@ try {
 await registerDeletion(id, 'sales');
 const originalLength = customerSales.length;
 customerSales = customerSales.filter(item => item.id !== id);
-if (customerSales.length === originalLength) {
-throw new Error('Record not found or not deleted');
-}
+if (customerSales.length === originalLength) throw new Error('Record not found or not deleted');
 await saveWithTracking('customer_sales', customerSales);
 await deleteRecordFromFirestore('customer_sales', id);
 await refreshCustomerSales();
@@ -5376,7 +3888,7 @@ const rec = parseFloat(document.getElementById('receivedCash').value) || 0;
 const netSold = Math.max(0, sold - ret);
 const cashQty = Math.max(0, netSold - cred);
 const expected = (cashQty * salePrice) + prev;
-document.getElementById('totalExpectedCash').textContent = safeValue(expected).toFixed(2);
+document.getElementById('totalExpectedCash').textContent = fmtAmt(safeValue(expected));
 const diff = rec - expected;
 const box = document.getElementById('discrepancyBox');
 const _discEl = document.getElementById('discrepancyStatus');
@@ -5385,13 +3897,12 @@ if (box) box.className = 'result-box discrepancy-ok';
 if (_discEl) _discEl.innerText = "PERFECT MATCH ";
 } else if(diff < -0.01) {
 if (box) box.className = 'result-box discrepancy-alert';
-if (_discEl) _discEl.innerText = `SHORT: ${Math.abs(diff).toFixed(2)}`;
+if (_discEl) _discEl.innerText = `SHORT: ${fmtAmt(Math.abs(diff))}`;
 } else {
 if (box) box.className = 'result-box discrepancy-ok';
-if (_discEl) _discEl.innerText = `OVER: ${safeNumber(diff, 0).toFixed(2)}`;
+if (_discEl) _discEl.innerText = `OVER: ${fmtAmt(safeNumber(diff, 0))}`;
 }
 }
-
 const firebaseConfig = {
   apiKey: "AIzaSyDd-lV05JevXqE5-on_PFkF-nlwKK5GcTw",
   authDomain: "gull-and-zubair-3207d.firebaseapp.com",
@@ -5431,7 +3942,7 @@ function saveFirestoreStats() {
 try {
 localStorage.setItem('firestoreStats', JSON.stringify(firestoreStats));
 } catch (e) {
-console.error('Firebase operation failed.', e);
+console.error('Firebase operation failed.', _safeErr(e));
 showToast('Firebase operation failed.', 'error');
 }
 }
@@ -5527,7 +4038,6 @@ color: 'rgba(255, 255, 255, 0.05)'
 }
 });
 }
-
 const FIRESTORE_THRESHOLDS = {
   reads:  { warn: 40000, critical: 48000 },
   writes: { warn: 16000, critical: 19000 },
@@ -5551,7 +4061,6 @@ function _checkFirestoreCostThresholds() {
     showToast('\u26A0\uFE0F Firestore writes at ' + w.toLocaleString() + ' today \u2014 80\u202f% of 20\u202f000/day free tier used', 'warning', 6000);
   }
 }
-
 function buildFirestoreCostEstimate(estimatedReads, estimatedWrites) {
   const totalR = firestoreStats.reads  + estimatedReads;
   const totalW = firestoreStats.writes + estimatedWrites;
@@ -5614,6 +4123,8 @@ firestoreUsageChart.update();
 }
 const originalOpenDataMenu = window.openDataMenu;
 window.openDataMenu = function() {
+// Refresh sync button state every time the menu is opened
+if (typeof updateSyncButton === 'function') updateSyncButton();
 if (typeof originalOpenDataMenu === 'function') {
 originalOpenDataMenu();
 } else {
@@ -5640,16 +4151,18 @@ _cacheDel(key) {
   delete this._cache[key];
 },
 _dirty: new Map(),
+_uploaded: new Map(),
+_downloaded: new Map(),
 trackId(collection, id) {
   if (!id) return;
+  const sid = String(id);
   if (!this._dirty.has(collection)) this._dirty.set(collection, new Set());
-  this._dirty.get(collection).add(String(id));
-  this.setLastLocalModification(collection, Date.now());
+  this._dirty.get(collection).add(sid);
+  if (this._downloaded.has(collection)) this._downloaded.get(collection).delete(sid);
 },
 trackCollection(collection) {
   if (!this._dirty.has(collection)) this._dirty.set(collection, new Set());
   this._dirty.get(collection).add('*');
-  this.setLastLocalModification(collection, Date.now());
 },
 clearDirty(collection) {
   this._dirty.delete(collection);
@@ -5657,6 +4170,25 @@ clearDirty(collection) {
 isDirty(collection) {
   const s = this._dirty.get(collection);
   return s !== undefined && s.size > 0;
+},
+markUploaded(collection, id) {
+  const sid = String(id);
+  if (!this._uploaded.has(collection)) this._uploaded.set(collection, new Set());
+  this._uploaded.get(collection).add(sid);
+  if (this._dirty.has(collection)) this._dirty.get(collection).delete(sid);
+},
+markDownloaded(collection, id) {
+  const sid = String(id);
+  if (!this._downloaded.has(collection)) this._downloaded.set(collection, new Set());
+  this._downloaded.get(collection).add(sid);
+},
+wasUploaded(collection, id) {
+  const s = this._uploaded.get(collection);
+  return s ? s.has(String(id)) : false;
+},
+wasDownloaded(collection, id) {
+  const s = this._downloaded.get(collection);
+  return s ? s.has(String(id)) : false;
 },
 async getLastSyncTimestamp(collection) {
   const key = `lastSync_${collection}`;
@@ -5707,47 +4239,27 @@ async trackModification(collection) {
   this.trackCollection(collection);
 },
 async hasLocalChanges(collection) {
-  if (this.isDirty(collection)) return true;
-  const lastSyncMs = await this.getLastSyncMs(collection);
-  const lastLocalMod = await this.getLastLocalModification(collection);
-  if (!lastSyncMs) return true;
-  if (!lastLocalMod) return false;
-  return lastLocalMod > lastSyncMs;
+  return this.isDirty(collection);
 },
 async getChangedItemsCount(collectionName, dataArray) {
   const ids = this._dirty.get(collectionName);
-  if (ids && !ids.has('*')) return ids.size;
-  const lastSyncMs = await this.getLastSyncMs(collectionName);
-  if (!lastSyncMs || !Array.isArray(dataArray)) return dataArray?.length || 0;
-  let changedCount = 0;
-  for (const item of dataArray) {
-    if (!item) continue;
-    const itemTime = item.updatedAt || item.timestamp || item.createdAt || 0;
-    const itemTimestamp = typeof itemTime === 'number' ? itemTime :
-      typeof itemTime === 'string' ? new Date(itemTime).getTime() :
-      itemTime?.toMillis ? itemTime.toMillis() : 0;
-    if (itemTimestamp > lastSyncMs) changedCount++;
-  }
-  return changedCount;
+  if (!ids || ids.size === 0) return 0;
+  if (ids.has('*')) return Array.isArray(dataArray) ? dataArray.filter(i => i).length : 0;
+  return ids.size;
 },
 async getChangedItems(collectionName, dataArray) {
   if (!Array.isArray(dataArray)) return [];
   const ids = this._dirty.get(collectionName);
-  if (ids && ids.size > 0 && !ids.has('*')) {
-    return dataArray.filter(item => item && ids.has(String(item.id)));
+  if (!ids || ids.size === 0) return [];
+  const uploaded = this._uploaded.get(collectionName) || new Set();
+  if (ids.has('*')) {
+    return dataArray.filter(item => item && item.id && !uploaded.has(String(item.id)));
   }
-  const lastSyncMs = await this.getLastSyncMs(collectionName);
-  if (!lastSyncMs) return dataArray.filter(item => item);
-  const changedItems = [];
-  for (const item of dataArray) {
-    if (!item) continue;
-    const itemTime = item.updatedAt || item.timestamp || item.createdAt || 0;
-    const itemTimestamp = typeof itemTime === 'number' ? itemTime :
-      typeof itemTime === 'string' ? new Date(itemTime).getTime() :
-      itemTime?.toMillis ? itemTime.toMillis() : 0;
-    if (itemTimestamp > lastSyncMs) changedItems.push(item);
-  }
-  return changedItems;
+  return dataArray.filter(item => {
+    if (!item || !item.id) return false;
+    const sid = String(item.id);
+    return ids.has(sid) && !uploaded.has(sid);
+  });
 },
 async hasAnyChanges(collections) {
   for (const collection of collections) {
@@ -5767,6 +4279,8 @@ async clearAllTimestamps() {
     this._cacheDel(lsKey);
     this._cacheDel(lmKey);
     this.clearDirty(col);
+    this._uploaded.delete(col);
+    this._downloaded.delete(col);
     await idb.remove(lsKey);
     await idb.remove(lmKey);
     localStorage.removeItem(lsKey);
@@ -5785,11 +4299,15 @@ async getSyncSummary() {
   for (const collection of collections) {
     const lastSyncMs = await this.getLastSyncTimestamp(collection);
     const hasChanges = await this.hasLocalChanges(collection);
+    const uploadedCount = (this._uploaded.get(collection) || new Set()).size;
+    const downloadedCount = (this._downloaded.get(collection) || new Set()).size;
     summary[collection] = {
       lastSync: lastSyncMs ? new Date(lastSyncMs).toISOString() : 'Never',
       hasChanges,
       needsUpload: hasChanges,
-      needsDownload: !lastSyncMs
+      needsDownload: !lastSyncMs,
+      uploadedUUIDs: uploadedCount,
+      downloadedUUIDs: downloadedCount
     };
   }
   return summary;
@@ -5853,7 +4371,6 @@ return true;
 }
 return false;
 }
-
 updateSyncButton();
 function addSignOutButton() {
 removeSignOutButton();
@@ -5923,10 +4440,10 @@ let statusText = "PERFECT MATCH ";
 let statusClass = "result-box discrepancy-ok";
 if (Math.abs(diff) > 0.01) {
 if (diff < 0) {
-statusText = `SHORT: ${safeNumber(Math.abs(diff), 0).toFixed(2)}`;
+statusText = `SHORT: ${fmtAmt(safeNumber(Math.abs(diff), 0))}`;
 statusClass = "result-box discrepancy-alert";
 } else {
-statusText = `OVER: ${safeNumber(diff, 0).toFixed(2)}`;
+statusText = `OVER: ${fmtAmt(safeNumber(diff, 0))}`;
 statusClass = "result-box discrepancy-ok";
 }
 }
@@ -5980,6 +4497,7 @@ emitSyncUpdate({ noman_history: history });
 if (Array.isArray(salesHistory)) {
 salesHistory.push(entry);
 }
+if (typeof renderCustomersTable === 'function') renderCustomersTable();
 document.getElementById('totalSold').value = '';
 document.getElementById('returnedQuantity').value = '';
 document.getElementById('creditSales').value = '';
@@ -6013,7 +4531,7 @@ const salesData = type === 'rep' ? repSales : customerSales;
 let hasMergedEntries = false;
 salesData.forEach(sale => {
 if (type === 'rep' && (sale.salesRep !== currentRepProfile)) return;
-if (type === 'admin' && (sale.isRepModeEntry === true || (sale.salesRep && sale.salesRep !== 'NONE'))) return;
+if (type === 'admin' && !isDirectSale(sale)) return;
 const name = sale.customerName;
 if (!name) return;
 if (!customerMap.has(name)) customerMap.set(name, initCust(name));
@@ -6102,21 +4620,21 @@ customerRows.push([
 cust.name,
 cust.phone,
 cust.address.substring(0, 35),
-cust.debt > 0 ? 'Rs ' + safeToFixed(cust.debt, 2) : '-',
-cust.paid > 0 ? 'Rs ' + safeToFixed(cust.paid, 2) : '-',
+cust.debt > 0 ? 'Rs ' + fmtAmt(cust.debt) : '-',
+cust.paid > 0 ? 'Rs ' + fmtAmt(cust.paid) : '-',
 Math.abs(net) < 0.01 ? 'SETTLED'
-: (net > 0 ? 'Rs ' + safeToFixed(net, 2) : 'OVERPAID\nRs ' + safeToFixed(Math.abs(net), 2)),
-safeToFixed(cust.qty, 2),
+: (net > 0 ? 'Rs ' + fmtAmt(net) : 'OVERPAID\nRs ' + fmtAmt(Math.abs(net))),
+fmtAmt(cust.qty),
 formatDisplayDate(cust.lastDate) || '-'
 ]);
 });
 customerRows.push([
 'TOTAL (' + customerMap.size + ' customers)',
 '', '',
-'Rs ' + safeToFixed(totDebt, 2),
-'Rs ' + safeToFixed(totPaid, 2),
-'Rs ' + safeToFixed(Math.abs(totNet), 2) + (totNet > 0 ? '\n(DUE)' : totNet < 0 ? '\n(OVERPAID)' : '\nSETTLED'),
-safeToFixed(totQty, 2),
+'Rs ' + fmtAmt(totDebt),
+'Rs ' + fmtAmt(totPaid),
+'Rs ' + fmtAmt(Math.abs(totNet)) + (totNet > 0 ? '\n(DUE)' : totNet < 0 ? '\n(OVERPAID)' : '\nSETTLED'),
+fmtAmt(totQty),
 ''
 ]);
 doc.autoTable({
@@ -6155,7 +4673,7 @@ margin: { left: 14, right: 14 }
 const afterY = doc.lastAutoTable.finalY + 6;
 if (afterY < pageH - 25) {
 doc.setFontSize(8); doc.setFont(undefined,'normal'); doc.setTextColor(100,100,100);
-doc.text(`Customers with outstanding debt: ${cntDebtors} | Settled accounts: ${cntSettled} | Total outstanding: Rs ${safeToFixed(Math.max(totNet, 0), 2)}`, 14, afterY);
+doc.text(`Customers with outstanding debt: ${cntDebtors} | Settled accounts: ${cntSettled} | Total outstanding: Rs ${fmtAmt(Math.max(totNet), 2)}`, 14, afterY);
 if (hasMergedEntries) {
   const noteY = afterY + 6;
   if (noteY < pageH - 12) {
@@ -6190,6 +4708,7 @@ let remainingQty = quantityToMark;
 const pendingSales = customerSales
 .filter(sale =>
 sale.salesRep === seller &&
+isDirectSale(sale) &&
 sale.paymentType === 'CREDIT' &&
 !sale.creditReceived
 )
@@ -6197,10 +4716,11 @@ sale.paymentType === 'CREDIT' &&
 for (const sale of pendingSales) {
 if (remainingQty <= 0) break;
 if (sale.quantity <= remainingQty) {
+sale.paymentType = 'CASH';
 sale.creditReceived = true;
 sale.creditReceivedDate = new Date().toISOString().split('T')[0];
 sale.creditReceivedTime = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-sale.paymentType = 'CASH';
+sale.updatedAt = getTimestamp();
 linkedIds.push(sale.id);
 remainingQty -= sale.quantity;
 } else {
@@ -6214,56 +4734,56 @@ for (const sale of modifiedSales) {
 await saveRecordToFirestore('customer_sales', sale);
 }
 if (typeof refreshCustomerSales === 'function') {
-refreshCustomerSales(1, true);
+refreshCustomerSales(1, false);
 }
 }
 return linkedIds;
 }
 async function markRepSalesEntriesAsUsed(seller, date, calcId) {
-if (!seller || seller === 'COMBINED' || !date || !calcId) return [];
-const linkedRepIds = [];
-repSales.forEach(sale => {
-if (
-sale.salesRep === seller &&
-sale.date === date &&
-!sale.usedInCalcId &&
-(sale.paymentType === 'CREDIT' || sale.paymentType === 'COLLECTION')
-) {
-sale.usedInCalcId = calcId;
-sale.updatedAt = getTimestamp();
-linkedRepIds.push(sale.id);
-}
-});
-if (linkedRepIds.length > 0) {
-await saveWithTracking('rep_sales', repSales);
-const modifiedSales = repSales.filter(s => linkedRepIds.includes(s.id));
-for (const sale of modifiedSales) {
-await saveRecordToFirestore('rep_sales', sale);
-}
-}
-return linkedRepIds;
+  if (!seller || seller === 'COMBINED' || !date || !calcId) return [];
+  const linkedRepIds = [];
+  repSales.forEach(sale => {
+    if (
+      sale.salesRep === seller &&
+      sale.date === date &&
+      !sale.usedInCalcId &&
+      (sale.paymentType === 'CREDIT' || sale.paymentType === 'COLLECTION')
+    ) {
+      sale.usedInCalcId = calcId;
+      sale.updatedAt = getTimestamp();
+      linkedRepIds.push(sale.id);
+    }
+  });
+  if (linkedRepIds.length > 0) {
+    await saveWithTracking('rep_sales', repSales);
+    const modifiedSales = repSales.filter(s => linkedRepIds.includes(s.id));
+    for (const sale of modifiedSales) {
+      await saveRecordToFirestore('rep_sales', sale);
+    }
+  }
+  return linkedRepIds;
 }
 async function revertRepSalesEntries(repSaleIds) {
-if (!repSaleIds || repSaleIds.length === 0) return 0;
-let revertedCount = 0;
-repSaleIds.forEach(saleId => {
-const saleIndex = repSales.findIndex(s => s.id === saleId);
-if (saleIndex !== -1) {
-delete repSales[saleIndex].usedInCalcId;
-repSales[saleIndex].updatedAt = getTimestamp();
-revertedCount++;
-}
-});
-if (revertedCount > 0) {
-await saveWithTracking('rep_sales', repSales);
-const revertedSales = repSales.filter(s => repSaleIds.includes(s.id));
-for (const sale of revertedSales) {
-await saveRecordToFirestore('rep_sales', sale);
-}
-notifyDataChange('rep');
-triggerAutoSync();
-}
-return revertedCount;
+  if (!repSaleIds || repSaleIds.length === 0) return 0;
+  let revertedCount = 0;
+  repSaleIds.forEach(saleId => {
+    const saleIndex = repSales.findIndex(s => s.id === saleId);
+    if (saleIndex !== -1) {
+      delete repSales[saleIndex].usedInCalcId;
+      repSales[saleIndex].updatedAt = getTimestamp();
+      revertedCount++;
+    }
+  });
+  if (revertedCount > 0) {
+    await saveWithTracking('rep_sales', repSales);
+    const revertedSales = repSales.filter(s => repSaleIds.includes(s.id));
+    for (const sale of revertedSales) {
+      await saveRecordToFirestore('rep_sales', sale);
+    }
+    notifyDataChange('rep');
+    triggerAutoSync();
+  }
+  return revertedCount;
 }
 function togglePercentage(chartId) {
 let btnId = '';
@@ -6639,7 +5159,7 @@ await idb.set('mfg_pro_pkr', freshProduction);
 db = freshProduction;
 }
 } catch (error) {
-console.error('Failed to save data locally.', error);
+console.error('Failed to save data locally.', _safeErr(error));
 showToast('Failed to save data locally.', 'error');
 }
 }
@@ -6725,9 +5245,6 @@ if (item.isReturn) {
 returnBadge = `<span class="payment-badge" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); top: 35px; right: 12px;"> RETURN</span>`;
 }
 let paymentBadge = '';
-if (item.store === 'STORE_C' && item.paymentStatus === 'CREDIT' && !item.isReturn) {
-paymentBadge = `<span class="payment-badge credit" style="top: 35px; right: 12px;">CREDIT</span>`;
-}
 let mergedBadge = '';
 if (item.isMerged) {
 mergedBadge = _mergedBadgeHtml(item, {inline:true});
@@ -6753,13 +5270,12 @@ ${item.isReturn ? `<p style="color:var(--accent-emerald); font-size:0.75rem; fon
 <p><span>Cost Price:</span> <span class="cost-val">${safeValue(item.cp).toFixed(2)}/kg</span></p>
 <p><span>Sale Price:</span> <span class="rev-val">${safeValue(item.sp).toFixed(2)}/kg</span></p>
 <hr>
-<p><span>Total Cost:</span> <span class="cost-val">${safeValue(item.totalCost).toFixed(2)}</span></p>
-<p><span>Total Value:</span> <span class="rev-val">${safeValue(item.totalSale).toFixed(2)}</span></p>
-<p><span>Net Profit:</span> <span class="profit-val">${safeValue(item.profit).toFixed(2)}</span></p>
-${!item.isMerged && item.paymentStatus === 'CREDIT' && !item.isReturn ? `<p><span>Payment:</span> <span class="cost-val" style="color:var(--credit-color);">Credit</span></p>` : ''}
+<p><span>Total Cost:</span> <span class="cost-val">${fmtAmt(safeValue(item.totalCost))}</span></p>
+<p><span>Total Value:</span> <span class="rev-val">${fmtAmt(safeValue(item.totalSale))}</span></p>
+<p><span>Net Profit:</span> <span class="profit-val">${fmtAmt(safeValue(item.profit))}</span></p>
 ${returnsByStoreHtml}
 ${item.formulaUnits && !item.isReturn ? `<p><span>Formula Units:</span> <span class="qty-val">${safeValue(item.formulaUnits).toFixed(2)}</span></p>` : ''}
-${item.formulaCost && !item.isReturn ? `<p><span>Formula Cost:</span> <span class="cost-val">${safeValue(item.formulaCost).toFixed(2)}</span></p>` : ''}
+${item.formulaCost && !item.isReturn ? `<p><span>Formula Cost:</span> <span class="cost-val">${fmtAmt(safeValue(item.formulaCost))}</span></p>` : ''}
 ${item.isMerged ? '' : `<button class="tbl-action-btn danger u-w-full u-mt-8" onclick="(async () => { await deleteProdEntry('${esc(item.id)}') })()">Delete</button>`}
 `;
 fragment.appendChild(div);
@@ -6769,11 +5285,11 @@ histContainer.appendChild(fragment);
 const updateStats = (idPrefix, statObj) => {
 const _st = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
 _st(`${idPrefix}-qty`, `${safeValue(statObj.q).toFixed(2)} kg`);
-_st(`${idPrefix}-value`, `${safeValue(statObj.v).toFixed(2)}`);
-_st(`${idPrefix}-cost`, `${safeValue(statObj.c).toFixed(2)}`);
-_st(`${idPrefix}-profit`, `${safeValue(statObj.p).toFixed(2)}`);
-_st(`${idPrefix}-formula-units`, `${safeValue(statObj.fu).toFixed(2)}`);
-_st(`${idPrefix}-formula-cost`, `${safeValue(statObj.fc).toFixed(2)}`);
+_st(`${idPrefix}-value`, `${fmtAmt(safeValue(statObj.v))}`);
+_st(`${idPrefix}-cost`, `${fmtAmt(safeValue(statObj.c))}`);
+_st(`${idPrefix}-profit`, `${fmtAmt(safeValue(statObj.p))}`);
+_st(`${idPrefix}-formula-units`, `${fmtAmt(safeValue(statObj.fu))}`);
+_st(`${idPrefix}-formula-cost`, `${fmtAmt(safeValue(statObj.fc))}`);
 };
 updateStats('day', stats.day);
 updateStats('week', stats.week);
@@ -6858,7 +5374,7 @@ txMap.set(t.id, t);
 paymentTransactions = Array.from(txMap.values());
 }
 } catch (error) {
-console.error('Payment transaction failed.', error);
+console.error('Payment transaction failed.', _safeErr(error));
 showToast('Payment transaction failed.', 'error');
 }
 const balances = calculateEntityBalances();
@@ -6920,9 +5436,9 @@ const safeName = String(entity.name || 'Unknown Entity');
 const balance = balances[entity.id] || 0;
 let balanceHtml = '';
 if (balance > 0.01) {
-balanceHtml = `<span class="u-danger-bold" >Payable: ${balance.toFixed(2)}</span>`;
+balanceHtml = `<span class="u-danger-bold" >Payable: ${fmtAmt(balance)}</span>`;
 } else if (balance < -0.01) {
-balanceHtml = `<span class="u-text-emerald u-fw-800" >Receivable: ${Math.abs(balance).toFixed(2)}</span>`;
+balanceHtml = `<span class="u-text-emerald u-fw-800" >Receivable: ${fmtAmt(Math.abs(balance))}</span>`;
 } else {
 balanceHtml = `<span class="u-text-muted" >Settled</span>`;
 }
@@ -6951,8 +5467,8 @@ tbody.appendChild(fragment);
 }
 const recEl = document.getElementById('total-receivables');
 const payEl = document.getElementById('total-payables');
-if(recEl) recEl.innerText = `${totalReceivables.toFixed(2)}`;
-if(payEl) payEl.innerText = `${totalPayables.toFixed(2)}`;
+if(recEl) recEl.innerText = `${fmtAmt(totalReceivables)}`;
+if(payEl) payEl.innerText = `${fmtAmt(totalPayables)}`;
 }
 function filterEntityList() {
 const searchTerm = document.getElementById('entity-list-search')?.value.toLowerCase() || '';
@@ -6991,7 +5507,7 @@ entityTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
 let totalIn = 0, totalOut = 0;
 entityTransactions.forEach((t, index) => {
 const typeText = t.type === 'IN' ? 'RECEIVED' : 'PAID';
-const amount = t.amount.toFixed(2);
+const amount = fmtAmt(t.amount);
 message += `${index + 1}. ${t.date} ${t.time || ''}\n`;
 message += ` ${typeText}: ${amount}\n`;
 message += ` Description: ${t.description}\n`;
@@ -7001,9 +5517,9 @@ else totalOut += t.amount;
 });
 const netBalance = totalIn - totalOut;
 message += `\nSUMMARY:\n`;
-message += `Total Received: ${totalIn.toFixed(2)}\n`;
-message += `Total Paid: ${totalOut.toFixed(2)}\n`;
-message += `Net Balance: ${netBalance.toFixed(2)}\n`;
+message += `Total Received: ${fmtAmt(totalIn)}\n`;
+message += `Total Paid: ${fmtAmt(totalOut)}\n`;
+message += `Net Balance: ${fmtAmt(netBalance)}\n`;
 }
 showToast(message, 'info', 5000);
 }
@@ -7034,32 +5550,26 @@ material.supplierId = existingEntity.id;
 await saveWithTracking('payment_entities', paymentEntities);
 await saveWithTracking('factory_inventory_data', factoryInventoryData);
 }
-
 async function verifyAccountPassword(password) {
   if (!currentUser || !password) return false;
   const email = currentUser.email;
-
   if (navigator.onLine && typeof firebase !== 'undefined' && firebase.apps.length) {
     try {
       const firebaseAuth = auth || firebase.auth();
       await firebaseAuth.signInWithEmailAndPassword(email, password);
       return true;
     } catch (fbErr) {
-
       if (fbErr.code && fbErr.code.startsWith('auth/')) return false;
-
       console.warn('Firebase reauth network error, falling back to offline check:', fbErr.message);
     }
   }
-
   try {
     return await OfflineAuth.verifyCredentials(email, password);
   } catch (e) {
-    console.error('OfflineAuth verification error:', e);
+    console.error('OfflineAuth verification error:', _safeErr(e));
     return false;
   }
 }
-
 async function promptVerifiedBackupPassword({ title = 'Confirm Password', subtitle = 'Enter your account password to encrypt this backup file.', inputId = '_bkp_pwd_modal_input' } = {}) {
   if (!currentUser) return null;
   return new Promise((resolve) => {
@@ -7092,7 +5602,6 @@ async function promptVerifiedBackupPassword({ title = 'Confirm Password', subtit
     const errEl = document.getElementById(inputId + '_err');
     const okBtn = document.getElementById(inputId + '_ok');
     setTimeout(() => { if (inp) inp.focus(); }, 100);
-
     if (inp) inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') okBtn.click(); });
     okBtn.onclick = async () => {
       const pwd = inp ? inp.value : '';
@@ -7119,7 +5628,6 @@ async function promptVerifiedBackupPassword({ title = 'Confirm Password', subtit
     };
   });
 }
-
 async function unifiedBackup() {
 if (!currentUser) {
 showToast('Please sign in to create a backup.', 'error');
@@ -7152,10 +5660,9 @@ paymentTransactions: paymentTransactions,
 stockReturns: stockReturns,
 settings: await idb.get('naswar_default_settings', defaultSettings),
 deleted_records: Array.from(deletedRecordIds),
-_meta: { encryptedFor: currentUser.email, createdAt: Date.now(), version: 2 }
+_meta: { encryptedFor: currentUser.email, createdAt: Date.now(), version: 3, syncScheme: 'uuid-v2' }
 };
 const encEmail = currentUser.email;
-
 const encPassword = await promptVerifiedBackupPassword({ inputId: 'enc_bkp_pwd' });
 if (!encPassword) {
 showToast('Backup cancelled.', 'info');
@@ -7187,7 +5694,6 @@ const _encRestoreMsg = `Restore data from this encrypted backup file?\n\nHow it 
 if (!(await showGlassConfirm(_encRestoreMsg, { title: 'Restore From Encrypted Backup', confirmText: 'Restore & Merge', cancelText: 'Cancel' }))) return;
 showToast('Encrypted backup detected. Decrypting...', 'info', 4000);
 let decPassword = null;
-
 if (!decPassword) {
 decPassword = await new Promise((resolve) => {
 const modal = document.createElement('div');
@@ -7235,11 +5741,9 @@ showToast('Decryption failed: ' + decErr.message, 'error');
 return;
 }
 showToast('Decryption successful! Restoring data...', 'success', 3000);
-
 if (data && data._meta && data._meta.isYearCloseBackup) {
 const snap = data._meta.fyCloseSnapshot || {};
 const closedDate = snap.lastYearClosedDate ? new Date(snap.lastYearClosedDate).toLocaleDateString() : 'unknown date';
-
 const _ycEstItems = [
   ...(data.mfg || data.mfg_pro_pkr || []), ...(data.sales || data.noman_history || []),
   ...(data.customerSales || []), ...(data.repSales || []),
@@ -7257,7 +5761,6 @@ if (!(await showGlassConfirm(_ycRestoreMsg, { title: '\u21a9 Reverse Financial Y
 showToast('Year-close reversal cancelled.', 'info');
 return;
 }
-
 const _allBackupItems = [
   ...(data.mfg || data.mfg_pro_pkr || []),
   ...(data.sales || data.noman_history || []),
@@ -7288,8 +5791,6 @@ if (_postCloseDeletions.length > 0) {
     confirmText: 'Keep Deletions',
     cancelText: 'Restore Everything'
   });
-
-  
 }
 await _doYearCloseRestore(data, _honourDeletions);
 } else {
@@ -7315,123 +5816,119 @@ showToast("Error reading file: " + err.message, 'error');
 }
 }
 }
-
 function migrateBackupSchema(data) {
   if (!data || typeof data !== 'object') return data;
-
   const metaVersion = (data._meta && data._meta.version) ? Number(data._meta.version) : null;
   const bkpVersion  = (data.backupMetadata && data.backupMetadata.version)
                       ? String(data.backupMetadata.version)
                       : null;
-
-  
   let version = 0;
   if (metaVersion !== null && !isNaN(metaVersion)) {
     version = metaVersion;
   } else if (bkpVersion !== null) {
     version = parseInt(bkpVersion, 10) || 0;
   }
-
-  
   if (version < 2) {
-
     if (!data.mfg && data.mfg_pro_pkr) {
       data.mfg = data.mfg_pro_pkr;
     }
-
     if (!data.sales && data.noman_history) {
       data.sales = data.noman_history;
     }
-
     if (!data.customerSales && data.customer_sales) {
       data.customerSales = data.customer_sales;
     }
-
     if (!data.repSales && data.rep_sales) {
       data.repSales = data.rep_sales;
     }
-
     if (!data.repCustomers && data.rep_customers) {
       data.repCustomers = data.rep_customers;
     }
-
     if (!data.salesCustomers && data.sales_customers) {
       data.salesCustomers = data.sales_customers;
     }
-
     if (!data.stockReturns && data.stock_returns) {
       data.stockReturns = data.stock_returns;
     }
-
     if (!data.paymentTransactions && data.payment_transactions) {
       data.paymentTransactions = data.payment_transactions;
     }
-
     if (!data.paymentEntities && data.payment_entities) {
       data.paymentEntities = data.payment_entities;
     }
-
     if (!data.factoryInventoryData && data.factory_inventory_data) {
       data.factoryInventoryData = data.factory_inventory_data;
     }
-
     if (!data.factoryProductionHistory && data.factory_production_history) {
       data.factoryProductionHistory = data.factory_production_history;
     }
-
     if (!data.settings && data.naswar_default_settings) {
       data.settings = data.naswar_default_settings;
     }
   }
-
-  
-
-  
-
   if (data.mfg && !data.mfg_pro_pkr)       data.mfg_pro_pkr   = data.mfg;
   if (data.mfg_pro_pkr && !data.mfg)       data.mfg           = data.mfg_pro_pkr;
   if (data.sales && !data.noman_history)    data.noman_history = data.sales;
   if (data.noman_history && !data.sales)    data.sales         = data.noman_history;
-
   if (!data._migrated) {
-    data._migrated = { fromVersion: version, toVersion: 2, at: Date.now() };
+    data._migrated = { fromVersion: version, toVersion: 3, at: Date.now() };
   }
   return data;
 }
 async function _doRestoreMerge(data) {
 showToast('Analyzing backup file...', 'info', 5000);
-
 data = migrateBackupSchema(data);
+// --- UUID v2 intelligence: migrate any non-v2 UUIDs in the backup so that
+//     records which already exist locally under their v2 UUID are correctly
+//     identified as duplicates and are NOT re-uploaded to cloud. ---
+const _backupSyncScheme = (data._meta && data._meta.syncScheme) || '';
+if (_backupSyncScheme !== 'uuid-v2') {
+  const _collectionsToMigrate = [
+    { key: 'mfg_pro_pkr',               mode: 'production' },
+    { key: 'noman_history',              mode: 'admin'      },
+    { key: 'customerSales',              mode: 'admin'      },
+    { key: 'repSales',                   mode: 'rep'        },
+    { key: 'repCustomers',               mode: 'rep'        },
+    { key: 'salesCustomers',             mode: 'admin'      },
+    { key: 'factoryInventoryData',       mode: 'factory'    },
+    { key: 'factoryProductionHistory',   mode: 'factory'    },
+    { key: 'stockReturns',               mode: 'admin'      },
+    { key: 'paymentTransactions',        mode: 'admin'      },
+    { key: 'paymentEntities',            mode: 'admin'      },
+    { key: 'expenses',                   mode: 'admin'      },
+  ];
+  let _migratedCount = 0;
+  for (const { key, mode } of _collectionsToMigrate) {
+    if (!Array.isArray(data[key])) continue;
+    for (const rec of data[key]) {
+      if (!rec || !rec.id) continue;
+      const _meta = (typeof extractUUIDMeta === 'function') ? extractUUIDMeta(rec.id) : null;
+      if (_meta && _meta.isEnriched && _meta.version === 2) continue;
+      const _recMode = rec.isRepModeEntry === true ? 'rep' : mode;
+      const _ts = rec.createdAt || rec.timestamp || Date.now();
+      const _newId = (typeof migrateUUID === 'function') ? migrateUUID(rec.id, _ts, _recMode) : rec.id;
+      if (_newId !== rec.id) { rec.id = _newId; _migratedCount++; }
+    }
+  }
+  if (_migratedCount > 0) console.log('[Restore] Migrated', _migratedCount, 'UUIDs to v2 format before merge.');
+  // Mark backup as v2 now so downstream logic treats it correctly
+  if (data._meta) data._meta.syncScheme = 'uuid-v2';
+}
 const getTimestampValue = (record) => {
 if (!record) return 0;
 let ts = record.updatedAt || record.timestamp || record.createdAt || 0;
-if (typeof ts === 'number') {
-return ts;
-}
-if (ts && typeof ts.toMillis === 'function') {
-return ts.toMillis();
-}
+if (typeof ts === 'number') return ts;
+if (ts && typeof ts.toMillis === 'function') return ts.toMillis();
 if (ts && typeof ts === 'object') {
-if (typeof ts.seconds === 'number') {
-return ts.seconds * 1000;
+  if (typeof ts.seconds === 'number') return ts.seconds * 1000;
+  if (typeof ts._seconds === 'number') return ts._seconds * 1000;
 }
-if (typeof ts._seconds === 'number') {
-return ts._seconds * 1000;
-}
-}
-if (ts instanceof Date) {
-return ts.getTime();
-}
+if (ts instanceof Date) return ts.getTime();
 if (typeof ts === 'string') {
-try {
-const dateStr = ts.replace('Z', '+00:00');
-const date = new Date(dateStr);
-const time = date.getTime();
-if (!isNaN(time)) {
-return time;
-}
-} catch (e) {
-}
+  try {
+    const time = new Date(ts.replace('Z', '+00:00')).getTime();
+    if (!isNaN(time)) return time;
+  } catch (e) {}
 }
 return 0;
 };
@@ -7440,127 +5937,144 @@ if (!Array.isArray(array) || array.length === 0) return array;
 const seen = new Map();
 let duplicatesFound = 0;
 array.forEach(item => {
-if (!item || !item.id) return;
-if (!validateUUID(item.id)) item.id = generateUUID();
-if (seen.has(item.id)) {
-duplicatesFound++;
-const existing = seen.get(item.id);
-const existingTime = getTimestampValue(existing);
-const itemTime = getTimestampValue(item);
-if (itemTime > existingTime) {
-seen.set(item.id, item);
-}
-} else {
-seen.set(item.id, item);
-}
+  if (!item || !item.id) return;
+  if (!validateUUID(item.id)) item.id = generateUUID();
+  if (seen.has(item.id)) {
+    duplicatesFound++;
+    const _cmpDup = (typeof compareRecordVersions === 'function')
+      ? compareRecordVersions(item, seen.get(item.id))
+      : getTimestampValue(item) - getTimestampValue(seen.get(item.id));
+    if (_cmpDup > 0) seen.set(item.id, item);
+  } else {
+    seen.set(item.id, item);
+  }
 });
-if (duplicatesFound > 0) {
-showToast(`Cleaned ${collectionName}: removed ${duplicatesFound} duplicates`, 'info');
-}
+if (duplicatesFound > 0) showToast(`Cleaned ${collectionName}: removed ${duplicatesFound} duplicates`, 'info');
 return Array.from(seen.values());
 };
-if (data.mfg_pro_pkr) data.mfg_pro_pkr = deduplicateByUUID(data.mfg_pro_pkr, 'Production');
-if (data.noman_history) data.noman_history = deduplicateByUUID(data.noman_history, 'Calculator History');
-if (data.customerSales) data.customerSales = deduplicateByUUID(data.customerSales, 'Customer Sales');
-if (data.repSales) data.repSales = deduplicateByUUID(data.repSales, 'Rep Sales');
-if (data.repCustomers) data.repCustomers = deduplicateByUUID(data.repCustomers, 'Rep Customers');
-if (data.salesCustomers) data.salesCustomers = deduplicateByUUID(data.salesCustomers, 'Sales Customers');
-if (data.factoryInventoryData) data.factoryInventoryData = deduplicateByUUID(data.factoryInventoryData, 'Factory Inventory');
-if (data.factoryProductionHistory) data.factoryProductionHistory = deduplicateByUUID(data.factoryProductionHistory, 'Factory History');
-if (data.stockReturns) data.stockReturns = deduplicateByUUID(data.stockReturns, 'Stock Returns');
-if (data.paymentTransactions) data.paymentTransactions = deduplicateByUUID(data.paymentTransactions, 'Payment Transactions');
-if (data.paymentEntities) data.paymentEntities = deduplicateByUUID(data.paymentEntities, 'Payment Entities');
-if (data.expenses) data.expenses = deduplicateByUUID(data.expenses, 'Expenses');
-
-data.mfg           = data.mfg_pro_pkr;
-data.sales         = data.noman_history;
+if (data.mfg_pro_pkr)             data.mfg_pro_pkr             = deduplicateByUUID(data.mfg_pro_pkr,             'Production');
+if (data.noman_history)           data.noman_history           = deduplicateByUUID(data.noman_history,           'Calculator History');
+if (data.customerSales)           data.customerSales           = deduplicateByUUID(data.customerSales,           'Customer Sales');
+if (data.repSales)                data.repSales                = deduplicateByUUID(data.repSales,                'Rep Sales');
+if (data.repCustomers)            data.repCustomers            = deduplicateByUUID(data.repCustomers,            'Rep Customers');
+if (data.salesCustomers)          data.salesCustomers          = deduplicateByUUID(data.salesCustomers,          'Sales Customers');
+if (data.factoryInventoryData)    data.factoryInventoryData    = deduplicateByUUID(data.factoryInventoryData,    'Factory Inventory');
+if (data.factoryProductionHistory)data.factoryProductionHistory= deduplicateByUUID(data.factoryProductionHistory,'Factory History');
+if (data.stockReturns)            data.stockReturns            = deduplicateByUUID(data.stockReturns,            'Stock Returns');
+if (data.paymentTransactions)     data.paymentTransactions     = deduplicateByUUID(data.paymentTransactions,     'Payment Transactions');
+if (data.paymentEntities)         data.paymentEntities         = deduplicateByUUID(data.paymentEntities,         'Payment Entities');
+if (data.expenses)                data.expenses                = deduplicateByUUID(data.expenses,                'Expenses');
+data.mfg   = data.mfg_pro_pkr;
+data.sales = data.noman_history;
 showToast(' Backup cleaned! Restoring with smart merge...', 'success');
 if (data.deleted_records && Array.isArray(data.deleted_records)) {
 data.deleted_records.forEach(id => deletedRecordIds.add(id));
 await idb.set('deleted_records', Array.from(deletedRecordIds));
 }
-const isAlive = (item) => {
-if (!item || !item.id) return false;
-if (deletedRecordIds.has(item.id)) {
-return false;
-}
-return true;
-};
+const isAlive = (item) => item && item.id && !deletedRecordIds.has(item.id);
 const currentLocalData = {
-mfg_pro_pkr: await idb.get('mfg_pro_pkr') || [],
-noman_history: await idb.get('noman_history') || [],
-customer_sales: await idb.get('customer_sales') || [],
-rep_sales: await idb.get('rep_sales') || [],
-rep_customers: await idb.get('rep_customers') || [],
-sales_customers: await idb.get('sales_customers') || [],
-factory_inventory_data: await idb.get('factory_inventory_data') || [],
+mfg_pro_pkr:                await idb.get('mfg_pro_pkr') || [],
+noman_history:              await idb.get('noman_history') || [],
+customer_sales:             await idb.get('customer_sales') || [],
+rep_sales:                  await idb.get('rep_sales') || [],
+rep_customers:              await idb.get('rep_customers') || [],
+sales_customers:            await idb.get('sales_customers') || [],
+factory_inventory_data:     await idb.get('factory_inventory_data') || [],
 factory_production_history: await idb.get('factory_production_history') || [],
-stock_returns: await idb.get('stock_returns') || [],
-payment_transactions: await idb.get('payment_transactions') || [],
-payment_entities: await idb.get('payment_entities') || [],
-expenses: await idb.get('expenses') || []
+stock_returns:              await idb.get('stock_returns') || [],
+payment_transactions:       await idb.get('payment_transactions') || [],
+payment_entities:           await idb.get('payment_entities') || [],
+expenses:                   await idb.get('expenses') || []
 };
+const _localUUIDSets = {};
+for (const [key, arr] of Object.entries(currentLocalData)) {
+_localUUIDSets[key] = new Set(arr.filter(i => i && i.id).map(i => String(i.id)));
+}
 const cleanBackupData = {
-mfg_pro_pkr: ensureArray(data.mfg || data.mfg_pro_pkr).filter(isAlive),
-noman_history: ensureArray(data.sales || data.noman_history).filter(isAlive),
-customer_sales: ensureArray(data.customerSales).filter(isAlive),
-rep_sales: ensureArray(data.repSales).filter(isAlive),
-rep_customers: ensureArray(data.repCustomers).filter(isAlive),
-sales_customers: ensureArray(data.salesCustomers).filter(isAlive),
-factory_inventory_data: ensureArray(data.factoryInventoryData).filter(isAlive),
+mfg_pro_pkr:                ensureArray(data.mfg || data.mfg_pro_pkr).filter(isAlive),
+noman_history:              ensureArray(data.sales || data.noman_history).filter(isAlive),
+customer_sales:             ensureArray(data.customerSales).filter(isAlive),
+rep_sales:                  ensureArray(data.repSales).filter(isAlive),
+rep_customers:              ensureArray(data.repCustomers).filter(isAlive),
+sales_customers:            ensureArray(data.salesCustomers).filter(isAlive),
+factory_inventory_data:     ensureArray(data.factoryInventoryData).filter(isAlive),
 factory_production_history: ensureArray(data.factoryProductionHistory).filter(isAlive),
-stock_returns: ensureArray(data.stockReturns).filter(isAlive),
-payment_transactions: ensureArray(data.paymentTransactions).filter(isAlive),
-payment_entities: ensureArray(data.paymentEntities).filter(isAlive),
-expenses: ensureArray(data.expenses).filter(isAlive)
+stock_returns:              ensureArray(data.stockReturns).filter(isAlive),
+payment_transactions:       ensureArray(data.paymentTransactions).filter(isAlive),
+payment_entities:           ensureArray(data.paymentEntities).filter(isAlive),
+expenses:                   ensureArray(data.expenses).filter(isAlive)
 };
 let totalAdded = 0;
 let totalUpdated = 0;
 let totalSkipped = 0;
 const mergedData = {};
+const _idbToFirestore = {
+mfg_pro_pkr: 'production', noman_history: 'calculator_history',
+customer_sales: 'sales', rep_sales: 'rep_sales',
+rep_customers: 'rep_customers', sales_customers: 'sales_customers',
+factory_inventory_data: 'inventory', factory_production_history: 'factory_history',
+stock_returns: 'returns', payment_transactions: 'transactions',
+payment_entities: 'entities', expenses: 'expenses'
+};
 for (const [key, backupArray] of Object.entries(cleanBackupData)) {
 const localArray = currentLocalData[key] || [];
-const merged = mergeArraysByTimestamp(localArray, backupArray);
-const localIds = new Set(localArray.map(item => item.id));
+const localIds = _localUUIDSets[key];
+const firestoreCollection = _idbToFirestore[key];
+const merged = mergeArrays(localArray, backupArray);
 backupArray.forEach(backupItem => {
-if (!localIds.has(backupItem.id)) {
-totalAdded++;
-} else {
-const localItem = localArray.find(item => item.id === backupItem.id);
-const backupTs = backupItem.timestamp || backupItem.updatedAt || backupItem.createdAt || 0;
-const localTs = localItem?.timestamp || localItem?.updatedAt || localItem?.createdAt || 0;
-const backupTime = typeof backupTs === 'number' ? backupTs : new Date(backupTs).getTime();
-const localTime = typeof localTs === 'number' ? localTs : new Date(localTs).getTime();
-if (backupTime > localTime) {
-totalUpdated++;
-} else {
-totalSkipped++;
-}
-}
+  if (!backupItem || !backupItem.id) return;
+  const sid = String(backupItem.id);
+  if (!localIds.has(sid)) {
+    totalAdded++;
+    if (firestoreCollection) DeltaSync.trackId(firestoreCollection, sid);
+  } else {
+    const localItem = localArray.find(item => item.id === backupItem.id);
+    const _cmpRestore = (typeof compareRecordVersions === 'function')
+      ? compareRecordVersions(backupItem, localItem)
+      : getTimestampValue(backupItem) - getTimestampValue(localItem);
+    if (_cmpRestore > 0) {
+      totalUpdated++;
+      if (firestoreCollection) DeltaSync.trackId(firestoreCollection, sid);
+    } else {
+      totalSkipped++;
+      if (firestoreCollection) {
+        DeltaSync.markUploaded(firestoreCollection, sid);
+        DeltaSync.markDownloaded(firestoreCollection, sid);
+      }
+    }
+  }
+});
+localArray.forEach(item => {
+  if (!item || !item.id) return;
+  const sid = String(item.id);
+  if (!backupArray.some(b => b && String(b.id) === sid) && firestoreCollection) {
+    DeltaSync.markUploaded(firestoreCollection, sid);
+    DeltaSync.markDownloaded(firestoreCollection, sid);
+  }
 });
 mergedData[key] = merged;
 }
 await Promise.all([
-idb.set('mfg_pro_pkr', mergedData.mfg_pro_pkr),
-idb.set('noman_history', mergedData.noman_history),
-idb.set('customer_sales', mergedData.customer_sales),
-idb.set('rep_sales', mergedData.rep_sales),
-idb.set('rep_customers', mergedData.rep_customers),
-idb.set('sales_customers', mergedData.sales_customers),
-idb.set('factory_inventory_data', mergedData.factory_inventory_data),
+idb.set('mfg_pro_pkr',                mergedData.mfg_pro_pkr),
+idb.set('noman_history',              mergedData.noman_history),
+idb.set('customer_sales',             mergedData.customer_sales),
+idb.set('rep_sales',                  mergedData.rep_sales),
+idb.set('rep_customers',              mergedData.rep_customers),
+idb.set('sales_customers',            mergedData.sales_customers),
+idb.set('factory_inventory_data',     mergedData.factory_inventory_data),
 idb.set('factory_production_history', mergedData.factory_production_history),
-idb.set('stock_returns', mergedData.stock_returns),
-idb.set('payment_transactions', mergedData.payment_transactions),
-idb.set('payment_entities', mergedData.payment_entities),
-idb.set('expenses', mergedData.expenses)
+idb.set('stock_returns',              mergedData.stock_returns),
+idb.set('payment_transactions',       mergedData.payment_transactions),
+idb.set('payment_entities',           mergedData.payment_entities),
+idb.set('expenses',                   mergedData.expenses)
 ]);
 const currentSettings = {
-factoryDefaultFormulas: await idb.get('factory_default_formulas'),
-factoryAdditionalCosts: await idb.get('factory_additional_costs'),
-factoryCostAdjustmentFactor: await idb.get('factory_cost_adjustment_factor'),
-factorySalePrices: await idb.get('factory_sale_prices'),
-factoryUnitTracking: await idb.get('factory_unit_tracking'),
-naswarDefaultSettings: await idb.get('naswar_default_settings')
+factoryDefaultFormulas:       await idb.get('factory_default_formulas'),
+factoryAdditionalCosts:       await idb.get('factory_additional_costs'),
+factoryCostAdjustmentFactor:  await idb.get('factory_cost_adjustment_factor'),
+factorySalePrices:            await idb.get('factory_sale_prices'),
+factoryUnitTracking:          await idb.get('factory_unit_tracking'),
+naswarDefaultSettings:        await idb.get('naswar_default_settings')
 };
 const settingsTimestamp = Date.now();
 if (data.factoryDefaultFormulas && JSON.stringify(data.factoryDefaultFormulas) !== JSON.stringify(currentSettings.factoryDefaultFormulas)) {
@@ -7594,136 +6108,125 @@ await idb.set('naswar_default_settings_timestamp', settingsTimestamp);
 defaultSettings = data.settings;
 }
 await loadAllData();
-try { syncFactoryProductionStats(); } catch(e) { console.error('Factory stats error:', e); }
-try { await invalidateAllCaches(); } catch(e) { console.error('Cache invalidation error:', e); }
-try { await refreshAllDisplays(); } catch(e) { console.error('Display refresh error:', e); }
+try { syncFactoryProductionStats(); } catch(e) { console.error('Factory stats error:', _safeErr(e)); }
+try { await invalidateAllCaches(); } catch(e) { console.error('Cache invalidation error:', _safeErr(e)); }
+try { await refreshAllDisplays(); } catch(e) { console.error('Display refresh error:', _safeErr(e)); }
 let cloudSyncSuccess = false;
 if (firebaseDB && currentUser) {
 try {
-showToast('Analyzing records for intelligent upload...', 'info');
-const userRef = firebaseDB.collection('users').doc(currentUser.uid);
-const collectionMapping = {
-'production': { data: ensureArray(mergedData.mfg_pro_pkr), deltaName: 'production' },
-'sales': { data: ensureArray(mergedData.customer_sales), deltaName: 'sales' },
-'calculator_history': { data: ensureArray(mergedData.noman_history), deltaName: 'calculator_history' },
-'rep_sales': { data: ensureArray(mergedData.rep_sales), deltaName: 'rep_sales' },
-'rep_customers': { data: ensureArray(mergedData.rep_customers), deltaName: 'rep_customers' },
-'sales_customers': { data: ensureArray(mergedData.sales_customers), deltaName: 'sales_customers' },
-'inventory': { data: ensureArray(mergedData.factory_inventory_data), deltaName: 'inventory' },
-'factory_history': { data: ensureArray(mergedData.factory_production_history), deltaName: 'factory_history' },
-'returns': { data: ensureArray(mergedData.stock_returns), deltaName: 'returns' },
-'transactions': { data: ensureArray(mergedData.payment_transactions), deltaName: 'transactions' },
-'entities': { data: ensureArray(mergedData.payment_entities), deltaName: 'entities' },
-'expenses': { data: ensureArray(mergedData.expenses), deltaName: 'expenses' }
-};
-
-const itemsToUpload = {};
-let totalToUpload = 0;
-for (const [cloudName, config] of Object.entries(collectionMapping)) {
-const allItems = config.data.filter(item => item);
-itemsToUpload[cloudName] = allItems;
-totalToUpload += allItems.length;
-}
-const batch = firebaseDB.batch();
-let operationCount = 0;
-const batches = [batch];
-const getCurrentBatch = () => {
-if (operationCount >= 495) {
-batches.push(firebaseDB.batch());
-operationCount = 0;
-}
-return batches[batches.length - 1];
-};
-if (totalToUpload === 0) {
-showToast(' No records found in backup to upload.', 'info');
-} else {
-showToast(`Uploading ${totalToUpload} records to cloud...`, 'info');
-for (const [cloudCollectionName, records] of Object.entries(itemsToUpload)) {
-for (const record of records) {
-if (!record || !record.id) continue;
-try {
-const docId = String(record.id);
-const sanitizedRecord = sanitizeForFirestore(record);
-if (!sanitizedRecord || typeof sanitizedRecord !== 'object') continue;
-sanitizedRecord.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
-const currentBatch = getCurrentBatch();
-currentBatch.set(userRef.collection(cloudCollectionName).doc(docId), sanitizedRecord, { merge: true });
-operationCount++;
-trackFirestoreWrite(1);
-} catch (error) { console.error('Cloud save op failed', error); }
-}
-}
-}
-try {
-const currentBatch = getCurrentBatch();
-const ensureFactorySettings = (obj, defaultVal) => {
-if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return defaultVal;
-const hasStandard = ('standard' in obj) && obj.standard !== undefined;
-const hasAsaan = ('asaan' in obj) && obj.asaan !== undefined;
-if (!hasStandard || !hasAsaan) return defaultVal;
-return { standard: obj.standard, asaan: obj.asaan };
-};
-const currentTimestamp = new Date().toISOString();
-const factorySettingsPayload = {
-default_formulas: ensureFactorySettings(await idb.get('factory_default_formulas'), { standard: [], asaan: [] }),
-default_formulas_timestamp: await idb.get('factory_default_formulas_timestamp') || currentTimestamp,
-additional_costs: ensureFactorySettings(await idb.get('factory_additional_costs'), { standard: 0, asaan: 0 }),
-additional_costs_timestamp: await idb.get('factory_additional_costs_timestamp') || currentTimestamp,
-cost_adjustment_factor: ensureFactorySettings(await idb.get('factory_cost_adjustment_factor'), { standard: 1, asaan: 1 }),
-cost_adjustment_factor_timestamp: await idb.get('factory_cost_adjustment_factor_timestamp') || currentTimestamp,
-sale_prices: ensureFactorySettings(await idb.get('factory_sale_prices'), { standard: 0, asaan: 0 }),
-sale_prices_timestamp: await idb.get('factory_sale_prices_timestamp') || currentTimestamp,
-unit_tracking: ensureFactorySettings(await idb.get('factory_unit_tracking'), { standard: { produced:0,consumed:0,available:0,unitCostHistory:[] }, asaan: { produced:0,consumed:0,available:0,unitCostHistory:[] } }),
-unit_tracking_timestamp: await idb.get('factory_unit_tracking_timestamp') || currentTimestamp,
-last_synced: new Date().toISOString()
-};
-const sanitizedFactorySettings = sanitizeForFirestore(factorySettingsPayload);
-const factorySettingsRef = userRef.collection('factorySettings').doc('config');
-currentBatch.set(factorySettingsRef, sanitizedFactorySettings, { merge: true });
-operationCount++;
-} catch (factorySettingsError) { console.error('Factory settings cloud error', factorySettingsError); }
-if (operationCount > 0) {
-// Commit batches sequentially with event-loop yields — keeps UI responsive during large restores
-for (let _bi = 0; _bi < batches.length; _bi++) {
-	await batches[_bi].commit();
-	if (batches.length > 1) {
-		showToast('Uploading to cloud... ' + (_bi + 1) + ' / ' + batches.length + ' batches', 'info');
-	}
-	await new Promise(r => setTimeout(r, 0)); // yield to browser
-}
-for (const [cloudName, config] of Object.entries(collectionMapping)) {
-if (itemsToUpload[cloudName] && itemsToUpload[cloudName].length > 0) {
-await DeltaSync.setLastSyncTimestamp(config.deltaName);
-}
-}
-cloudSyncSuccess = true;
-const message = totalToUpload > 0
-? ` Successfully restored & uploaded ${totalToUpload} records + factory settings to cloud!`
-: ' Factory settings uploaded to cloud!';
-showToast(message, 'success');
-} else {
-showToast(' No changes to upload.', 'info');
-cloudSyncSuccess = true;
-}
+  const userRef = firebaseDB.collection('users').doc(currentUser.uid);
+  const collectionMapping = {
+    'production':         { data: ensureArray(mergedData.mfg_pro_pkr),                deltaName: 'production' },
+    'sales':              { data: ensureArray(mergedData.customer_sales),              deltaName: 'sales' },
+    'calculator_history': { data: ensureArray(mergedData.noman_history),              deltaName: 'calculator_history' },
+    'rep_sales':          { data: ensureArray(mergedData.rep_sales),                  deltaName: 'rep_sales' },
+    'rep_customers':      { data: ensureArray(mergedData.rep_customers),              deltaName: 'rep_customers' },
+    'sales_customers':    { data: ensureArray(mergedData.sales_customers),            deltaName: 'sales_customers' },
+    'inventory':          { data: ensureArray(mergedData.factory_inventory_data),     deltaName: 'inventory' },
+    'factory_history':    { data: ensureArray(mergedData.factory_production_history), deltaName: 'factory_history' },
+    'returns':            { data: ensureArray(mergedData.stock_returns),              deltaName: 'returns' },
+    'transactions':       { data: ensureArray(mergedData.payment_transactions),       deltaName: 'transactions' },
+    'entities':           { data: ensureArray(mergedData.payment_entities),           deltaName: 'entities' },
+    'expenses':           { data: ensureArray(mergedData.expenses),                   deltaName: 'expenses' }
+  };
+  const itemsToUpload = {};
+  let totalToUpload = 0;
+  for (const [cloudName, config] of Object.entries(collectionMapping)) {
+    const newItems = await DeltaSync.getChangedItems(config.deltaName, config.data);
+    itemsToUpload[cloudName] = newItems.filter(item => item && item.id);
+    totalToUpload += itemsToUpload[cloudName].length;
+  }
+  const batch = firebaseDB.batch();
+  let operationCount = 0;
+  const batches = [batch];
+  const getCurrentBatch = () => {
+    if (operationCount >= 495) { batches.push(firebaseDB.batch()); operationCount = 0; }
+    return batches[batches.length - 1];
+  };
+  if (totalToUpload === 0) {
+    showToast(' No new records to upload — all UUIDs already in cloud.', 'info');
+  } else {
+    showToast(`Uploading ${totalToUpload} new/updated records to cloud...`, 'info');
+    for (const [cloudCollectionName, records] of Object.entries(itemsToUpload)) {
+      for (const record of records) {
+        if (!record || !record.id) continue;
+        const deltaName = collectionMapping[cloudCollectionName]?.deltaName;
+        if (deltaName && DeltaSync.wasUploaded(deltaName, record.id)) continue;
+        try {
+          const docId = String(record.id);
+          const sanitizedRecord = sanitizeForFirestore(record);
+          if (!sanitizedRecord || typeof sanitizedRecord !== 'object') continue;
+          sanitizedRecord.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
+          const currentBatch = getCurrentBatch();
+          currentBatch.set(userRef.collection(cloudCollectionName).doc(docId), sanitizedRecord, { merge: true });
+          operationCount++;
+          trackFirestoreWrite(1);
+          if (deltaName) DeltaSync.markUploaded(deltaName, record.id);
+        } catch (error) { console.error('Cloud save op failed', _safeErr(error)); }
+      }
+    }
+  }
+  try {
+    const currentBatch = getCurrentBatch();
+    const ensureFactorySettings = (obj, defaultVal) => {
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return defaultVal;
+      if (!('standard' in obj) || !('asaan' in obj)) return defaultVal;
+      return { standard: obj.standard, asaan: obj.asaan };
+    };
+    const currentTimestamp = new Date().toISOString();
+    const factorySettingsPayload = {
+      default_formulas:                ensureFactorySettings(await idb.get('factory_default_formulas'), { standard: [], asaan: [] }),
+      default_formulas_timestamp:      await idb.get('factory_default_formulas_timestamp') || currentTimestamp,
+      additional_costs:                ensureFactorySettings(await idb.get('factory_additional_costs'), { standard: 0, asaan: 0 }),
+      additional_costs_timestamp:      await idb.get('factory_additional_costs_timestamp') || currentTimestamp,
+      cost_adjustment_factor:          ensureFactorySettings(await idb.get('factory_cost_adjustment_factor'), { standard: 1, asaan: 1 }),
+      cost_adjustment_factor_timestamp:await idb.get('factory_cost_adjustment_factor_timestamp') || currentTimestamp,
+      sale_prices:                     ensureFactorySettings(await idb.get('factory_sale_prices'), { standard: 0, asaan: 0 }),
+      sale_prices_timestamp:           await idb.get('factory_sale_prices_timestamp') || currentTimestamp,
+      unit_tracking:                   ensureFactorySettings(await idb.get('factory_unit_tracking'), { standard: { produced:0,consumed:0,available:0,unitCostHistory:[] }, asaan: { produced:0,consumed:0,available:0,unitCostHistory:[] } }),
+      unit_tracking_timestamp:         await idb.get('factory_unit_tracking_timestamp') || currentTimestamp,
+      last_synced:                     new Date().toISOString()
+    };
+    currentBatch.set(
+      userRef.collection('factorySettings').doc('config'),
+      sanitizeForFirestore(factorySettingsPayload),
+      { merge: true }
+    );
+    operationCount++;
+  } catch (factorySettingsError) { console.error('Factory settings cloud error', factorySettingsError); }
+  if (operationCount > 0) {
+    for (let _bi = 0; _bi < batches.length; _bi++) {
+      await batches[_bi].commit();
+      if (batches.length > 1) showToast('Uploading to cloud... ' + (_bi + 1) + ' / ' + batches.length + ' batches', 'info');
+      await new Promise(r => setTimeout(r, 0));
+    }
+    for (const [cloudName, config] of Object.entries(collectionMapping)) {
+      if (itemsToUpload[cloudName] && itemsToUpload[cloudName].length > 0) {
+        await DeltaSync.setLastSyncTimestamp(config.deltaName);
+      }
+    }
+    cloudSyncSuccess = true;
+    const message = totalToUpload > 0
+      ? ` Successfully restored & uploaded ${totalToUpload} new/updated records + factory settings to cloud!`
+      : ' Factory settings uploaded to cloud!';
+    showToast(message, 'success');
+  } else {
+    showToast(' No changes to upload.', 'info');
+    cloudSyncSuccess = true;
+  }
 } catch (syncError) {
-showToast('Data restored locally, but cloud sync failed. Please sync manually.', 'warning');
+  showToast('Data restored locally, but cloud sync failed. Please sync manually.', 'warning');
 }
 } else {
 showToast('Not logged in to cloud. Data restored locally only.', 'warning');
 }
 const statsMessage = `Added: ${totalAdded}, Updated: ${totalUpdated}, Skipped: ${totalSkipped}`;
-const syncMessage = cloudSyncSuccess ? ' and changed records uploaded to cloud' : '';
+const syncMessage = cloudSyncSuccess ? ' and new/updated records uploaded to cloud' : '';
 showToast(`Restore complete${syncMessage}! ${statsMessage}`, 'success', 5000);
 }
-
 async function _doYearCloseRestore(data, honourPostCloseDeletions = true) {
   data = migrateBackupSchema(data);
   showToast('↩ Reversing financial year close — replacing data...', 'info', 5000);
-
-  
-
-  
-
   const isAlive = honourPostCloseDeletions
     ? (item) => item && item.id && !deletedRecordIds.has(item.id)
     : (item) => item && item.id; 
@@ -7761,7 +6264,6 @@ async function _doYearCloseRestore(data, honourPostCloseDeletions = true) {
   if (data.factoryCostAdjustmentFactor) { await idb.set('factory_cost_adjustment_factor', data.factoryCostAdjustmentFactor); await idb.set('factory_cost_adjustment_factor_timestamp', settingsTimestamp); factoryCostAdjustmentFactor = data.factoryCostAdjustmentFactor; }
   if (data.factorySalePrices) { await idb.set('factory_sale_prices', data.factorySalePrices); await idb.set('factory_sale_prices_timestamp', settingsTimestamp); factorySalePrices = data.factorySalePrices; }
   if (data.factoryUnitTracking) { await idb.set('factory_unit_tracking', data.factoryUnitTracking); await idb.set('factory_unit_tracking_timestamp', settingsTimestamp); factoryUnitTracking = data.factoryUnitTracking; }
-
   try {
     const currentSettings = await idb.get('naswar_default_settings', {});
     const snap = (data._meta && data._meta.fyCloseSnapshot) || {};
@@ -7781,7 +6283,6 @@ async function _doYearCloseRestore(data, honourPostCloseDeletions = true) {
       } catch(e) { console.warn('Cloud FY meta reversal failed:', e); }
     }
   } catch(metaErr) { console.warn('Could not reverse FY metadata:', metaErr); }
-
   if (firebaseDB && currentUser) {
     try {
       showToast('Uploading reversed data to cloud...', 'info');
@@ -7797,11 +6298,6 @@ async function _doYearCloseRestore(data, honourPostCloseDeletions = true) {
       for (const [colName, records] of Object.entries(cloudCollections)) {
         try {
           const colRef = userRef.collection(colName);
-
-
-          
-
-          
           const healSnap = await colRef.where('_pendingDelete', '==', true).get();
           if (!healSnap.empty) {
             const healBatches = [firebaseDB.batch()]; let healOps = 0;
@@ -7812,13 +6308,6 @@ async function _doYearCloseRestore(data, honourPostCloseDeletions = true) {
             });
             await Promise.all(healBatches.map(b => b.commit()));
           }
-
-
-          
-
-          
-
-          
           const incomingIds = new Set(
             records.filter(r => r && r.id).map(r => String(r.id))
           );
@@ -7833,11 +6322,6 @@ async function _doYearCloseRestore(data, honourPostCloseDeletions = true) {
             });
             await Promise.all(markBatches.map(b => b.commit()));
           }
-
-
-          
-
-          
           const wrBatches = [firebaseDB.batch()]; let wrOps = 0;
           for (const record of records) {
             if (!record || !record.id) continue;
@@ -7848,11 +6332,12 @@ async function _doYearCloseRestore(data, honourPostCloseDeletions = true) {
             wrOps++; trackFirestoreWrite(1);
           }
           if (wrOps > 0) await Promise.all(wrBatches.map(b => b.commit()));
-
-
-          
-
-          
+          const _fsColName = colName; 
+          records.forEach(record => {
+            if (!record || !record.id) return;
+            DeltaSync.markUploaded(_fsColName, record.id);
+            DeltaSync.markDownloaded(_fsColName, record.id);
+          });
           if (staleDocs.length > 0) {
             const delBatches = [firebaseDB.batch()]; let delOps = 0;
             staleDocs.forEach(doc => {
@@ -7862,7 +6347,6 @@ async function _doYearCloseRestore(data, honourPostCloseDeletions = true) {
             });
             await Promise.all(delBatches.map(b => b.commit()));
           }
-
           await DeltaSync.setLastSyncTimestamp(colName);
         } catch(colErr) { console.warn(`Cloud replace warning for ${colName}:`, colErr); }
       }
@@ -7893,10 +6377,9 @@ selectedTab.classList.remove('hidden');
 void selectedTab.offsetHeight;
 }
 const tabButtons = document.querySelectorAll('.tab-btn');
-const tabIndexMap = { 'prod': 0, 'sales': 1, 'calc': 2, 'factory': 3, 'payments': 4, 'rep': 5 };
-const activeIndex = tabIndexMap[tab];
-tabButtons.forEach((btn, i) => {
-btn.classList.toggle('active', i === activeIndex);
+tabButtons.forEach((btn) => {
+const onclickVal = btn.getAttribute('onclick') || '';
+btn.classList.toggle('active', onclickVal.includes("'" + tab + "'") || onclickVal.includes('"' + tab + '"'));
 });
 });
 window.scrollTo({ top: 0, behavior: 'instant' });
@@ -8332,7 +6815,7 @@ title: {
 display: true,
 text: mfgPieChartShowPercentage ?
 `Financials (Percentage) - ${currentMfgMode === 'all' ? 'All Times' : currentMfgMode.charAt(0).toUpperCase() + currentMfgMode.slice(1)}` :
-`Financials: ${safeValue(totalValue).toFixed(2)} Total - ${currentMfgMode === 'all' ? 'All Times' : currentMfgMode.charAt(0).toUpperCase() + currentMfgMode.slice(1)}`,
+`Financials: ${fmtAmt(safeValue(totalValue))} Total - ${currentMfgMode === 'all' ? 'All Times' : currentMfgMode.charAt(0).toUpperCase() + currentMfgMode.slice(1)}`,
 color: colors.text,
 font: { size: 13, weight: 'bold' }
 },
@@ -8344,7 +6827,7 @@ const total = context.dataset.data.reduce((a, b) => a + b, 0);
 const percentage = total > 0 ? safeNumber((context.parsed / total) * 100, 0).toFixed(2) : 0;
 return `${context.label}: ${percentage}%`;
 } else {
-return `${context.label}: ${safeNumber(context.parsed, 0).toFixed(2)}`;
+return `${context.label}: ${fmtAmt(safeNumber(context.parsed, 0))}`;
 }
 }
 }
@@ -8400,14 +6883,14 @@ const stdProfitPerKg = stdOutputQuantity > 0 ? stdTotalProfit / stdOutputQuantit
 const stdProfitPerUnit = stdUsedUnits > 0 ? stdTotalProfit / stdUsedUnits : 0;
 const stdWeightPerUnit = getWeightPerUnit('standard');
 const stdRawMaterialsUsed = stdWeightPerUnit * stdUsedUnits;
-const stdMaterialsValue = stdTotalCost;
+const stdMaterialsValue = stdProductionData.reduce((sum, item) => sum + (item.formulaCost || item.totalCost || 0), 0);
 const _setFac = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
-_setFac('factoryStdUnits', stdAvailableUnits.toFixed(2));
-_setFac('factoryStdUsedUnits', stdUsedUnits.toFixed(2));
+_setFac('factoryStdUnits', safeNumber(stdAvailableUnits, 0).toFixed(2));
+_setFac('factoryStdUsedUnits', safeNumber(stdUsedUnits, 0).toFixed(2));
 _setFac('factoryStdUnitCost', await formatCurrency(stdCostPerUnit));
 _setFac('factoryStdTotalVal', await formatCurrency(stdTotalCostValue));
-_setFac('factoryStdOutput', stdOutputQuantity.toFixed(2) + ' kg');
-_setFac('factoryStdRawUsed', stdRawMaterialsUsed.toFixed(2) + ' kg');
+_setFac('factoryStdOutput', safeNumber(stdOutputQuantity, 0).toFixed(2) + ' kg');
+_setFac('factoryStdRawUsed', safeNumber(stdRawMaterialsUsed, 0).toFixed(2) + ' kg');
 _setFac('factoryStdMatVal', await formatCurrency(stdMaterialsValue));
 _setFac('factoryStdProfit', await formatCurrency(stdTotalProfit));
 _setFac('factoryStdProfitUnit', await formatCurrency(stdProfitPerKg) + '/kg');
@@ -8427,13 +6910,13 @@ const asaanProfitPerKg = asaanOutputQuantity > 0 ? asaanTotalProfit / asaanOutpu
 const asaanProfitPerUnit = asaanUsedUnits > 0 ? asaanTotalProfit / asaanUsedUnits : 0;
 const asaanWeightPerUnit = getWeightPerUnit('asaan');
 const asaanRawMaterialsUsed = asaanWeightPerUnit * asaanUsedUnits;
-const asaanMaterialsValue = asaanTotalCost;
-_setFac('factoryAsaanUnits', asaanAvailableUnits.toFixed(2));
-_setFac('factoryAsaanUsedUnits', asaanUsedUnits.toFixed(2));
+const asaanMaterialsValue = asaanProductionData.reduce((sum, item) => sum + (item.formulaCost || item.totalCost || 0), 0);
+_setFac('factoryAsaanUnits', safeNumber(asaanAvailableUnits, 0).toFixed(2));
+_setFac('factoryAsaanUsedUnits', safeNumber(asaanUsedUnits, 0).toFixed(2));
 _setFac('factoryAsaanUnitCost', await formatCurrency(asaanCostPerUnit));
 _setFac('factoryAsaanTotalVal', await formatCurrency(asaanTotalCostValue));
-_setFac('factoryAsaanOutput', asaanOutputQuantity.toFixed(2) + ' kg');
-_setFac('factoryAsaanRawUsed', asaanRawMaterialsUsed.toFixed(2) + ' kg');
+_setFac('factoryAsaanOutput', safeNumber(asaanOutputQuantity, 0).toFixed(2) + ' kg');
+_setFac('factoryAsaanRawUsed', safeNumber(asaanRawMaterialsUsed, 0).toFixed(2) + ' kg');
 _setFac('factoryAsaanMatVal', await formatCurrency(asaanMaterialsValue));
 _setFac('factoryAsaanProfit', await formatCurrency(asaanTotalProfit));
 _setFac('factoryAsaanProfitUnit', await formatCurrency(asaanProfitPerKg) + '/kg');
@@ -8445,51 +6928,57 @@ const selectedDate = new Date(selectedDateVal);
 const selectedYear = selectedDate.getFullYear();
 const selectedMonth = selectedDate.getMonth();
 const selectedDay = selectedDate.getDate();
-let totalProduced = 0, totalConsumed = 0, totalCost = 0, totalOutput = 0, totalProfit = 0;
-let totalRawUsed = 0, totalMatValue = 0, totalSaleValue = 0;
-factoryProductionHistory.forEach(entry => {
-const entryDate = new Date(entry.date);
-let include = false;
-if (mode === 'daily' && entry.date === selectedDateVal) include = true;
-else if (mode === 'weekly') {
+function isInRange(dateStr) {
+const entryDate = new Date(dateStr);
+if (mode === 'daily') return dateStr === selectedDateVal;
+if (mode === 'weekly') {
 const weekStart = new Date(selectedDate);
 weekStart.setDate(selectedDay - 6);
-if (entryDate >= weekStart && entryDate <= selectedDate) include = true;
+return entryDate >= weekStart && entryDate <= selectedDate;
 }
-else if (mode === 'monthly' && entryDate.getMonth() === selectedMonth && entryDate.getFullYear() === selectedYear) include = true;
-else if (mode === 'yearly' && entryDate.getFullYear() === selectedYear) include = true;
-else if (mode === 'all') include = true;
-if (include) {
-totalProduced += entry.units || 0;
+if (mode === 'monthly') return entryDate.getMonth() === selectedMonth && entryDate.getFullYear() === selectedYear;
+if (mode === 'yearly') return entryDate.getFullYear() === selectedYear;
+return true; 
 }
+const allTimeRecomp = { standard: { produced: 0, consumed: 0 }, asaan: { produced: 0, consumed: 0 } };
+factoryProductionHistory.forEach(entry => {
+const store = entry.store === 'asaan' ? 'asaan' : 'standard';
+allTimeRecomp[store].produced += entry.units || 0;
 });
 db.forEach(entry => {
 if (entry.isReturn === true) return;
-const entryDate = new Date(entry.date);
-let include = false;
-if (mode === 'daily' && entry.date === selectedDateVal) include = true;
-else if (mode === 'weekly') {
-const weekStart = new Date(selectedDate);
-weekStart.setDate(selectedDay - 6);
-if (entryDate >= weekStart && entryDate <= selectedDate) include = true;
-}
-else if (mode === 'monthly' && entryDate.getMonth() === selectedMonth && entryDate.getFullYear() === selectedYear) include = true;
-else if (mode === 'yearly' && entryDate.getFullYear() === selectedYear) include = true;
-else if (mode === 'all') include = true;
-if (include) {
-totalConsumed += entry.formulaUnits || 0;
+const store = (entry.formulaStore === 'asaan' || entry.store === 'STORE_C') ? 'asaan' : 'standard';
+allTimeRecomp[store].consumed += entry.formulaUnits || 0;
+});
+const stdAvailable = Math.max(0, allTimeRecomp.standard.produced - allTimeRecomp.standard.consumed);
+const asaanAvailable = Math.max(0, allTimeRecomp.asaan.produced - allTimeRecomp.asaan.consumed);
+const totalAvailable = stdAvailable + asaanAvailable;
+let stdConsumed = 0, asaanConsumed = 0;
+let totalCost = 0, totalOutput = 0, totalProfit = 0;
+let totalSaleValue = 0, totalRawMatCost = 0;
+let totalRawUsed = 0;
+db.forEach(entry => {
+if (entry.isReturn === true) return;
+if (!isInRange(entry.date)) return;
+const formulaStore = (entry.formulaStore === 'asaan' || entry.store === 'STORE_C') ? 'asaan' : 'standard';
+const units = entry.formulaUnits || 0;
+if (formulaStore === 'asaan') asaanConsumed += units;
+else stdConsumed += units;
 totalOutput += entry.net || 0;
 totalCost += entry.totalCost || 0;
 totalSaleValue += entry.totalSale || 0;
 totalProfit += entry.profit || 0;
-const formulaStore = entry.formulaStore || (entry.store === 'STORE_C' ? 'asaan' : 'standard');
+totalRawMatCost += entry.formulaCost || entry.totalCost || 0;
 const weightPerUnit = getWeightPerUnit(formulaStore);
-totalRawUsed += weightPerUnit * (entry.formulaUnits || 0);
-}
+totalRawUsed += weightPerUnit * units;
 });
-totalMatValue = totalCost;
-const totalAvailable = Math.max(0, totalProduced - totalConsumed);
-const avgCostPerUnit = totalConsumed > 0 ? totalCost / totalConsumed : 0;
+const totalConsumed = stdConsumed + asaanConsumed;
+const stdCostPerUnit = getCostPerUnit('standard');
+const asaanCostPerUnit = getCostPerUnit('asaan');
+const avgCostPerUnit = totalConsumed > 0
+? (stdConsumed * stdCostPerUnit + asaanConsumed * asaanCostPerUnit) / totalConsumed
+: 0;
+const totalMatValue = totalRawMatCost;
 const avgProfitPerKg = totalOutput > 0 ? totalProfit / totalOutput : 0;
 const _setSum = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
 _setSum('factorySumUnits', safeNumber(totalAvailable, 0).toFixed(2));
@@ -8573,7 +7062,7 @@ if (factoryDataMap.get('factory_default_formulas')) {
 factoryDefaultFormulas = factoryDataMap.get('factory_default_formulas') || { standard: [], asaan: [] };
 }
 } catch (error) {
-console.error('Failed to save data locally.', error);
+console.error('Failed to save data locally.', _safeErr(error));
 showToast('Failed to save data locally.', 'error');
 }
 }
@@ -8665,8 +7154,7 @@ value: 0,
 cost: 0,
 profit: 0,
 formulaUnits: 0,
-formulaCost: 0,
-productionCredit: 0
+formulaCost: 0
 };
 const allStoresGrid = document.getElementById('all-stores-grid');
 allStoresGrid.innerHTML = '';
@@ -8679,8 +7167,7 @@ value: 0,
 cost: 0,
 profit: 0,
 formulaUnits: 0,
-formulaCost: 0,
-productionCredit: 0
+formulaCost: 0
 };
 db.forEach(item => {
 const itemDate = new Date(item.date);
@@ -8699,23 +7186,10 @@ else if (mode === 'all') includeItem = true;
 if (includeItem && item.store === store) {
 if (item.isReturn) {
 storeData.returns += (item.net || 0);
-if (store === 'STORE_C') {
-storeData.productionCredit -= (item.totalSale || 0);
-}
-
 } else {
 storeData.production += (item.net || 0);
 storeData.formulaUnits += (item.formulaUnits || 0);
 storeData.formulaCost += (item.formulaCost || 0);
-if (store === 'STORE_C') {
-  if (item.isMerged) {
-
-    storeData.productionCredit += (item.creditSaleNet || 0);
-  } else if (item.paymentStatus === 'CREDIT') {
-
-    storeData.productionCredit += (item.totalSale || 0);
-  }
-}
 storeData.value += (item.totalSale || 0);
 storeData.cost += (item.totalCost || 0);
 storeData.profit += (item.profit || 0);
@@ -8743,12 +7217,9 @@ soldQty += (sale.quantity || 0);
 }
 });
 storeData.sold = soldQty;
-
-	
 	let calcTabStoreReturns = 0;
 	if (Array.isArray(salesHistory)) {
 		salesHistory.forEach(h => {
-
 			const hDate = new Date(h.date);
 			const hYear = hDate.getFullYear();
 			const hMonth = hDate.getMonth();
@@ -8762,18 +7233,11 @@ storeData.sold = soldQty;
 			else if (mode === 'month' && hYear === selectedYear && hMonth === selectedMonth) includeInCalc = true;
 			else if (mode === 'year' && hYear === selectedYear) includeInCalc = true;
 			else if (mode === 'all') includeInCalc = true;
-
-			
-
 			if (includeInCalc && (h.returned || 0) > 0) {
-
 				if (h.isMerged && h.returnsByStore && typeof h.returnsByStore === 'object') {
-
 					const storeReturnFromMerged = h.returnsByStore[store] || 0;
 					calcTabStoreReturns += storeReturnFromMerged;
 				} else {
-
-					
 					const returnEntries = db.filter(item => 
 						item.isReturn === true && 
 						item.returnedBy === h.seller &&
@@ -8786,8 +7250,6 @@ storeData.sold = soldQty;
 			}
 		});
 	}
-
-	
 	if (calcTabStoreReturns > 0 && Math.abs(storeData.returns - calcTabStoreReturns) > 0.01) {
 		storeData.returns = calcTabStoreReturns;
 	}
@@ -8802,11 +7264,6 @@ totalCombined.cost += storeData.cost;
 totalCombined.profit += storeData.profit;
 totalCombined.formulaUnits += storeData.formulaUnits;
 totalCombined.formulaCost += storeData.formulaCost;
-totalCombined.productionCredit += storeData.productionCredit;
-let extraInfoHtml = '';
-if (store === 'STORE_C') {
-extraInfoHtml = `<p><span>Production Credit:</span> <span style="color:var(--warning); font-weight:800;">${safeValue(storeData.productionCredit).toFixed(2)}</span></p>`;
-}
 let returnsHtml = '';
 if (storeData.returns > 0) {
 returnsHtml = `<p><span>Returns Recvd:</span> <span style="color:#10b981; font-weight:800;">${safeValue(storeData.returns).toFixed(2)} kg</span></p>`;
@@ -8824,17 +7281,15 @@ ${returnsHtml}
 </div>
 <div style="background:rgba(37,99,235,0.03); padding:5px; border-radius:6px; margin:5px 0;">
 <p><span>Formula Units:</span> <span class="qty-val u-fw-700" >${safeValue(storeData.formulaUnits).toFixed(2)}</span></p>
-<p><span>Formula Cost:</span> <span class="cost-val u-fw-700" >${safeValue(storeData.formulaCost).toFixed(2)}</span></p>
+<p><span>Formula Cost:</span> <span class="cost-val u-fw-700" >${fmtAmt(safeValue(storeData.formulaCost))}</span></p>
 </div>
 <hr>
-<p><span>Total Value:</span> <span class="rev-val">${safeValue(storeData.value).toFixed(2)}</span></p>
-${extraInfoHtml}
-<p><span>Net Profit:</span> <span class="profit-val">${safeValue(storeData.profit).toFixed(2)}</span></p>
+<p><span>Total Value:</span> <span class="rev-val">${fmtAmt(safeValue(storeData.value))}</span></p>
+<p><span>Net Profit:</span> <span class="profit-val">${fmtAmt(safeValue(storeData.profit))}</span></p>
 `;
 allStoresGrid.appendChild(card);
 });
 const combinedRemaining = totalCombined.qty - totalCombined.sold;
-
 	let calcTabTotalReturns = 0;
 	if (Array.isArray(salesHistory)) {
 		salesHistory.forEach(h => {
@@ -8856,7 +7311,6 @@ const combinedRemaining = totalCombined.qty - totalCombined.sold;
 			}
 		});
 	}
-
 	if (calcTabTotalReturns > 0 && Math.abs(totalCombined.returns - calcTabTotalReturns) > 0.01) {
 		totalCombined.returns = calcTabTotalReturns;
 	}
@@ -8871,12 +7325,11 @@ ${totalCombined.returns > 0 ? `<p><span>Total Returns:</span> <span style="color
 <p><span>Total Remaining:</span> <span class="profit-val" style="font-size:1.1rem;">${safeValue(combinedRemaining).toFixed(2)} kg</span></p>
 </div>
 <p><span>Total Formula Units:</span> <span class="qty-val">${safeValue(totalCombined.formulaUnits).toFixed(2)}</span></p>
-<p><span>Total Formula Cost:</span> <span class="cost-val">${safeValue(totalCombined.formulaCost).toFixed(2)}</span></p>
+<p><span>Total Formula Cost:</span> <span class="cost-val">${fmtAmt(safeValue(totalCombined.formulaCost))}</span></p>
 <hr style="margin:8px 0;">
-<p><span>Total Value:</span> <span class="rev-val">${safeValue(totalCombined.value).toFixed(2)}</span></p>
-${totalCombined.productionCredit > 0 ? `<p><span>Total Credit:</span> <span style="color:var(--warning); font-weight:800;">${safeValue(totalCombined.productionCredit).toFixed(2)}</span></p>` : ''}
-<p><span>Total Cost:</span> <span class="cost-val">${safeValue(totalCombined.cost).toFixed(2)}</span></p>
-<p><span>Net Profit:</span> <span class="profit-val">${safeValue(totalCombined.profit).toFixed(2)}</span></p>
+<p><span>Total Value:</span> <span class="rev-val">${fmtAmt(safeValue(totalCombined.value))}</span></p>
+<p><span>Total Cost:</span> <span class="cost-val">${fmtAmt(safeValue(totalCombined.cost))}</span></p>
+<p><span>Net Profit:</span> <span class="profit-val">${fmtAmt(safeValue(totalCombined.profit))}</span></p>
 `;
 allStoresGrid.appendChild(combinedCard);
 updateStoreComparisonChart(mode);
@@ -9009,7 +7462,7 @@ creditData = creditData.slice(-12);
 }
 }
 customerSales.forEach(item => {
-if (item.isRepModeEntry === true || (item.salesRep && item.salesRep !== 'NONE')) return;
+if (!isDirectSale(item)) return;
 const d = new Date(item.date);
 const dYear = d.getFullYear();
 const dMonth = d.getMonth();
@@ -9121,7 +7574,7 @@ title: {
 display: true,
 text: custPaymentChartShowPercentage ?
 `Payment Distribution (Percentage) - ${currentCustomerChartMode === 'all' ? 'All Times' : ''}` :
-`Total: ${safeValue(totalCash + totalCredit).toFixed(2)} - ${currentCustomerChartMode === 'all' ? 'All Times' : ''}`,
+`Total: ${fmtAmt(safeValue(totalCash + totalCredit))} - ${currentCustomerChartMode === 'all' ? 'All Times' : ''}`,
 color: colors.text,
 font: { size: 13, weight: 'bold' }
 },
@@ -9133,7 +7586,7 @@ const total = context.dataset.data.reduce((a, b) => a + b, 0);
 const percentage = total > 0 ? safeNumber((context.parsed / total) * 100, 0).toFixed(2) : 0;
 return `${context.label}: ${percentage}%`;
 } else {
-return `${context.label}: ${safeNumber(context.parsed, 0).toFixed(2)}`;
+return `${context.label}: ${fmtAmt(safeNumber(context.parsed, 0))}`;
 }
 }
 }
@@ -9204,7 +7657,7 @@ await idb.set('customer_sales', freshSales);
 customerSales = freshSales;
 }
 } catch (error) {
-console.error('Failed to save data locally.', error);
+console.error('Failed to save data locally.', _safeErr(error));
 showToast('Failed to save data locally.', 'error');
 }
 }
@@ -9227,8 +7680,7 @@ if (a.date !== selectedDate && b.date === selectedDate) return 1;
 return compareTimestamps(getRecordTimestamp(b), getRecordTimestamp(a));
 });
 sortedSales.forEach(item => {
-if (item.isRepModeEntry === true ||
-(item.salesRep && item.salesRep !== 'NONE') ||
+if (!isDirectSale(item) ||
 item.paymentType === 'PARTIAL_PAYMENT' ||
 item.paymentType === 'COLLECTION') return;
 const rowDate = new Date(item.date);
@@ -9256,8 +7708,7 @@ if(rowYear === selectedYear) updatePeriod(stats.year);
 updatePeriod(stats.all);
 });
 const displayData = sortedSales.filter(item =>
-!item.isRepModeEntry &&
-(!item.salesRep || item.salesRep === 'NONE' || item.salesRep === 'ADMIN') &&
+isDirectSale(item) &&
 item.paymentType !== 'PARTIAL_PAYMENT' &&
 item.paymentType !== 'COLLECTION'
 );
@@ -9282,10 +7733,10 @@ const cashEl = document.getElementById(`cust-${prefix}-cash`);
 const creditEl = document.getElementById(`cust-${prefix}-credit`);
 const profitEl = document.getElementById(`cust-${prefix}-profit`);
 if (qtyEl) qtyEl.innerText = safeValue(stat.q).toFixed(2) + ' kg';
-if (valueEl) valueEl.innerText = '' + safeValue(stat.v).toFixed(2);
-if (cashEl) cashEl.innerText = '' + safeValue(stat.cash).toFixed(2);
-if (creditEl) creditEl.innerText = '' + safeValue(stat.credit).toFixed(2);
-if (profitEl) profitEl.innerText = '' + safeValue(stat.profit).toFixed(2);
+if (valueEl) valueEl.innerText = '' + fmtAmt(safeValue(stat.v));
+if (cashEl) cashEl.innerText = '' + fmtAmt(safeValue(stat.cash));
+if (creditEl) creditEl.innerText = '' + fmtAmt(safeValue(stat.credit));
+if (profitEl) profitEl.innerText = '' + fmtAmt(safeValue(stat.profit));
 };
 updateStatDisplay('day', stats.day);
 updateStatDisplay('week', stats.week);
@@ -9321,7 +7772,9 @@ if (item.isMerged) {
 mergedBadge = _mergedBadgeHtml(item, {inline:true});
 }
 const card = document.createElement('div');
-card.className = `card liquid-card ${highlightClass}`;
+const isRepLinked = isRepSale(item);
+card.className = `card liquid-card ${highlightClass}${item.isSettled ? ' is-settled-record' : ''}`.trim();
+if (isRepLinked) card.style.display = 'none';
 if (item.date) card.setAttribute('data-date', item.date);
 let creditSection = '';
 if (!isOldDebtItem) {
@@ -9336,7 +7789,7 @@ creditSection = `
 creditSection = `<div class="received-indicator">Credit Received </div>`;
 }
 }
-const deleteBtnHtml = item.isMerged ? '' : `<button class="tbl-action-btn danger u-w-full u-mt-8" onclick="(async () => { await deleteCustomerSale('${esc(item.id)}') })()">Delete</button>`;
+const deleteBtnHtml = item.isMerged ? '' : item.isSettled ? `<div class="settled-badge">✓ Settled</div>` : `<button class="tbl-action-btn danger u-w-full u-mt-8" onclick="(async () => { await deleteCustomerSale('${esc(item.id)}') })()">Delete</button>`;
 if (isOldDebtItem) {
 card.innerHTML = `
 <div class="payment-badge credit">CREDIT</div>
@@ -9345,7 +7798,7 @@ card.innerHTML = `
 </div>
 <h4 style="margin-top: 5px; font-size: 0.85rem; color: var(--text-muted);">${dateDisplay}</h4>
 <hr>
-<p><span>Previous Balance:</span> <span class="rev-val">${safeValue(item.totalValue).toFixed(2)}</span></p>
+<p><span>Previous Balance:</span> <span class="rev-val">${fmtAmt(safeValue(item.totalValue))}</span></p>
 <p class="u-fs-sm u-text-muted" >${esc(item.notes || 'Brought forward from previous records')}</p>
 ${deleteBtnHtml}
 `;
@@ -9357,8 +7810,8 @@ card.innerHTML = `
 <div class="supply-tag ${supplyTagClass}">Supply: ${supplyTagText}</div>
 <hr>
 <p><span>Quantity:</span> <span class="qty-val">${safeValue(item.quantity).toFixed(2)} kg</span></p>
-<p><span>Total Value:</span> <span class="rev-val">${safeValue(item.totalValue).toFixed(2)}</span></p>
-<p><span>Net Profit:</span> <span class="profit-val">${safeValue(item.profit).toFixed(2)}</span></p>
+<p><span>Total Value:</span> <span class="rev-val">${fmtAmt(safeValue(item.totalValue))}</span></p>
+<p><span>Net Profit:</span> <span class="profit-val">${fmtAmt(safeValue(item.profit))}</span></p>
 ${creditSection}
 ${deleteBtnHtml}
 `;
@@ -9436,16 +7889,16 @@ const expected = safeValue(data.expected);
 const discrepancy = received - expected;
 const balClass = balance > 0 ? 'balance-pos' : 'balance-neg';
 let discClass = 'qty-val';
-let discText = `${Math.abs(discrepancy).toFixed(2)}`;
+let discText = `${fmtAmt(Math.abs(discrepancy))}`;
 if (Math.abs(discrepancy) < 0.01) {
 discClass = 'units-available-good';
 discText = "Perfect Match";
 } else if (discrepancy < 0) {
 discClass = 'cost-val';
-discText = `SHORT: ${Math.abs(discrepancy).toFixed(2)}`;
+discText = `SHORT: ${fmtAmt(Math.abs(discrepancy))}`;
 } else {
 discClass = 'profit-val';
-discText = `OVER: ${discrepancy.toFixed(2)}`;
+discText = `OVER: ${fmtAmt(discrepancy)}`;
 }
 const displayStatusText = data.statusText || discText;
 const displayStatusClass = data.statusClass || (Math.abs(discrepancy) < 0.01 ? 'result-box discrepancy-ok' : 'result-box discrepancy-alert');
@@ -9459,14 +7912,14 @@ let html = `<div class="card liquid-card ${highlightClass}"${dateAttr}>${badge}<
 <p><span>Cash Qty:</span> <span class="qty-val">${safeValue(data.cash).toFixed(2)}</span></p>
 <p><span>Credit Qty:</span> <span class="qty-val">${safeValue(data.cred).toFixed(2)}</span></p>
 <hr>
-<p><span>Revenue:</span> <span class="rev-val">${safeValue(data.revenue).toFixed(2)}</span></p>
-<p><span>Profit:</span> <span class="profit-val">${safeValue(data.profit).toFixed(2)}</span></p>
-<p><span>Credit Out:</span> <span class="cost-val">${creditVal.toFixed(2)}</span></p>
-<p><span>Credit In:</span> <span class="profit-val">${collected.toFixed(2)}</span></p>
-<p><span>Net Debt:</span> <span class="${balClass}">${balance.toFixed(2)}</span></p>
+<p><span>Revenue:</span> <span class="rev-val">${fmtAmt(safeValue(data.revenue))}</span></p>
+<p><span>Profit:</span> <span class="profit-val">${fmtAmt(safeValue(data.profit))}</span></p>
+<p><span>Credit Out:</span> <span class="cost-val">${fmtAmt(creditVal)}</span></p>
+<p><span>Credit In:</span> <span class="profit-val">${fmtAmt(collected)}</span></p>
+<p><span>Net Debt:</span> <span class="${balClass}">${fmtAmt(balance)}</span></p>
 <hr>
-<p><span>Expected Cash:</span> <span class="qty-val" style="color:var(--text-main);">${expected.toFixed(2)}</span></p>
-<p><span>Received Cash:</span> <span class="qty-val" style="font-weight:800; color:var(--text-main);">${received.toFixed(2)}</span></p>
+<p><span>Expected Cash:</span> <span class="qty-val" style="color:var(--text-main);">${fmtAmt(expected)}</span></p>
+<p><span>Received Cash:</span> <span class="qty-val" style="font-weight:800; color:var(--text-main);">${safeNumber(received, 0).toFixed(2)}</span></p>
 <p><span>Discrepancy:</span> <span class="${discClass}">${discText}</span></p>
 `;
 if (isHistory) {
@@ -9481,14 +7934,24 @@ return html;
 }
 function calculateTotalSoldForRepresentative(seller) {
 if (!seller || seller === 'COMBINED') return 0;
+const reconciledSalesIds = new Set();
+if (Array.isArray(salesHistory)) {
+  salesHistory.forEach(entry => {
+    if (Array.isArray(entry.linkedSalesIds)) {
+      entry.linkedSalesIds.forEach(id => reconciledSalesIds.add(id));
+    }
+  });
+}
 let totalSold = 0;
 customerSales.forEach(sale => {
-if (sale.salesRep === seller &&
-sale.paymentType === 'CREDIT' &&
-!sale.creditReceived &&
-sale.isRepModeEntry !== true) {
-totalSold += (sale.quantity || 0);
-}
+  if (sale.salesRep === seller &&
+      isDirectSale(sale) &&
+      !reconciledSalesIds.has(sale.id) &&
+      sale.paymentType !== 'PARTIAL_PAYMENT' &&
+      sale.paymentType !== 'COLLECTION' &&
+      sale.transactionType !== 'OLD_DEBT') {
+    totalSold += (sale.quantity || 0);
+  }
 });
 return totalSold;
 }
@@ -9512,29 +7975,25 @@ totalSoldField.style.color = 'var(--accent)';
 totalSoldField.style.fontWeight = 'bold';
 totalSoldField.style.border = '1px solid var(--accent)';
 const usedRepSaleIds = new Set();
-repSales.forEach(sale => {
-if (sale.usedInCalcId) {
-usedRepSaleIds.add(sale.id);
-}
-});
 if (Array.isArray(salesHistory)) {
-salesHistory.forEach(calcEntry => {
-if (calcEntry.linkedRepSalesIds && Array.isArray(calcEntry.linkedRepSalesIds)) {
-calcEntry.linkedRepSalesIds.forEach(id => usedRepSaleIds.add(id));
+  salesHistory.forEach(calcEntry => {
+    if (calcEntry.linkedRepSalesIds && Array.isArray(calcEntry.linkedRepSalesIds)) {
+      calcEntry.linkedRepSalesIds.forEach(id => usedRepSaleIds.add(id));
+    }
+  });
 }
-});
-}
+repSales.forEach(sale => { if (sale.usedInCalcId) usedRepSaleIds.add(sale.id); });
 let creditSalesKg = 0;
 let recoveredCash = 0;
 repSales.forEach(sale => {
-if (sale.salesRep === seller && sale.date === date && !usedRepSaleIds.has(sale.id)) {
-if (sale.paymentType === 'CREDIT') {
-creditSalesKg += (sale.quantity || 0);
-}
-if (sale.paymentType === 'COLLECTION') {
-recoveredCash += (sale.totalValue || 0);
-}
-}
+  if (sale.salesRep === seller && sale.date === date && !usedRepSaleIds.has(sale.id)) {
+    if (sale.paymentType === 'CREDIT') {
+      creditSalesKg += (sale.quantity || 0);
+    }
+    if (sale.paymentType === 'COLLECTION') {
+      recoveredCash += (sale.totalValue || 0);
+    }
+  }
 });
 if(creditSalesField) {
 creditSalesField.value = safeNumber(creditSalesKg, 0).toFixed(2);
@@ -9590,7 +8049,6 @@ list.innerHTML = '';
 displayList.forEach(h => {
 const isHighlight = h.date === searchDate;
 const dateTitle = isHighlight ? `${formatDisplayDate(h.date)} (Selected)` : formatDisplayDate(h.date);
-
 list.innerHTML += createReportHTML(
 dateTitle,
 {
@@ -9622,7 +8080,6 @@ let ltCr = 0, ltCl = 0;
 const debtFilterList = isCombined ? history : history.filter(h => h.seller === seller);
 debtFilterList.forEach(h => {
 if (!h.date) return;
-
 const hDate = new Date(h.date);
 if (isNaN(hDate.getTime())) {
 return;
@@ -9673,7 +8130,7 @@ const metrics = [
 ];
 document.getElementById('comparisonBody').innerHTML = metrics.map(m => {
 const cells = repNames.map(r => {
-const val = safeValue((comp[r]||{})[m.key]).toFixed(2);
+const val = fmtAmt(safeValue((comp[r]||{})[m.key]));
 const style = m.key === 'cost' ? ' style="color:var(--danger)"' : m.key === 'coll' ? ' style="color:var(--accent)"' : '';
 const cls = m.cls ? ` class="${m.cls}"` : '';
 return `<td${cls}${style}>${val}</td>`;
@@ -9794,7 +8251,7 @@ const total = context.dataset.data.reduce((a, b) => a + b, 0);
 const percentage = total > 0 ? safeNumber((context.parsed / total) * 100, 0).toFixed(2) : 0;
 return `${context.label}: ${percentage}%`;
 } else {
-return `${context.label}: ${safeNumber(context.parsed, 0).toFixed(2)}`;
+return `${context.label}: ${fmtAmt(safeNumber(context.parsed, 0))}`;
 }
 }
 }
@@ -9815,7 +8272,6 @@ const ampm = hours >= 12 ? 'PM' : 'AM';
 hours = hours % 12;
 hours = hours ? hours : 12;
 const timeString = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')} ${ampm}`;
-
 const formulaStore = storeKey === 'STORE_C' ? 'asaan' : 'standard';
 const salePrice = getSalePriceForStore(storeKey); 
 const costPerKg = getCostPriceForStore(storeKey); 
@@ -9872,7 +8328,7 @@ item.isReturn === true
 );
 if (returnEntry) {
 db = db.filter(item => item.id !== returnEntry.id);
-await unifiedDelete('mfg_pro_pkr', db, returnEntry.id);
+await unifiedDelete('mfg_pro_pkr', db, returnEntry.id, { strict: true });
 }
 const returnLogEntry = stockReturns.find(r =>
 r.store === storeKey &&
@@ -9881,7 +8337,7 @@ r.date === date
 );
 if (returnLogEntry) {
 stockReturns = stockReturns.filter(r => r.id !== returnLogEntry.id);
-await unifiedDelete('stock_returns', stockReturns, returnLogEntry.id);
+await unifiedDelete('stock_returns', stockReturns, returnLogEntry.id, { strict: true });
 }
 }
 async function formatCurrency(num) {
@@ -9896,32 +8352,32 @@ async function refreshAllDisplays() {
 try {
 await syncFactoryProductionStats();
 } catch (error) {
-console.error('Display refresh failed.', error);
+console.error('Display refresh failed.', _safeErr(error));
 showToast('Display refresh failed.', 'error');
 }
 try {
 if (typeof refreshUI === 'function') await refreshUI(1, true);
 } catch (error) {
-console.error('Display refresh failed.', error);
+console.error('Display refresh failed.', _safeErr(error));
 showToast('Display refresh failed.', 'error');
 }
 try {
 if (typeof refreshCustomerSales === 'function') await refreshCustomerSales(1, true);
 else if (typeof renderCustomersTable === 'function') renderCustomersTable();
 } catch (error) {
-console.error('Display refresh failed.', error);
+console.error('Display refresh failed.', _safeErr(error));
 showToast('Display refresh failed.', 'error');
 }
 try {
 if (typeof loadSalesData === 'function') await loadSalesData(currentCompMode);
 } catch (error) {
-console.error('Display refresh failed.', error);
+console.error('Display refresh failed.', _safeErr(error));
 showToast('Display refresh failed.', 'error');
 }
 try {
 if (typeof initFactoryTab === 'function') initFactoryTab();
 } catch (error) {
-console.error('Display refresh failed.', error);
+console.error('Display refresh failed.', _safeErr(error));
 showToast('Display refresh failed.', 'error');
 }
 try {
@@ -9929,13 +8385,13 @@ if (document.getElementById('tab-payments') && !document.getElementById('tab-pay
 if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
 }
 } catch (error) {
-console.error('Payment tab refresh failed.', error);
+console.error('Payment tab refresh failed.', _safeErr(error));
 showToast('Payment tab refresh failed.', 'error');
 }
 try {
 if (typeof calculateNetCash === 'function') calculateNetCash();
 } catch (error) {
-console.error('Payment tab refresh failed.', error);
+console.error('Payment tab refresh failed.', _safeErr(error));
 showToast('Payment tab refresh failed.', 'error');
 }
 try {
@@ -9944,13 +8400,11 @@ if (typeof renderRepHistory === 'function') renderRepHistory();
 if (typeof renderRepCustomerTable === 'function') renderRepCustomerTable();
 }
 } catch (error) {
-console.error('Payment tab refresh failed.', error);
+console.error('Payment tab refresh failed.', _safeErr(error));
 showToast('Payment tab refresh failed.', 'error');
 }
 }
-
 document.addEventListener('DOMContentLoaded', async function _appBootstrap() {
-
   const urlParams = new URLSearchParams(window.location.search);
   const _action = urlParams.get('action');
   if (_action) {
@@ -9965,10 +8419,8 @@ document.addEventListener('DOMContentLoaded', async function _appBootstrap() {
       setTimeout(_tryShowTab, 200);
     }
   }
-
   updateOfflineBanner();
   updateConnectionStatus();
-
   const expenseNameInput = document.getElementById('expenseName');
   if (expenseNameInput) {
     expenseNameInput.addEventListener('blur', function() {
@@ -9978,7 +8430,6 @@ document.addEventListener('DOMContentLoaded', async function _appBootstrap() {
       }, 200);
     });
   }
-
   const repAmtCollected = document.getElementById('rep-amount-collected');
   if (repAmtCollected) {
     repAmtCollected.addEventListener('input', function() {
@@ -9986,19 +8437,34 @@ document.addEventListener('DOMContentLoaded', async function _appBootstrap() {
       const currentDebt = parseFloat(_credEl2 ? _credEl2.innerText.replace('','') : '0') || 0;
       const inputAmt = parseFloat(this.value) || 0;
       const _repTVL = document.getElementById('rep-total-value');
-      if (_repTVL) _repTVL.innerText = "" + safeNumber(currentDebt - inputAmt, 0).toFixed(2);
+      if (_repTVL) _repTVL.innerText = "" + fmtAmt(safeNumber(currentDebt - inputAmt, 0));
     });
   }
-
   if (typeof ThemeManager !== 'undefined' && ThemeManager.init) ThemeManager.init();
   await initTheme();
-
   const hasFirebaseSession = await _checkFirebaseSessionExists();
   if (!hasFirebaseSession) {
     createAuthOverlay();
     showAuthOverlay();
+  } else {
+    try {
+      let loginData = await IDBCrypto.sessionGet('login');
+      if (!loginData || !loginData.uid) {
+        const lsLogin = localStorage.getItem('persistentLogin');
+        if (lsLogin) { try { loginData = JSON.parse(lsLogin); } catch(e) {} }
+      }
+      if (loginData && loginData.uid) {
+        idb.setUserPrefix(loginData.uid);
+        await IDBCrypto.initialize();
+        const keyRestored = await IDBCrypto.restoreSessionKeyFromStorage();
+        if (!keyRestored) {
+          console.warn('Session: could not restore encryption key from storage, waiting for Firebase auth');
+        }
+      }
+    } catch(e) {
+      console.warn('Session pre-warm failed:', e);
+    }
   }
-
   try {
     await loadAllData();
     await initializeDeviceListeners();
@@ -10008,28 +8474,22 @@ document.addEventListener('DOMContentLoaded', async function _appBootstrap() {
     showToast('Failed to initialize database. Please refresh the page.', 'error', 5000);
     return;
   }
-
   await enforceRepModeLock();
   preventAdminAccess();
   await checkBiometricLock();
-
   const cloudMenuBtn = document.getElementById('cloudMenuBtn');
   if (cloudMenuBtn) cloudMenuBtn.style.display = (appMode === 'admin') ? '' : 'none';
-
   updateSyncButton();
-
   setTimeout(() => {
     if (typeof initializeFirebaseSystem === 'function') initializeFirebaseSystem();
     else if (typeof initFirebase === 'function') initFirebase();
-  }, 500);
-
+  }, 100);
   const today = new Date().toISOString().split('T')[0];
   ['sys-date','sale-date','cust-date','factory-date','paymentDate','rep-date'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = today;
   });
   currentFactoryDate = today;
-
   if (await idb.get('bio_enabled') === 'true') {
     const bioBtn = document.getElementById('bio-toggle-btn');
     if (bioBtn) {
@@ -10038,7 +8498,6 @@ document.addEventListener('DOMContentLoaded', async function _appBootstrap() {
       bioBtn.classList.add('active');
     }
   }
-
   const factoryDateEl = document.getElementById('factory-date');
   if (factoryDateEl) {
     factoryDateEl.addEventListener('change', function() {
@@ -10046,26 +8505,22 @@ document.addEventListener('DOMContentLoaded', async function _appBootstrap() {
       updateFactorySummaryCard();
     });
   }
-
   const sellerSelect = document.getElementById('sellerSelect');
   const saleDate2 = document.getElementById('sale-date');
   if (sellerSelect) sellerSelect.addEventListener('change', autoFillTotalSoldQuantity);
   if (saleDate2) saleDate2.addEventListener('change', autoFillTotalSoldQuantity);
-
   const storeSelector = document.getElementById('storeSelector');
   if (storeSelector) storeSelector.addEventListener('change', updateProductionCostOnStoreChange);
-
   initSplashScreen();
   setProductionView('store');
-  syncFactoryProductionStats();
-  updateAllTabsWithFactoryCosts();
-  await refreshAllDisplays();
-
+  requestAnimationFrame(async () => {
+    syncFactoryProductionStats();
+    updateAllTabsWithFactoryCosts();
+    await refreshAllDisplays();
   if (appMode === 'rep') {
     if (typeof renderRepHistory === 'function') renderRepHistory();
     if (typeof renderRepCustomerTable === 'function') renderRepCustomerTable();
   }
-
   loadSalesRepsList();
   setTimeout(() => {
     if (typeof generateUUID === 'function') {
@@ -10075,28 +8530,34 @@ document.addEventListener('DOMContentLoaded', async function _appBootstrap() {
       if (expIdEl) { const id2 = generateUUID('exp'); expIdEl.textContent = 'ID: ' + id2.split('-').slice(0,2).join('-') + '\u2026'; expIdEl.title = id2; }
     }
   }, 400);
-
+  }); 
   scheduleAutomaticCleanup();
-  setTimeout(() => validateAllDataOnStartup(), 2000);
-
+  setTimeout(() => validateAllDataOnStartup(), 5000);
+  setTimeout(async () => {
+    try {
+      const result = await migrateAllUUIDs();
+      if (result && result.migrated > 0) {
+        console.log(`[UUID Migration] Migrated ${result.migrated} records to enriched format.`);
+      }
+    } catch(e) {
+      console.warn('[UUID Migration] Migration error (non-fatal):', e);
+    }
+  }, 8000);
   if (window._connectionCheckInterval) clearInterval(window._connectionCheckInterval);
   window._connectionCheckInterval = setInterval(() => {
     if (isConnectionStale()) {
       if (firebaseDB && currentUser && !isReconnecting) scheduleListenerReconnect();
     }
   }, 120000);
-
   if (window._perfMonitorInterval) clearInterval(window._perfMonitorInterval);
   window._perfMonitorInterval = setInterval(() => {
     if (typeof PerformanceMonitor !== 'undefined') PerformanceMonitor.report();
   }, 60000);
-
   setTimeout(() => {
     const splash = document.getElementById('splash-screen');
     if (splash) splash.style.display = 'none';
-  }, 1500);
+  }, 800);
 });
-
 function _filterFactoryHistoryByMode(mode) {
 const selectedDateVal = (document.getElementById('factory-date') || {}).value || new Date().toISOString().split('T')[0];
 const selectedDate = new Date(selectedDateVal);
@@ -10235,7 +8696,6 @@ if (linkedRepCount > 0) confirmMsg += `\n \u2022 ${linkedRepCount} rep sale${lin
 if (entryToDelete.returned > 0 && entryToDelete.returnStore) confirmMsg += `\n \u2022 ${entryToDelete.returned} kg will be REMOVED from ${getStoreLabel(entryToDelete.returnStore)} inventory (return reversal).`;
 }
 if (await showGlassConfirm(confirmMsg, { title: `Delete ${entryToDelete.seller || "Sales"} Record`, confirmText: "Delete", danger: true })) {
-await registerDeletion(id, 'calculator_history');
 let revertedSalesCount = 0;
 let revertedRepSalesCount = 0;
 let reversedReturnQty = 0;
@@ -10250,7 +8710,7 @@ reversedReturnQty = entryToDelete.returned;
 await reverseReturnFromProduction(entryToDelete.returnStore, entryToDelete.returned, entryToDelete.date);
 }
 const newHistory = history.filter(h => h.id !== id);
-await unifiedDelete('noman_history', newHistory, id);
+await unifiedDelete('noman_history', newHistory, id, { strict: true });
 if (Array.isArray(salesHistory)) {
 const idx = salesHistory.findIndex(h => h.id === id);
 if (idx !== -1) salesHistory.splice(idx, 1);
@@ -10521,8 +8981,15 @@ const _entMO = document.getElementById('entityManagementOverlay'); if (_entMO) _
 async function refreshPaymentTab(force = false) {
 try {
 if (idb && idb.getBatch) {
-const paymentKeys = ['expenses', 'payment_entities', 'payment_transactions'];
-const paymentDataMap = await idb.getBatch(paymentKeys);
+const allKeys = [
+'expenses', 'payment_entities', 'payment_transactions',
+'mfg_pro_pkr', 'customer_sales', 'noman_history',
+'factory_inventory_data', 'factory_production_history',
+'factory_unit_tracking',
+'factory_default_formulas', 'factory_additional_costs',
+'factory_sale_prices', 'factory_cost_adjustment_factor'
+];
+const paymentDataMap = await idb.getBatch(allKeys);
 if (paymentDataMap.get('expenses')) {
 let freshExpenses = paymentDataMap.get('expenses') || [];
 let fixedCount = 0;
@@ -10541,6 +9008,7 @@ await idb.set('expenses', freshExpenses);
 }
 }
 expenses = freshExpenses;
+expenseRecords = freshExpenses; 
 }
 if (paymentDataMap.get('payment_entities')) {
 let freshEntities = paymentDataMap.get('payment_entities') || [];
@@ -10580,27 +9048,95 @@ await idb.set('payment_transactions', freshTransactions);
 }
 paymentTransactions = freshTransactions;
 }
+const freshDb = paymentDataMap.get('mfg_pro_pkr');
+if (Array.isArray(freshDb)) db = freshDb;
+const freshCustomerSales = paymentDataMap.get('customer_sales');
+if (Array.isArray(freshCustomerSales)) customerSales = freshCustomerSales;
+const freshSalesHistory = paymentDataMap.get('noman_history');
+if (Array.isArray(freshSalesHistory)) salesHistory = freshSalesHistory;
+const freshInventory = paymentDataMap.get('factory_inventory_data');
+if (Array.isArray(freshInventory)) factoryInventoryData = freshInventory;
+const freshTracking = paymentDataMap.get('factory_unit_tracking');
+if (freshTracking && typeof freshTracking === 'object') {
+factoryUnitTracking = {
+standard: {
+produced:       freshTracking.standard?.produced       || 0,
+consumed:       freshTracking.standard?.consumed       || 0,
+available:      freshTracking.standard?.available      || 0,
+unitCostHistory: freshTracking.standard?.unitCostHistory || []
+},
+asaan: {
+produced:       freshTracking.asaan?.produced          || 0,
+consumed:       freshTracking.asaan?.consumed          || 0,
+available:      freshTracking.asaan?.available         || 0,
+unitCostHistory: freshTracking.asaan?.unitCostHistory  || []
+}
+};
+}
+const freshProdHistory = paymentDataMap.get('factory_production_history');
+if (Array.isArray(freshProdHistory)) {
+factoryProductionHistory = freshProdHistory;
+['standard', 'asaan'].forEach(s => {
+factoryUnitTracking[s].unitCostHistory = freshProdHistory
+.filter(e => e.store === s && e.units > 0 && e.totalCost > 0)
+.map(e => ({ date: e.date, costPerUnit: e.totalCost / e.units, units: e.units }));
+});
+}
+if (Array.isArray(factoryProductionHistory)) {
+const recomp = { standard: { produced: 0, consumed: 0 }, asaan: { produced: 0, consumed: 0 } };
+factoryProductionHistory.forEach(e => {
+const s = e.store === 'asaan' ? 'asaan' : 'standard';
+if (e.units > 0) recomp[s].produced += e.units;
+});
+db.forEach(e => {
+if (e.isReturn) return;
+const s = (e.formulaStore === 'asaan' || e.store === 'STORE_C') ? 'asaan' : 'standard';
+if (e.formulaUnits) recomp[s].consumed += e.formulaUnits;
+});
+factoryUnitTracking.standard.available = Math.max(0, recomp.standard.produced - recomp.standard.consumed);
+factoryUnitTracking.asaan.available    = Math.max(0, recomp.asaan.produced    - recomp.asaan.consumed);
+}
+const freshFormulas = paymentDataMap.get('factory_default_formulas');
+if (freshFormulas && typeof freshFormulas === 'object') factoryDefaultFormulas = freshFormulas;
+const freshCosts = paymentDataMap.get('factory_additional_costs');
+if (freshCosts && typeof freshCosts === 'object') factoryAdditionalCosts = freshCosts;
+const freshPrices = paymentDataMap.get('factory_sale_prices');
+if (freshPrices && typeof freshPrices === 'object') factorySalePrices = freshPrices;
+const freshFactor = paymentDataMap.get('factory_cost_adjustment_factor');
+if (freshFactor && typeof freshFactor === 'object') factoryCostAdjustmentFactor = freshFactor;
 }
 await syncSuppliersToEntities();
 try { calculateNetCash(); } catch (e) {
 showToast('Calculation failed.', 'error');
-console.error('calculateNetCash error:', e);
+console.error('calculateNetCash error:', _safeErr(e));
+}
+try {
+if (typeof updateFactoryInventoryDisplay === 'function') {
+const _std = factoryUnitTracking?.standard || {};
+const _asn = factoryUnitTracking?.asaan || {};
+console.log('[PaymentTab] factoryUnitTracking →', JSON.stringify({ std_avail: _std.available, asn_avail: _asn.available }));
+console.log('[PaymentTab] getCostPerUnit(standard) =', getCostPerUnit('standard'), '| getCostPerUnit(asaan) =', getCostPerUnit('asaan'));
+console.log('[PaymentTab] formulaUnitsValue =', (_std.available||0)*getCostPerUnit('standard') + (_asn.available||0)*getCostPerUnit('asaan'));
+updateFactoryInventoryDisplay();
+}
+} catch (e) {
+console.error('updateFactoryInventoryDisplay error:', _safeErr(e));
 }
 try { calculatePaymentSummaries(); } catch (e) {
 showToast('Calculation failed.', 'error');
-console.error('calculatePaymentSummaries error:', e);
+console.error('calculatePaymentSummaries error:', _safeErr(e));
 }
 try { renderUnifiedTable(); } catch (e) {
 showToast('Calculation failed.', 'error');
-console.error('renderUnifiedTable error:', e);
+console.error('renderUnifiedTable error:', _safeErr(e));
 }
 try { updateExpenseBreakdown(); } catch (e) {
 showToast('Calculation failed.', 'error');
-console.error('updateExpenseBreakdown error:', e);
+console.error('updateExpenseBreakdown error:', _safeErr(e));
 }
 try { calculateCashTracker(); } catch (e) {
 showToast('Calculation failed.', 'error');
-console.error('calculateCashTracker error:', e);
+console.error('calculateCashTracker error:', _safeErr(e));
 }
 const historyList = document.getElementById('paymentHistoryList');
 if (!historyList) {
@@ -10615,19 +9151,21 @@ const badgeText = transaction.type === 'IN' ? 'IN' : 'OUT';
 const entityName = entity ? entity.name : (transaction.entityName || 'Unknown Entity');
 const entityType = entity ? entity.type : (transaction.entityType || 'Unknown');
 const isMerged = transaction.isMerged === true;
+const isSettled = transaction.isSettled === true;
 const mergedBadge = isMerged ? _mergedBadgeHtml(transaction, {inline:true}) : '';
+const settledBadge = isSettled ? `<span class="settled-badge">✓ Settled</span>` : '';
 const deleteButton = isMerged ? '' : `<button class="tbl-action-btn danger u-w-full u-mt-8" onclick="(async () => { await deletePaymentTransaction('${esc(transaction.id)}') })()">Delete</button>`;
 const card = document.createElement('div');
-card.className = 'card liquid-card';
+card.className = `card liquid-card${isSettled ? ' is-settled-record' : ''}`;
 if (transaction.date) card.setAttribute('data-date', transaction.date);
 card.innerHTML = `
 <span class="transaction-badge ${badgeClass}">${badgeText}</span>
 <h4>${formatDisplayDate(transaction.date)} @ ${esc(transaction.time || 'N/A')}</h4>
-<div class="customer-name">${esc(entityName)}${mergedBadge}</div>
+<div class="customer-name">${esc(entityName)}${mergedBadge}${settledBadge}</div>
 <p><span>Type:</span> <span>${esc(entityType)}</span></p>
 <p><span>Description:</span> <span>${esc(transaction.description || 'No description')}</span></p>
 <hr>
-<p><span>Amount:</span> <span class="${transaction.type === 'IN' ? 'profit-val' : 'cost-val'}">${safeValue(transaction.amount).toFixed(2)}</span></p>
+<p><span>Amount:</span> <span class="${transaction.type === 'IN' ? 'profit-val' : 'cost-val'}">${fmtAmt(safeValue(transaction.amount))}</span></p>
 ${deleteButton}
 `;
 historyList.appendChild(card);
@@ -10637,7 +9175,7 @@ historyList.innerHTML = '<p style="text-align:center; color:var(--text-muted); w
 }
 _filterPaymentHistoryByPeriod();
 } catch (error) {
-console.error('Payment transaction failed.', error);
+console.error('Payment transaction failed.', _safeErr(error));
 showToast('Payment transaction failed.', 'error');
 }
 }
@@ -10702,7 +9240,7 @@ if (editingFactoryInventoryId) {
 const _diMat = factoryInventoryData.find(i => i.id === editingFactoryInventoryId);
 const _diName = _diMat?.name || 'this item';
 const _diQty = (_diMat?.quantity || 0).toFixed(2);
-const _diVal = (_diMat?.totalValue || 0).toFixed(2);
+const _diVal = fmtAmt(_diMat?.totalValue || 0);
 const _diSupplier = _diMat?.supplierName || null;
 const _diLinkedTx = _diMat?.supplierId ? paymentTransactions.filter(t => String(t.materialId) === String(editingFactoryInventoryId) && t.isPayable === true) : [];
 let _diMsg = `Permanently delete inventory item "${_diName}"?`;
@@ -10713,7 +9251,7 @@ _diMsg += `\nLinked Supplier: ${_diSupplier}`;
 _diMsg += `\n\n\u21a9 Supplier association will be removed.`;
 if (_diLinkedTx.length > 0) {
 const _diTxTotal = _diLinkedTx.reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
-_diMsg += ` ${_diLinkedTx.length} payment transaction${_diLinkedTx.length !== 1 ? 's' : ''} totaling ${_diTxTotal.toFixed(2)} will be reversed and the supplier\'s payable status reset.`;
+_diMsg += ` ${_diLinkedTx.length} payment transaction${_diLinkedTx.length !== 1 ? 's' : ''} totaling ${fmtAmt(_diTxTotal)} will be reversed and the supplier\'s payable status reset.`;
 }
 }
 _diMsg += `\n\n\u26a0 If this material is used in production formulas, those formulas will be affected.`;
@@ -10724,10 +9262,9 @@ const material = factoryInventoryData.find(i => i.id === editingFactoryInventory
 if (material && material.supplierId) {
 await unlinkSupplierFromMaterial(material);
 }
-await registerDeletion(editingFactoryInventoryId, 'inventory');
 factoryInventoryData = factoryInventoryData.filter(item => item.id !== editingFactoryInventoryId);
 hasChanges = true;
-await unifiedDelete('factory_inventory_data', factoryInventoryData, editingFactoryInventoryId);
+await unifiedDelete('factory_inventory_data', factoryInventoryData, editingFactoryInventoryId, { strict: true });
 notifyDataChange('inventory');
 triggerAutoSync();
 closeFactoryInventoryModal();
@@ -10992,7 +9529,6 @@ function hideExpenseSearch() {
 document.getElementById('expense-search-results').classList.add('hidden');
 document.getElementById('expenseAmount').focus();
 }
-
 window._expenseCategory = 'operating';
 window._returnStore = null;
 function selectExpenseCategory(value, clickedBtn) {
@@ -11172,7 +9708,7 @@ if (typeof renderUnifiedTable === 'function') {
 try {
 renderUnifiedTable(1);
 } catch (e) {
-console.error('Failed to render data.', e);
+console.error('Failed to render data.', _safeErr(e));
 showToast('Failed to render data.', 'error');
 }
 }
@@ -11180,7 +9716,7 @@ if (typeof refreshPaymentTab === 'function') {
 try {
 await refreshPaymentTab(true);
 } catch (e) {
-console.error('Payment tab refresh failed.', e);
+console.error('Payment tab refresh failed.', _safeErr(e));
 showToast('Payment tab refresh failed.', 'error');
 }
 }
@@ -11188,7 +9724,7 @@ if (typeof renderExpenseTable === 'function') {
 try {
 renderExpenseTable(1);
 } catch (e) {
-console.error('Payment tab refresh failed.', e);
+console.error('Payment tab refresh failed.', _safeErr(e));
 showToast('Payment tab refresh failed.', 'error');
 }
 }
@@ -11196,7 +9732,7 @@ if (typeof handleExpenseSearch === 'function') {
 try {
 handleExpenseSearch();
 } catch (e) {
-console.error('Payment tab refresh failed.', e);
+console.error('Payment tab refresh failed.', _safeErr(e));
 showToast('Payment tab refresh failed.', 'error');
 }
 }
@@ -11204,7 +9740,7 @@ if (typeof calculateNetCash === 'function') {
 try {
 calculateNetCash();
 } catch (e) {
-console.error('Payment tab refresh failed.', e);
+console.error('Payment tab refresh failed.', _safeErr(e));
 showToast('Payment tab refresh failed.', 'error');
 }
 }
@@ -11212,7 +9748,7 @@ if (typeof renderFactoryInventory === 'function') {
 try {
 renderFactoryInventory();
 } catch (e) {
-console.error('Payment tab refresh failed.', e);
+console.error('Payment tab refresh failed.', _safeErr(e));
 showToast('Payment tab refresh failed.', 'error');
 }
 }
@@ -11299,7 +9835,7 @@ if (freshExpenses && freshExpenses.length > 0) {
 expenseRecords = freshExpenses;
 }
 } catch (error) {
-console.error('Calculation failed.', error);
+console.error('Calculation failed.', _safeErr(error));
 showToast('Calculation failed.', 'error');
 }
 const periodFilter = document.getElementById('expensePeriodFilter')?.value || 'month';
@@ -11358,8 +9894,8 @@ if (totalEl) totalEl.textContent = '0.00';
 if (totalAllEl) totalAllEl.textContent = '0.00';
 return;
 }
-if (totalEl) totalEl.textContent = `${periodTotal.toFixed(2)}`;
-if (totalAllEl) totalAllEl.textContent = `${allTimeTotal.toFixed(2)}`;
+if (totalEl) totalEl.textContent = `${fmtAmt(periodTotal)}`;
+if (totalAllEl) totalAllEl.textContent = `${fmtAmt(allTimeTotal)}`;
 if (totalItems === 0) {
 tbody.innerHTML = `
 <tr>
@@ -11398,7 +9934,7 @@ white-space: nowrap;
 ">${esc(categoryLabel)}</span>
 </td>
 <td style="padding: 10px 8px; text-align: right; font-weight: 700; color: var(--danger); font-size: 0.9rem;">
-${expense.amount.toFixed(2)}
+${fmtAmt(expense.amount)}
 </td>
 <td style="padding: 10px 8px; text-align: center;">
 <button
@@ -11441,7 +9977,7 @@ if (freshExpenses && freshExpenses.length > 0) {
 expenseRecords = freshExpenses;
 }
 } catch (error) {
-console.error('Failed to render data.', error);
+console.error('Failed to render data.', _safeErr(error));
 showToast('Failed to render data.', 'error');
 }
 const viewModeEl = document.getElementById('unifiedViewMode');
@@ -11570,7 +10106,7 @@ name: grp.name,
 contact: 'Operating',
 typeLabel: 'EXPENSE',
 amount: grp.totalAmount,
-amountStr: `${grp.totalAmount.toFixed(2)}`,
+amountStr: `${fmtAmt(grp.totalAmount)}`,
 color: 'var(--warning)',
 id: grp.latestId,
 description: grp.count > 1 ? `${grp.count} transactions` : ''
@@ -11652,7 +10188,7 @@ nameColor = 'var(--danger)';
 } else if (balance < -0.01) {
 nameColor = 'var(--accent-emerald)';
 }
-const amountStr = `${Math.abs(balance).toFixed(2)}`;
+const amountStr = `${fmtAmt(Math.abs(balance))}`;
 rows.push({
 type: 'entity',
 date: entityDate,
@@ -11782,13 +10318,13 @@ if (viewMode === 'entities') {
 if (footerLabel) footerLabel.textContent = 'Net Balance:';
 if (totalSpan) {
 const netBalance = totalReceivables - totalPayables;
-totalSpan.textContent = `${Math.abs(netBalance).toFixed(2)}`;
+totalSpan.textContent = `${fmtAmt(Math.abs(netBalance))}`;
 totalSpan.style.color = netBalance >= 0 ? 'var(--accent-emerald)' : 'var(--danger)';
 }
 } else {
 if (footerLabel) footerLabel.textContent = 'Net Total:';
 if (totalSpan) {
-totalSpan.textContent = `${totalAmount.toFixed(2)}`;
+totalSpan.textContent = `${fmtAmt(totalAmount)}`;
 totalSpan.style.color = totalAmount >= 0 ? 'var(--accent-emerald)' : 'var(--danger)';
 }
 }
@@ -11799,11 +10335,11 @@ const payablesEl = document.getElementById('unified-payables');
 const supplierPayablesEl = document.getElementById('unified-supplier-payables');
 const entityPayablesEl = document.getElementById('unified-entity-payables');
 const expensesEl = document.getElementById('unified-expenses');
-if (receivablesEl) receivablesEl.textContent = totalReceivables.toFixed(2);
-if (payablesEl) payablesEl.textContent = totalPayables.toFixed(2);
-if (supplierPayablesEl) supplierPayablesEl.textContent = totalSupplierPayables.toFixed(2);
-if (entityPayablesEl) entityPayablesEl.textContent = totalEntityPayables.toFixed(2);
-if (expensesEl) expensesEl.textContent = totalExpenses.toFixed(2);
+if (receivablesEl) receivablesEl.textContent = fmtAmt(totalReceivables);
+if (payablesEl) payablesEl.textContent = fmtAmt(totalPayables);
+if (supplierPayablesEl) supplierPayablesEl.textContent = fmtAmt(totalSupplierPayables);
+if (entityPayablesEl) entityPayablesEl.textContent = fmtAmt(totalEntityPayables);
+if (expensesEl) expensesEl.textContent = fmtAmt(totalExpenses);
 }
 _filterPaymentHistoryByPeriod();
 }
@@ -11910,7 +10446,6 @@ supplierInventoryBalances[sid] = (supplierInventoryBalances[sid] || 0) + mat.tot
 });
 }
 const entityNetBalances = {};
-
 const entityMergedInfo = {};
 paymentEntities.forEach(e => {
 if (e.isExpenseEntity === true) return;
@@ -11925,7 +10460,6 @@ if (entityNetBalances[t.entityId] !== undefined) {
 const amt = parseFloat(t.amount) || 0;
 if (t.type === 'OUT') entityNetBalances[t.entityId] -= amt;
 else if (t.type === 'IN') entityNetBalances[t.entityId] += amt;
-
 if (t.isMerged === true && t.mergedSummary) {
   entityMergedInfo[t.entityId] = entityMergedInfo[t.entityId] || [];
   entityMergedInfo[t.entityId].push({
@@ -11939,7 +10473,6 @@ if (t.isMerged === true && t.mergedSummary) {
 });
 }
 const entityRows = [];
-
 const pdfEntityList = [];
 let totPayable = 0, totReceivable = 0;
 paymentEntities
@@ -11958,8 +10491,8 @@ if (balance < -0.01) totPayable += Math.abs(balance);
 if (balance > 0.01) totReceivable += balance;
 let balDisplay, balNote;
 if (Math.abs(balance) < 0.01) { balDisplay = 'SETTLED'; balNote = ''; }
-else if (balance < 0) { balDisplay = 'Rs ' + safeToFixed(Math.abs(balance), 2); balNote = 'PAYABLE'; }
-else { balDisplay = 'Rs ' + safeToFixed(balance, 2); balNote = 'RECEIVABLE'; }
+else if (balance < 0) { balDisplay = 'Rs ' + fmtAmt(Math.abs(balance)); balNote = 'PAYABLE'; }
+else { balDisplay = 'Rs ' + fmtAmt(balance); balNote = 'RECEIVABLE'; }
 const hasMergedTx = !!entityMergedInfo[entity.id];
 const mergedNote = hasMergedTx
   ? entityMergedInfo[entity.id].map(m => `\u2605 ${m.period} (${m.count})`).join('\n')
@@ -11976,8 +10509,8 @@ pdfEntityList.push(entity);
 });
 entityRows.push([
 `TOTAL (${entityRows.length} entities)`, '', '', '',
-'Payable: Rs ' + safeToFixed(totPayable, 2) + '\nReceivable: Rs ' + safeToFixed(totReceivable, 2),
-'Net: Rs ' + safeToFixed(Math.abs(totReceivable - totPayable), 2)
+'Payable: Rs ' + fmtAmt(totPayable) + '\nReceivable: Rs ' + fmtAmt(totReceivable),
+'Net: Rs ' + fmtAmt(Math.abs(totReceivable - totPayable))
 ]);
 doc.autoTable({
 startY: yPos,
@@ -12001,7 +10534,6 @@ data.cell.styles.fontStyle = 'bold';
 data.cell.styles.fillColor = [240, 248, 255];
 data.cell.styles.fontSize = 9;
 }
-
 const rowEntity = (data.row.index < entityRows.length - 1) ? pdfEntityList[data.row.index] : null;
 if (rowEntity && entityMergedInfo[rowEntity.id]) {
   data.cell.styles.fillColor = PDF_MERGED_ROW_COLOR;
@@ -12023,7 +10555,7 @@ const afterY = doc.lastAutoTable.finalY + 6;
 if (afterY < 275) {
 doc.setFontSize(8); doc.setFont(undefined,'normal'); doc.setTextColor(100,100,100);
 doc.text(
-`Total Payables: Rs ${safeToFixed(totPayable, 2)} | Total Receivables: Rs ${safeToFixed(totReceivable, 2)} | Net Position: Rs ${safeToFixed(Math.abs(totReceivable - totPayable), 2)} ${totReceivable > totPayable ? '(IN OUR FAVOR)' : '(NET PAYABLE)'}`,
+`Total Payables: Rs ${fmtAmt(totPayable)} | Total Receivables: Rs ${fmtAmt(totReceivable)} | Net Position: Rs ${fmtAmt(Math.abs(totReceivable - totPayable))} ${totReceivable > totPayable ? '(IN OUR FAVOR)' : '(NET PAYABLE)'}`,
 14, afterY
 );
 const hasMergedEntries2 = Object.keys(entityMergedInfo).length > 0;
@@ -12057,10 +10589,8 @@ const key = exp.name || 'Unnamed';
 if (!nameGroups[key]) nameGroups[key] = 0;
 nameGroups[key] += parseFloat(exp.amount) || 0;
 });
-
 const mergedExpenses = expenses.filter(e => e.isMerged === true);
 const normalExpenses = expenses.filter(e => !e.isMerged);
-
 if (mergedExpenses.length > 0) {
   yPos = _pdfDrawMergedSectionHeader(doc, yPos, pageW, 'YEAR-END EXPENSE SUMMARIES (Carried Forward)');
   const mergedExpRows = mergedExpenses.map(exp => {
@@ -12072,11 +10602,11 @@ if (mergedExpenses.length > 0) {
       exp.name || '-',
       exp.category || 'operating',
       `${count} — ${(exp.description || '').substring(0, 35)}`,
-      'Rs ' + safeToFixed(parseFloat(exp.amount)||0, 2)
+      'Rs ' + fmtAmt(parseFloat(exp.amount)||0)
     ];
   });
   const mExpTotal = mergedExpenses.reduce((s,e)=>s+(parseFloat(e.amount)||0),0);
-  mergedExpRows.push(['','','','SUBTOTAL ('+mergedExpenses.length+' groups)','Rs '+safeToFixed(mExpTotal,2)]);
+  mergedExpRows.push(['','','','SUBTOTAL ('+mergedExpenses.length+' groups)','Rs '+fmtAmt(mExpTotal)]);
   doc.autoTable({startY:yPos,head:[['Year Period','Name / Vendor','Category','Summary','Total Amount']],body:mergedExpRows,theme:'grid',
     headStyles:{fillColor:PDF_MERGED_HDR_COLOR,textColor:255,fontSize:9,fontStyle:'bold',halign:'center'},
     styles:{fontSize:8,cellPadding:2.5,lineWidth:0.15,lineColor:[200,180,230],overflow:'linebreak'},
@@ -12086,13 +10616,12 @@ if (mergedExpenses.length > 0) {
   yPos = doc.lastAutoTable.finalY + 6;
   if (yPos > 250) { doc.addPage(); yPos = 20; }
 }
-
 const expenseRows = normalExpenses.map(exp => [
 formatDisplayDate(exp.date) || exp.date || '',
 exp.name || '-',
 exp.category || 'operating',
 (exp.description || '-').substring(0, 45),
-'Rs ' + safeToFixed(parseFloat(exp.amount) || 0, 2)
+'Rs ' + fmtAmt(parseFloat(exp.amount) || 0)
 ]);
 const totalAmt = expenses.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
 if (normalExpenses.length > 0) {
@@ -12102,7 +10631,7 @@ if (normalExpenses.length > 0) {
   doc.setTextColor(80,80,80); doc.setFont(undefined,'normal');
   yPos += 5;
 }
-expenseRows.push(['', '', '', 'TOTAL (' + expenses.length + ' records)', 'Rs ' + safeToFixed(totalAmt, 2)]);
+expenseRows.push(['', '', '', 'TOTAL (' + expenses.length + ' records)', 'Rs ' + fmtAmt(totalAmt)]);
 doc.autoTable({
 startY: yPos,
 head: [['Date', 'Name / Vendor', 'Category', 'Description', 'Amount']],
@@ -12141,7 +10670,7 @@ if (bkY > 275) return;
 doc.setTextColor(80,80,80);
 doc.text(name.substring(0, 30), 14, bkY);
 doc.setTextColor(220,53,69); doc.setFont(undefined,'bold');
-doc.text('Rs ' + safeToFixed(total, 2), 130, bkY, { align:'right' });
+doc.text('Rs ' + fmtAmt(total), 130, bkY, { align:'right' });
 doc.setFont(undefined,'normal');
 bkY += 5;
 });
@@ -12275,13 +10804,13 @@ const count = relatedExpenses.length;
 const statsEl = document.getElementById('expenseOverlayStats');
 if (statsEl) {
 statsEl.innerHTML = `
-<span style="color:var(--warning); font-weight:800;">Total: ${safeToFixed(filteredTotal, 2)}</span>
+<span style="color:var(--warning); font-weight:800;">Total: ${fmtAmt(filteredTotal)}</span>
 <span style="display:inline-flex; gap:8px; margin-left:12px; flex-wrap:wrap;">
 <span style="background:rgba(255,184,48,0.15); color:var(--warning); padding:2px 8px; border-radius:10px; font-size:0.7rem; font-weight:700;">
 ${count} record${count !== 1 ? 's' : ''}
 </span>
 <span style="background:rgba(255,77,109,0.15); color:var(--danger); padding:2px 8px; border-radius:10px; font-size:0.7rem; font-weight:700;">
-All-Time: ${safeToFixed(allTimeTotal, 2)}
+All-Time: ${fmtAmt(allTimeTotal)}
 </span>
 </span>`;
 }
@@ -12302,7 +10831,7 @@ item.innerHTML = `
 </div>
 <div style="text-align:right; margin-right:10px;">
 <span style="background:rgba(255,184,48,0.15); color:var(--warning); padding:2px 6px; border-radius:4px; font-size:0.65rem; font-weight:700;">EXPENSE</span>
-<div class="cost-val" style="font-size:0.9rem; margin-top:2px;">${safeToFixed(parseFloat(exp.amount) || 0, 2)}</div>
+<div class="cost-val" style="font-size:0.9rem; margin-top:2px;">${fmtAmt(parseFloat(exp.amount) || 0)}</div>
 </div>
 ${exp.isMerged ? '' : `<button class="btn btn-sm btn-danger u-p-4-8" onclick="deleteExpenseFromOverlay('${esc(exp.id)}')">⌫</button>`}
 `;
@@ -12379,7 +10908,7 @@ const _daeTotal = toDelete.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
 const _daeDateRange = toDelete.length > 1 ? ` (${toDelete[toDelete.length-1].date} – ${toDelete[0].date})` : (toDelete[0]?.date ? ` on ${toDelete[0].date}` : '');
 const _daeTxCount = paymentTransactions.filter(t => toDelete.some(e => e.id === t.expenseId)).length;
 let _daeMsg = `Permanently delete ALL ${toDelete.length} expense record${toDelete.length !== 1 ? 's' : ''} for "${expenseName}"?`;
-_daeMsg += `\nTotal Amount: ${_daeTotal.toFixed(2)}`;
+_daeMsg += `\nTotal Amount: ${fmtAmt(_daeTotal)}`;
 if (toDelete.length > 1) _daeMsg += `\nDate Range: ${toDelete[toDelete.length-1].date} – ${toDelete[0].date}`;
 else if (toDelete[0]?.date) _daeMsg += `\nDate: ${toDelete[0].date}`;
 if (_daeTxCount > 0) _daeMsg += `\n\n↩ ${_daeTxCount} linked payment transaction${_daeTxCount !== 1 ? 's' : ''} will also be reversed.`;
@@ -12388,12 +10917,12 @@ if (!(await showGlassConfirm(_daeMsg, { title: `Delete All "${expenseName}" Reco
 try {
 for (const exp of toDelete) {
 expenseRecords = expenseRecords.filter(e => e.id !== exp.id);
-await unifiedDelete('expenses', expenseRecords, exp.id);
+await unifiedDelete('expenses', expenseRecords, exp.id, { strict: true });
 const linked = paymentTransactions.filter(t => t.expenseId === exp.id);
 if (linked.length > 0) {
 paymentTransactions = paymentTransactions.filter(t => t.expenseId !== exp.id);
 for (const tx of linked) {
-await unifiedDelete('payment_transactions', paymentTransactions, tx.id);
+await unifiedDelete('payment_transactions', paymentTransactions, tx.id, { strict: true });
 }
 }
 }
@@ -12461,18 +10990,16 @@ doc.setFont(undefined,'bold'); doc.text('Records:', 75, 38);
 doc.setFont(undefined,'normal'); doc.text(String(records.length), 98, 38);
 doc.setFont(undefined,'bold'); doc.text('Total:', 120, 38);
 doc.setFont(undefined,'normal'); doc.setTextColor(...hdrColor); doc.setFont(undefined,'bold');
-doc.text('Rs ' + safeToFixed(total, 2), 138, 38);
+doc.text('Rs ' + fmtAmt(total), 138, 38);
 doc.setTextColor(80,80,80); doc.setFont(undefined,'normal');
 doc.setFont(undefined,'bold'); doc.text('Generated:', 14, 44);
 doc.setFont(undefined,'normal'); doc.text(now.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'}) + ' at ' + now.toLocaleTimeString('en-US'), 42, 44);
 doc.setDrawColor(...hdrColor); doc.setLineWidth(0.5);
 doc.line(14, 47, pageW - 14, 47);
 if (records.length > 0) {
-
 const mergedExpRecs = records.filter(e => e.isMerged === true);
 const normalExpRecs = records.filter(e => !e.isMerged);
 let tableStartY = 51;
-
 if (mergedExpRecs.length > 0) {
   tableStartY = _pdfDrawMergedSectionHeader(doc, tableStartY, pageW, 'YEAR-END EXPENSE SUMMARIES (Carried Forward)');
   const mergedRows = mergedExpRecs.map(e => {
@@ -12482,12 +11009,12 @@ if (mergedExpRecs.length > 0) {
     return [
       period,
       `${count} — ${(e.description||'Year-end merged total').substring(0,45)}`,
-      'Rs ' + safeToFixed(parseFloat(e.amount)||0, 2),
+      'Rs ' + fmtAmt(parseFloat(e.amount)||0),
       '\u2605 MERGED'
     ];
   });
   const mTot = mergedExpRecs.reduce((s,e)=>s+(parseFloat(e.amount)||0),0);
-  mergedRows.push(['','SUBTOTAL ('+mergedExpRecs.length+' year periods)','Rs '+safeToFixed(mTot,2),'']);
+  mergedRows.push(['','SUBTOTAL ('+mergedExpRecs.length+' year periods)','Rs '+fmtAmt(mTot),'']);
   doc.autoTable({startY:tableStartY,head:[['Year Period','Summary','Amount','Note']],body:mergedRows,theme:'grid',
     headStyles:{fillColor:PDF_MERGED_HDR_COLOR,textColor:255,fontSize:9,fontStyle:'bold',halign:'center'},
     styles:{fontSize:8.5,cellPadding:3,lineWidth:0.15,lineColor:[200,180,230],overflow:'linebreak'},
@@ -12497,7 +11024,6 @@ if (mergedExpRecs.length > 0) {
   tableStartY = doc.lastAutoTable.finalY + 8;
   if (tableStartY > 240) { doc.addPage(); tableStartY = 20; }
 }
-
 if (normalExpRecs.length > 0) {
   if (mergedExpRecs.length > 0) {
     doc.setFontSize(8.5); doc.setFont(undefined,'bold'); doc.setTextColor(...hdrColor);
@@ -12512,11 +11038,11 @@ runningTotal += parseFloat(e.amount) || 0;
 return [
 formatDisplayDate(e.date) || e.date || '-',
 (e.description || 'No description').substring(0, 55),
-'Rs ' + safeToFixed(parseFloat(e.amount) || 0, 2),
-'Rs ' + safeToFixed(runningTotal, 2)
+'Rs ' + fmtAmt(parseFloat(e.amount) || 0),
+'Rs ' + fmtAmt(runningTotal)
 ];
 });
-expenseRows.push(['', 'TOTAL (' + records.length + ' entries)', 'Rs ' + safeToFixed(total, 2), '']);
+expenseRows.push(['', 'TOTAL (' + records.length + ' entries)', 'Rs ' + fmtAmt(total), '']);
 doc.autoTable({
 startY: tableStartY,
 head: [['Date', 'Description', 'Amount', 'Cumulative Total']],
@@ -12559,7 +11085,7 @@ Object.entries(monthTotals).forEach(([month, amt]) => {
 if (bkY > 278) return;
 doc.setTextColor(80,80,80); doc.text(month, 14, bkY);
 doc.setTextColor(220,53,69); doc.setFont(undefined,'bold');
-doc.text('Rs ' + safeToFixed(amt, 2), 60, bkY);
+doc.text('Rs ' + fmtAmt(amt), 60, bkY);
 doc.setFont(undefined,'normal');
 bkY += 5;
 });
@@ -12592,7 +11118,7 @@ const orphans = paymentTransactions.filter(t => t.expenseId === expenseId);
 if (orphans.length > 0) {
 paymentTransactions = paymentTransactions.filter(t => t.expenseId !== expenseId);
 for (const tx of orphans) {
-await unifiedDelete('payment_transactions', paymentTransactions, tx.id);
+await unifiedDelete('payment_transactions', paymentTransactions, tx.id, { strict: true });
 }
 }
 renderRecentExpenses();
@@ -12617,7 +11143,7 @@ confirmMsg += `\nDate: ${expense.date || 'Unknown'}`;
 if (expense.description) confirmMsg += `\nNote: ${esc(expense.description)}`;
 if (linkedTransactions.length > 0) {
 const _deTxTotal = linkedTransactions.reduce((s, t) => s + (parseFloat(t.amount)||0), 0);
-confirmMsg += `\n\n\u21a9 ${linkedTransactions.length} linked payment transaction${linkedTransactions.length !== 1 ? 's' : ''} (${_deTxTotal.toFixed(2)}) will be reversed.`;
+confirmMsg += `\n\n\u21a9 ${linkedTransactions.length} linked payment transaction${linkedTransactions.length !== 1 ? 's' : ''} (${fmtAmt(_deTxTotal)}) will be reversed.`;
 if (_deEntityNames.length > 0) confirmMsg += `\n Suppliers affected: ${_deEntityNames.join(', ')} — payable status will be reset to pending.`;
 }
 confirmMsg += `\n\nThis cannot be undone.`;
@@ -12677,11 +11203,11 @@ await unifiedSave('factory_inventory_data', factoryInventoryData, mat);
 if (txToDelete.length > 0) {
 paymentTransactions = paymentTransactions.filter(t => t.expenseId !== expenseId);
 for (const trans of txToDelete) {
-await unifiedDelete('payment_transactions', paymentTransactions, trans.id);
+await unifiedDelete('payment_transactions', paymentTransactions, trans.id, { strict: true });
 }
 }
 expenseRecords = expenseRecords.filter(e => e.id !== expenseId);
-await unifiedDelete('expenses', expenseRecords, expenseId);
+await unifiedDelete('expenses', expenseRecords, expenseId, { strict: true });
 notifyDataChange('expenses');
 renderRecentExpenses();
 if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
@@ -12729,960 +11255,6 @@ case 'misc': return ' Miscellaneous';
 default: return 'Other';
 }
 }
-function selectCustomer(name) {
-const input = document.getElementById('cust-name');
-const resultsDiv = document.getElementById('customer-search-results');
-if(input) {
-input.value = name;
-}
-if(resultsDiv) {
-resultsDiv.classList.add('hidden');
-}
-if(typeof calculateCustomerStatsForDisplay === 'function') {
-calculateCustomerStatsForDisplay(name);
-}
-}
-async function calculateCustomerStatsForDisplay(name) {
-if (!name) return;
-const sales = customerSales.filter(s =>
-s && s.customerName && s.customerName.toLowerCase() === name.toLowerCase() &&
-s.isRepModeEntry !== true &&
-(!s.salesRep || s.salesRep === 'NONE')
-);
-if (sales.length === 0) {
-document.getElementById('customer-info-display').classList.add('hidden');
-return;
-}
-let totalCredit = 0;
-let totalQty = 0;
-sales.forEach(s => {
-totalQty += (s.quantity || 0);
-if (s.paymentType === 'CREDIT' && !s.creditReceived) {
-if (s.isMerged && typeof s.creditValue === 'number') {
-totalCredit += s.creditValue;
-} else {
-const partialPaid = s.partialPaymentReceived || 0;
-totalCredit += ((s.totalValue || 0) - partialPaid);
-}
-}
-});
-const _setCust = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
-_setCust('customer-current-credit', await formatCurrency(totalCredit));
-_setCust('customer-total-quantity', safeNumber(totalQty, 0).toFixed(2) + ' kg');
-document.getElementById('customer-info-display').classList.remove('hidden');
-}
-async function renderCustomersTable(page = 1) {
-const tbody = document.getElementById('customers-table-body');
-if (!tbody) {
-return;
-}
-try {
-const freshSales = await idb.get('customer_sales', []);
-if (Array.isArray(freshSales)) {
-const recordMap = new Map(freshSales.map(s => [s.id, s]));
-if (Array.isArray(customerSales)) {
-customerSales.forEach(s => {
-if (!recordMap.has(s.id)) {
-recordMap.set(s.id, s);
-}
-});
-}
-customerSales = Array.from(recordMap.values());
-}
-} catch (error) {
-console.error('UI refresh failed.', error);
-showToast('UI refresh failed.', 'error');
-}
-const filterInput = document.getElementById('customer-filter');
-const filterValue = filterInput ? filterInput.value.toLowerCase() : '';
-const customerStats = {};
-customerSales.forEach(sale => {
-if (sale.isRepModeEntry === true) return;
-const name = sale.salesRep && sale.salesRep !== 'NONE' && sale.salesRep !== 'ADMIN'
-? sale.salesRep
-: sale.customerName;
-if (!name || name.trim() === '') return;
-if (!customerStats[name]) {
-customerStats[name] = { name: name, credit: 0, quantity: 0, lastSaleDate: 0 };
-}
-customerStats[name].quantity += (sale.quantity || 0);
-if (sale.paymentType === 'CREDIT' && !sale.creditReceived) {
-if (sale.isMerged && typeof sale.creditValue === 'number') {
-customerStats[name].credit += sale.creditValue;
-} else {
-const partialPaid = sale.partialPaymentReceived || 0;
-customerStats[name].credit += ((sale.totalValue || 0) - partialPaid);
-}
-}
-const saleDate = sale.date;
-if (saleDate) {
-const timestamp = new Date(saleDate).getTime();
-if (!isNaN(timestamp) && timestamp > customerStats[name].lastSaleDate) {
-customerStats[name].lastSaleDate = timestamp;
-}
-}
-});
-let sortedCustomers = Object.values(customerStats)
-.filter(c => c && c.name)
-.sort((a, b) => {
-if (b.credit !== a.credit) return b.credit - a.credit;
-return b.lastSaleDate - a.lastSaleDate;
-});
-if (filterValue) {
-sortedCustomers = sortedCustomers.filter(c => c && c.name && c.name.toLowerCase().includes(filterValue));
-}
-let totalOutstanding = 0;
-let totalGlobalQty = 0;
-sortedCustomers.forEach(c => {
-totalOutstanding += c.credit;
-totalGlobalQty += c.quantity;
-});
-const pageCustomers = sortedCustomers;
-const validPage = 1;
-const totalPages = 1;
-const totalItems = sortedCustomers.length;
-const startIndex = 0;
-const endIndex = sortedCustomers.length;
-const customerData = {
-customers: pageCustomers,
-totalOutstanding,
-totalGlobalQty,
-totalItems,
-page,
-totalPages
-};
-if (customerData && customerData.customers) {
-renderCustomersFromCache(customerData, tbody);
-} else {
-tbody.innerHTML = `<tr><td class="u-empty-state-danger" colspan="5" >Failed to load customer data</td></tr>`;
-}
-const _setCustH = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
-_setCustH('customer-count', `${totalItems || 0} active`);
-_setCustH('customers-total-credit', `${totalOutstanding.toFixed(2)}`);
-_setCustH('customers-total-quantity', safeNumber(totalGlobalQty, 0).toFixed(2) + ' kg');
-}
-function renderCustomersFromCache(data, tbody) {
-if (!data) {
-tbody.innerHTML = `<tr><td class="u-empty-state-danger" colspan="5" >Error loading customers</td></tr>`;
-return;
-}
-const { customers, totalItems, page, totalPages } = data;
-if (!customers || !Array.isArray(customers)) {
-tbody.innerHTML = `<tr><td class="u-empty-state-danger" colspan="5" >Invalid customer data</td></tr>`;
-return;
-}
-if (customers.length === 0) {
-tbody.innerHTML = `<tr><td class="u-empty-state-md" colspan="5" >No customers found</td></tr>`;
-return;
-}
-function buildCustomerRow(c) {
-if (!c || !c.name) return null;
-try {
-const displayDate = (c.lastSaleDate && !isNaN(c.lastSaleDate)) ? formatDisplayDate(new Date(c.lastSaleDate)) : '-';
-let phone = '-';
-try {
-const contact = salesCustomers.find(ct => ct && ct.name && c && c.name && ct.name.toLowerCase() === c.name.toLowerCase());
-const customerSaleData = customerSales.find(s =>
-s && s.customerName && c && c.name &&
-(s.customerName === c.name || s.salesRep === c.name) &&
-s.isRepModeEntry !== true &&
-s.customerPhone
-);
-phone = contact?.phone || customerSaleData?.customerPhone || '-';
-} catch (phoneError) {
-console.warn('Customer data operation failed.', phoneError);
-}
-const creditStyle = c.credit > 0 ? 'color:var(--warning); font-weight:700;' : 'color:var(--accent-emerald); font-weight:700;';
-const row = document.createElement('tr');
-row.style.borderBottom = '1px solid var(--glass-border)';
-const safeName = esc(c.name || 'Unknown');
-const safeNameForAttr = (c.name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-row.innerHTML = `
-<td class="u-table-td">${displayDate}</td>
-<td style="padding: 8px 2px; font-size: 0.8rem; color: var(--text-main); font-weight: 600;">${safeName}</td>
-<td class="u-table-td">${phoneActionHTML(phone)}</td>
-<td style="padding: 8px 2px; text-align: right; font-size: 0.8rem; ${creditStyle}">${safeValue(c.credit).toFixed(2)}</td>
-<td style="padding: 6px 2px; text-align: center;">
-<button class="tbl-action-btn" onclick="event.stopPropagation(); openCustomerManagement('${safeNameForAttr}')">View</button>
-</td>`;
-return row;
-} catch (rowError) {
-console.warn('An unexpected error occurred.', rowError);
-return null;
-}
-}
-GNDVirtualScroll.mount('vs-scroller-customers', customers, buildCustomerRow, tbody);
-}
-let currentManagingCustomer = null;
-let currentManagingRepCustomer = null;
-async function openCustomerManagement(customerName) {
-currentManagingCustomer = customerName;
-const _setMCT = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
-_setMCT('manageCustomerTitle', customerName);
-document.getElementById('bulkPaymentAmount').value = '';
-requestAnimationFrame(() => {
-document.body.style.overflow = 'hidden';
-document.documentElement.style.overflow = 'hidden';
-document.getElementById('customerManagementOverlay').style.display = 'flex';
-});
-await renderCustomerTransactions(customerName);
-}
-function closeCustomerManagement() {
-requestAnimationFrame(() => {
-document.body.style.overflow = '';
-document.documentElement.style.overflow = '';
-document.getElementById('customerManagementOverlay').style.display = 'none';
-});
-currentManagingCustomer = null;
-setTimeout(async () => {
-try {
-const freshSales = await idb.get('customer_sales', []);
-if (Array.isArray(freshSales)) {
-const m = new Map(freshSales.map(s => [s.id, s]));
-if (Array.isArray(customerSales)) customerSales.forEach(s => { if (!m.has(s.id)) m.set(s.id, s); });
-customerSales = Array.from(m.values());
-}
-const freshContacts = await idb.get('sales_customers', []);
-if (Array.isArray(freshContacts)) {
-const m = new Map(freshContacts.map(c => [c.id, c]));
-if (Array.isArray(salesCustomers)) salesCustomers.forEach(c => { if (!m.has(c.id)) m.set(c.id, c); });
-salesCustomers = Array.from(m.values());
-}
-} catch(e) {
-showToast('Customer data operation failed.', 'error');
-console.warn('closeCustomerManagement IDB error', e);
-}
-if (typeof renderCustomersTable === 'function') renderCustomersTable();
-}, 100);
-}
-async function renderCustomerTransactions(name) {
-const list = document.getElementById('customerManagementHistoryList');
-if (!list) return;
-list.innerHTML = '';
-let transactions = [];
-try {
-const dbSales = await idb.get('customer_sales', []);
-if (Array.isArray(dbSales)) {
-const recordMap = new Map(dbSales.map(s => [s.id, s]));
-if (Array.isArray(customerSales)) {
-customerSales.forEach(s => {
-if (!recordMap.has(s.id)) {
-recordMap.set(s.id, s);
-}
-});
-}
-customerSales = Array.from(recordMap.values());
-transactions = customerSales.filter(s =>
-s && s.customerName === name &&
-s.isRepModeEntry !== true &&
-(!s.salesRep || s.salesRep === 'NONE' || s.salesRep === 'ADMIN' || s.salesRep === name)
-);
-} else {
-transactions = customerSales.filter(s =>
-s && s.customerName === name &&
-s.isRepModeEntry !== true &&
-(!s.salesRep || s.salesRep === 'NONE' || s.salesRep === 'ADMIN' || s.salesRep === name)
-);
-}
-} catch (error) {
-console.error('Customer data operation failed.', error);
-showToast('Customer data operation failed.', 'error');
-transactions = customerSales.filter(s =>
-s && s.customerName === name &&
-s.isRepModeEntry !== true &&
-(!s.salesRep || s.salesRep === 'NONE' || s.salesRep === 'ADMIN' || s.salesRep === name)
-);
-}
-const rangeSelect = document.getElementById('customerPdfRange');
-const range = rangeSelect ? rangeSelect.value : 'all';
-if (range !== 'all') {
-const now = new Date();
-const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-transactions = transactions.filter(t => {
-if (!t.date) return false;
-const transDate = new Date(t.date);
-switch(range) {
-case 'today':
-return transDate >= today;
-case 'week':
-const weekAgo = new Date(today);
-weekAgo.setDate(weekAgo.getDate() - 7);
-return transDate >= weekAgo;
-case 'month':
-const monthAgo = new Date(today);
-monthAgo.setMonth(monthAgo.getMonth() - 1);
-return transDate >= monthAgo;
-case 'year':
-const yearAgo = new Date(today);
-yearAgo.setFullYear(yearAgo.getFullYear() - 1);
-return transDate >= yearAgo;
-default:
-return true;
-}
-});
-}
-const entity = paymentEntities.find(e => e && e.name && e.name.toLowerCase() === name.toLowerCase());
-const phone = entity?.phone || transactions.find(t => t && t.customerPhone)?.customerPhone || '';
-const address = entity?.address || '';
-const headerTitle = document.getElementById('manageCustomerTitle');
-headerTitle.innerHTML = `
-<div style="display:flex; align-items:center; gap:8px;">
-<span>${esc(name)}</span>
-<button class="btn-theme" style="padding:2px 6px; font-size:0.8rem; border:1px solid var(--accent); color:var(--accent); border-radius:50%;"
-onclick="openCustomerEditModal('${esc(name).split("'").join("\\\'")}')" title="Edit Contact Info"></button>
-</div>
-<div style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal; margin-top:4px;">
-${phone ? phoneActionHTML(phone) : 'No Phone'} ${address ? `| ◆ ${esc(address)}` : ''}
-</div>
-`;
-let currentDebt = 0;
-transactions.forEach(t => {
-if(t.paymentType === 'CREDIT' && !t.creditReceived) {
-if (t.isMerged && typeof t.creditValue === 'number') {
-currentDebt += t.creditValue;
-} else {
-const partialPaid = t.partialPaymentReceived || 0;
-currentDebt += (t.totalValue - partialPaid);
-}
-}
-});
-const _mcStats = document.getElementById('manageCustomerStats'); if (_mcStats) _mcStats.innerText = `Current Debt: ${await formatCurrency(currentDebt)}`;
-transactions.sort((a,b) => {
-const aPending = (a.paymentType === 'CREDIT' && !a.creditReceived) ? 1 : 0;
-const bPending = (b.paymentType === 'CREDIT' && !b.creditReceived) ? 1 : 0;
-if (bPending !== aPending) return bPending - aPending;
-return b.timestamp - a.timestamp;
-});
-if(transactions.length === 0) {
-list.innerHTML = '<div class="u-empty-state-sm" >No history found</div>';
-return;
-}
-for (const t of transactions) {
-const isCredit = t.paymentType === 'CREDIT';
-const isPartialPayment = t.paymentType === 'PARTIAL_PAYMENT';
-const isCollection = t.paymentType === 'COLLECTION';
-const item = document.createElement('div');
-item.className = 'cust-history-item';
-let statusClass = t.creditReceived ? 'paid' : 'pending';
-let btnText = t.creditReceived ? 'PAID' : 'PENDING';
-let toggleBtnHtml = '';
-const partialPaid = t.partialPaymentReceived || 0;
-
-const effectiveDue = (t.isMerged && typeof t.creditValue === 'number') ? t.creditValue : ((t.totalValue || 0) - partialPaid);
-const hasPartialPayment = isCredit && !t.creditReceived && partialPaid > 0 && !t.isMerged;
-const isOldDebt = t.transactionType === 'OLD_DEBT';
-if (t.isMerged) {
-
-const mergedSettled = t.creditReceived || (t.isMerged && effectiveDue <= 0.01);
-toggleBtnHtml = mergedSettled
-? `<span class="status-toggle-btn paid" style="opacity:0.8;">SETTLED</span>`
-: `<span class="status-toggle-btn pending" style="opacity:0.8;">PENDING</span>`;
-} else if(isCredit) {
-if (hasPartialPayment) {
-const remaining = effectiveDue;
-btnText = `PARTIAL (${await formatCurrency(remaining)} due)`;
-statusClass = 'partial';
-}
-toggleBtnHtml = `<button class="status-toggle-btn ${statusClass}" onclick="toggleSingleTransactionStatus('${t.id}')">${btnText}</button>`;
-} else if (isPartialPayment) {
-toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(255, 159, 10, 0.1); color:var(--warning);">PARTIAL PAYMENT</span>`;
-} else if (isCollection) {
-toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(48, 209, 88, 0.1); color:var(--accent-emerald);">COLLECTION</span>`;
-} else {
-toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(37, 99, 235, 0.1); color:var(--accent);">CASH SALE</span>`;
-}
-const deleteBtnHtml = t.isMerged ? '' : `<button class="btn btn-sm btn-danger u-p-4-8" onclick="deleteTransactionFromOverlay('${esc(t.id)}')">⌫</button>`;
-let itemContent = '';
-if (isPartialPayment || isCollection) {
-itemContent = `
-<div class="cust-history-info">
-<div class="u-mono-bold" >${formatDisplayDate(t.date)}${_mergedBadgeHtml(t, {inline:true})}</div>
-<div style="font-size:0.75rem; color:var(--accent-emerald);">
-Payment: ${await formatCurrency(t.totalValue)}
-</div>
-<div style="font-size:0.7rem; color:var(--text-muted); margin-top:2px;">
-${isPartialPayment ? 'Partial Payment' : 'Bulk Payment'}
-</div>
-</div>
-<div class="cust-history-actions">
-${toggleBtnHtml}
-${deleteBtnHtml}
-</div>
-`;
-} else if (isOldDebt) {
-itemContent = `
-<div class="cust-history-info">
-<div class="u-mono-bold" >
-${formatDisplayDate(t.date)}
-<span style="background:rgba(255, 159, 10, 0.15); color:var(--warning); padding:2px 6px; border-radius:4px; font-size:0.65rem; margin-left:6px; font-weight:600;">OLD DEBT</span>${_mergedBadgeHtml(t, {inline:true})}
-</div>
-<div style="font-size:0.75rem; color:var(--warning);">
-Previous Balance: ${await formatCurrency(t.totalValue)}
-</div>
-<div style="font-size:0.7rem; color:var(--text-muted); margin-top:2px;">
-${esc(t.notes || 'Brought forward from previous records')}
-</div>
-</div>
-<div class="cust-history-actions">
-${toggleBtnHtml}
-${deleteBtnHtml}
-</div>
-`;
-} else {
-// Canonical sale price: use stored unitPrice (set on merge) or the fixed
-// getSalePriceForStore rate for the supply store — never divide totalValue/quantity
-// which produces a weighted average and can differ after partial payments.
-const _displayUnitPrice = (t.unitPrice && t.unitPrice > 0)
-  ? t.unitPrice
-  : getSalePriceForStore(t.supplyStore || 'STORE_A');
-itemContent = `
-<div class="cust-history-info">
-<div class="u-mono-bold" >${formatDisplayDate(t.date)}${_mergedBadgeHtml(t, {inline:true})}</div>
-<div class="u-fs-sm2 u-text-muted" >
-${t.quantity.toFixed(2)} kg @ ${await formatCurrency(_displayUnitPrice)}
-</div>
-${hasPartialPayment ? `<div style="font-size:0.7rem; color:var(--accent-emerald); margin-top:2px;">Paid: ${await formatCurrency(partialPaid)}</div>` : ''}
-<div style="font-size:0.7rem; color:var(--text-muted); margin-top:2px;">
-${getStoreLabel(t.supplyStore)}
-</div>
-</div>
-<div class="cust-history-actions">
-${toggleBtnHtml}
-${deleteBtnHtml}
-</div>
-`;
-}
-item.innerHTML = itemContent;
-list.appendChild(item);
-}
-}
-async function toggleSingleTransactionStatus(id) {
-const record = customerSales.find(s => s.id === id);
-if (record?.isMerged) {
-showToast('Opening balance records cannot be toggled. Use Bulk Payment to settle.', 'warning', 4000);
-return;
-}
-const snapshot = [...customerSales];
-try {
-const idx = customerSales.findIndex(s => s.id === id);
-if (idx !== -1) {
-customerSales[idx].creditReceived = !customerSales[idx].creditReceived;
-customerSales[idx].updatedAt = getTimestamp();
-await unifiedSave('customer_sales', customerSales, customerSales[idx]);
-notifyDataChange('sales');
-triggerAutoSync();
-renderCustomerTransactions(currentManagingCustomer);
-refreshAllCalculations();
-}
-} catch (e) {
-customerSales.length = 0; customerSales.push(...snapshot);
-await idb.set('customer_sales', customerSales).catch(() => {});
-showToast('Failed to update transaction status. Please try again.', 'error');
-}
-}
-async function toggleRepTransactionStatus(id) {
-const record = repSales.find(s => s.id === id);
-if (record?.isMerged) {
-showToast('Opening balance records cannot be toggled. Use Bulk Payment to settle.', 'warning', 4000);
-return;
-}
-const snapshot = [...repSales];
-try {
-const idx = repSales.findIndex(s => s.id === id);
-if (idx !== -1) {
-
-repSales[idx].creditReceived = !repSales[idx].creditReceived;
-repSales[idx].updatedAt = getTimestamp();
-await unifiedSave('rep_sales', repSales, repSales[idx]);
-notifyDataChange('rep');
-triggerAutoSync();
-renderRepCustomerTransactions(currentManagingRepCustomer);
-}
-} catch (e) {
-repSales.length = 0; repSales.push(...snapshot);
-await idb.set('rep_sales', repSales).catch(() => {});
-showToast('Failed to update transaction status. Please try again.', 'error');
-}
-}
-async function deleteTransactionFromOverlay(id) {
-const _txItem = customerSales.find(s => s.id === id);
-if (_txItem?.isMerged) {
-showToast('Merged opening balance records cannot be deleted', 'warning');
-return;
-}
-const _isOldDebt = _txItem?.transactionType === 'OLD_DEBT';
-const _txType = _isOldDebt ? 'Old Debt Record' : _txItem ? (_txItem.paymentType === 'CREDIT' ? 'Credit Sale' : _txItem.paymentType === 'PARTIAL_PAYMENT' ? 'Partial Payment' : _txItem.paymentType === 'COLLECTION' ? 'Collection' : 'Cash Sale') : 'Transaction';
-const _txDate = _txItem ? (_txItem.date || 'Unknown date') : '';
-const _txQty = _txItem ? ((_txItem.quantity || 0) > 0 ? `${_txItem.quantity} kg` : '') : '';
-const _txAmt = _txItem ? ((_txItem.totalValue || 0) > 0 ? ` — ${(_txItem.totalValue||0).toFixed(2)}` : '') : '';
-const _txCust = _txItem ? (_txItem.customerName || '') : '';
-const _txStore = _txItem?.supplyStore ? getStoreLabel(_txItem.supplyStore) : '';
-const _partialPaid = _txItem?.partialPaymentReceived || 0;
-let _txMsg, _txTitle;
-if (_isOldDebt) {
-_txTitle = '\u26a0 Delete Old Debt Record';
-_txMsg = `You are about to permanently delete an OLD DEBT record for ${_txCust || 'this customer'}.`;
-_txMsg += `\nBalance: ${(_txItem.totalValue||0).toFixed(2)}`;
-if (_txDate) _txMsg += `\nRecorded: ${_txDate}`;
-if (_txItem?.notes) _txMsg += `\nNote: ${_txItem.notes}`;
-_txMsg += `\n\n\u26a0 Warning: This will remove the carried-forward balance from the customer's history. If this debt is still owed, deleting it will make it disappear from all records and reports permanently.`;
-_txMsg += `\n\nOnly delete if this was entered by mistake or has already been fully settled elsewhere.`;
-} else if (_txItem?.paymentType === 'COLLECTION') {
-_txTitle = 'Delete Bulk Collection';
-_txMsg = `Delete this bulk collection payment from ${_txCust || 'customer'}?`;
-if (_txDate) _txMsg += `\nDate: ${_txDate}`;
-_txMsg += `\nAmount Collected: ${(_txItem.totalValue||0).toFixed(2)}`;
-_txMsg += `\n\n\u21a9 This collection will be reversed and the customer's outstanding balance restored accordingly.`;
-} else if (_txItem?.paymentType === 'PARTIAL_PAYMENT') {
-_txTitle = 'Delete Partial Payment';
-_txMsg = `Delete this partial payment from ${_txCust || 'customer'}?`;
-if (_txDate) _txMsg += `\nDate: ${_txDate}`;
-_txMsg += `\nPayment Amount: ${(_txItem.totalValue||0).toFixed(2)}`;
-_txMsg += `\n\n\u21a9 This will reverse the partial payment and restore the full pending credit balance on the linked sale.`;
-} else if (_txItem?.paymentType === 'CREDIT') {
-_txTitle = 'Delete Credit Sale';
-_txMsg = `Delete this credit sale for ${_txCust || 'customer'}?`;
-if (_txDate) _txMsg += `\nDate: ${_txDate}`;
-if (_txQty) _txMsg += `\nQty: ${_txQty}${_txAmt}`;
-if (_txStore) _txMsg += `\nStore: ${_txStore}`;
-if (_partialPaid > 0) _txMsg += `\n\n\u26a0 ${_partialPaid.toFixed(2)} has been partially collected. Deleting will erase both the sale and the partial payment record.`;
-else if (_txItem?.creditReceived) _txMsg += `\n\n\u26a0 This sale is already marked PAID. Deleting will remove the payment record.`;
-else _txMsg += `\n\n\u26a0 This credit sale is UNPAID. Deleting will permanently remove the outstanding balance from this customer's account.`;
-} else {
-_txTitle = 'Delete Cash Sale';
-_txMsg = `Delete this cash sale for ${_txCust || 'customer'}?`;
-if (_txDate) _txMsg += `\nDate: ${_txDate}`;
-if (_txQty) _txMsg += `\nQty: ${_txQty}${_txAmt}`;
-if (_txStore) _txMsg += `\nStore: ${_txStore}`;
-_txMsg += `\n\n\u21a9 ${(_txItem?.quantity||0).toFixed(2)} kg will be restored to inventory.`;
-}
-_txMsg += `\n\nThis cannot be undone.`;
-if (!(await showGlassConfirm(_txMsg, { title: _txTitle || `Delete ${_txType}`, confirmText: 'Delete', danger: true }))) return;
-try {
-const item = customerSales.find(s => s.id === id);
-if (!item) { renderCustomerTransactions(currentManagingCustomer); return; }
-const wasCredit = item.paymentType === 'CREDIT';
-const wasPartialPayment = item.paymentType === 'PARTIAL_PAYMENT';
-const wasCollection = item.paymentType === 'COLLECTION';
-const paymentAmount = item.totalValue || 0;
-if (wasPartialPayment && item.relatedSaleId) {
-const rel = customerSales.find(s => s.id === item.relatedSaleId);
-if (rel) {
-rel.partialPaymentReceived = Math.max(0, (rel.partialPaymentReceived || 0) - paymentAmount);
-if (rel.partialPaymentReceived === 0) { rel.creditReceived = false; delete rel.creditReceivedDate; }
-rel.updatedAt = getTimestamp();
-}
-}
-await registerDeletion(id, 'sales');
-customerSales = customerSales.filter(s => s.id !== id);
-await unifiedDelete('customer_sales', customerSales, id);
-renderCustomerTransactions(currentManagingCustomer);
-refreshAllCalculations();
-if (typeof refreshCustomerSales === 'function') await refreshCustomerSales();
-renderCustomersTable();
-notifyDataChange('sales');
-triggerAutoSync();
-let msg = ` ${wasPartialPayment ? 'Payment' : wasCollection ? 'Collection' : 'Transaction'} deleted!`;
-if ((item.quantity || 0) > 0) msg += ` ${item.quantity} kg restored.`;
-if ((wasPartialPayment || wasCollection || (wasCredit && item.partialPaymentReceived > 0)) && paymentAmount > 0) {
-const ref = wasCredit ? (item.partialPaymentReceived || 0) : paymentAmount;
-if (ref > 0) msg += ` Payment of ${await formatCurrency(ref)} reversed.`;
-}
-showToast(msg, 'success');
-} catch (e) {
-showToast('Failed to delete transaction. Please try again.', 'error');
-}
-}
-async function deleteRepTransactionFromOverlay(id) {
-const _rItem = repSales.find(s => s.id === id);
-if (_rItem?.isMerged) {
-showToast('Merged opening balance records cannot be deleted', 'warning');
-return;
-}
-const _rIsOldDebt = _rItem?.transactionType === 'OLD_DEBT';
-const _rType = _rIsOldDebt ? 'Old Debt Record' : _rItem ? (_rItem.paymentType === 'CREDIT' ? 'Credit Sale' : _rItem.paymentType === 'PARTIAL_PAYMENT' ? 'Partial Payment' : _rItem.paymentType === 'COLLECTION' ? 'Collection' : 'Cash Sale') : 'Transaction';
-const _rDate = _rItem ? (_rItem.date || 'Unknown date') : '';
-const _rQty = _rItem ? ((_rItem.quantity || 0) > 0 ? `${_rItem.quantity} kg` : '') : '';
-const _rAmt = _rItem ? ((_rItem.totalValue || 0) > 0 ? ` — ${(_rItem.totalValue||0).toFixed(2)}` : '') : '';
-const _rCust = _rItem ? (_rItem.customerName || '') : '';
-const _rRep = _rItem?.salesRep || '';
-const _rPartialPaid = _rItem?.partialPaymentReceived || 0;
-let _rMsg, _rTitle;
-if (_rIsOldDebt) {
-_rTitle = '\u26a0 Delete Old Debt Record';
-_rMsg = `Permanently delete an OLD DEBT record for ${_rCust || 'this customer'}${_rRep ? ` (Rep: ${_rRep})` : ''}.`;
-_rMsg += `\nBalance: ${(_rItem.totalValue||0).toFixed(2)}`;
-if (_rDate) _rMsg += `\nRecorded: ${_rDate}`;
-if (_rItem?.notes) _rMsg += `\nNote: ${_rItem.notes}`;
-_rMsg += `\n\n\u26a0 Warning: This will remove the carried-forward balance from the rep customer's history permanently.`;
-_rMsg += `\n\nOnly delete if this was entered by mistake or has already been fully settled elsewhere.`;
-} else if (_rItem?.paymentType === 'COLLECTION') {
-_rTitle = 'Delete Rep Collection';
-_rMsg = `Delete this bulk collection from ${_rCust || 'customer'}${_rRep ? ` (Rep: ${_rRep})` : ''}?`;
-if (_rDate) _rMsg += `\nDate: ${_rDate}`;
-_rMsg += `\nAmount Collected: ${(_rItem.totalValue||0).toFixed(2)}`;
-_rMsg += `\n\n\u21a9 This collection will be reversed and the customer's outstanding rep balance restored.`;
-} else if (_rItem?.paymentType === 'PARTIAL_PAYMENT') {
-_rTitle = 'Delete Rep Partial Payment';
-_rMsg = `Delete this partial payment from ${_rCust || 'customer'}${_rRep ? ` (Rep: ${_rRep})` : ''}?`;
-if (_rDate) _rMsg += `\nDate: ${_rDate}`;
-_rMsg += `\nPayment Amount: ${(_rItem.totalValue||0).toFixed(2)}`;
-_rMsg += `\n\n\u21a9 This will reverse the partial payment and restore the full pending credit balance on the linked rep sale.`;
-} else if (_rItem?.paymentType === 'CREDIT') {
-_rTitle = 'Delete Rep Credit Sale';
-_rMsg = `Delete this credit sale for ${_rCust || 'customer'}${_rRep ? ` (Rep: ${_rRep})` : ''}?`;
-if (_rDate) _rMsg += `\nDate: ${_rDate}`;
-if (_rQty) _rMsg += `\nQty: ${_rQty}${_rAmt}`;
-if (_rPartialPaid > 0) _rMsg += `\n\n\u26a0 ${_rPartialPaid.toFixed(2)} has already been partially collected. Deleting will erase both the sale and the partial payment record.`;
-else if (_rItem?.creditReceived) _rMsg += `\n\n\u26a0 This rep sale is already marked PAID. Deleting will remove the payment record.`;
-else _rMsg += `\n\n\u26a0 This rep credit sale is UNPAID. Deleting will remove the outstanding balance from the rep customer's account.`;
-} else {
-_rTitle = 'Delete Rep Cash Sale';
-_rMsg = `Delete this cash sale for ${_rCust || 'customer'}${_rRep ? ` (Rep: ${_rRep})` : ''}?`;
-if (_rDate) _rMsg += `\nDate: ${_rDate}`;
-if (_rQty) _rMsg += `\nQty: ${_rQty}${_rAmt}`;
-_rMsg += `\n\n\u21a9 ${(_rItem?.quantity||0).toFixed(2)} kg will be restored to inventory.`;
-}
-_rMsg += `\n\nThis cannot be undone.`;
-if (!(await showGlassConfirm(_rMsg, { title: _rTitle || `Delete ${_rType}`, confirmText: 'Delete', danger: true }))) return;
-try {
-const item = repSales.find(s => s.id === id);
-if (!item) { renderRepCustomerTransactions(currentManagingRepCustomer); return; }
-const wasCredit = item.paymentType === 'CREDIT';
-const wasPartialPayment = item.paymentType === 'PARTIAL_PAYMENT';
-const wasCollection = item.paymentType === 'COLLECTION';
-const paymentAmount = item.totalValue || 0;
-if (wasPartialPayment && item.relatedSaleId) {
-const rel = repSales.find(s => s.id === item.relatedSaleId);
-if (rel) {
-rel.partialPaymentReceived = Math.max(0, (rel.partialPaymentReceived || 0) - paymentAmount);
-if (rel.partialPaymentReceived === 0) { rel.creditReceived = false; delete rel.creditReceivedDate; }
-rel.updatedAt = getTimestamp();
-}
-}
-await registerDeletion(id, 'rep_sales');
-repSales = repSales.filter(s => s.id !== id);
-await unifiedDelete('rep_sales', repSales, id);
-renderRepCustomerTransactions(currentManagingRepCustomer);
-renderRepCustomerTable();
-notifyDataChange('rep');
-triggerAutoSync();
-let msg = ` ${wasPartialPayment ? 'Payment' : wasCollection ? 'Collection' : 'Transaction'} deleted!`;
-if ((wasPartialPayment || wasCollection || (wasCredit && item.partialPaymentReceived > 0)) && paymentAmount > 0) {
-const ref = wasCredit ? (item.partialPaymentReceived || 0) : paymentAmount;
-if (ref > 0) msg += ` Payment of ${await formatCurrency(ref)} reversed.`;
-}
-showToast(msg, 'success');
-} catch (e) {
-showToast('Failed to delete transaction. Please try again.', 'error');
-}
-}
-async function processBulkPayment() {
-const amount = parseFloat(document.getElementById('bulkPaymentAmount').value);
-if (!amount || amount <= 0) { showToast('Please enter a valid amount', 'warning', 3000); return; }
-const snapshot = [...customerSales];
-try {
-let remaining = amount, updatedCount = 0, partialPaymentMade = false;
-const pending = customerSales.filter(s =>
-s.customerName === currentManagingCustomer &&
-s.isRepModeEntry !== true &&
-(!s.salesRep || s.salesRep === 'NONE') &&
-s.paymentType === 'CREDIT' && !s.creditReceived
-).sort((a, b) => a.timestamp - b.timestamp);
-if (pending.length === 0) { showToast('No pending credit transactions found for this customer.', 'info', 4000); return; }
-const nowDate = new Date();
-const nowISODate = nowDate.toISOString().split('T')[0];
-const nowTime = nowDate.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
-const nowEpoch = getTimestamp();
-for (const sale of pending) {
-if (remaining <= 0) break;
-const amountDue = sale.isMerged && typeof sale.creditValue === 'number'
-? sale.creditValue
-: (sale.totalValue || 0) - (sale.partialPaymentReceived || 0);
-if (remaining >= amountDue) {
-sale.creditReceived = true;
-sale.creditReceivedDate = nowISODate;
-if (!sale.isMerged) sale.partialPaymentReceived = sale.totalValue;
-sale.updatedAt = nowEpoch;
-remaining -= amountDue; updatedCount++;
-} else {
-if (!sale.isMerged) {
-sale.partialPaymentReceived = (sale.partialPaymentReceived || 0) + remaining;
-sale.creditReceived = false; sale.updatedAt = nowEpoch;
-}
-const partialId = generateUUID('pay-partial');
-customerSales.push(ensureRecordIntegrity({
-id: partialId, timestamp: nowEpoch, createdAt: nowEpoch, updatedAt: nowEpoch,
-date: nowISODate, time: nowTime,
-customerName: currentManagingCustomer, customerPhone: sale.customerPhone || '', quantity: 0,
-supplyStore: sale.supplyStore || 'STORE_A', paymentType: 'PARTIAL_PAYMENT', salesRep: 'NONE',
-totalCost: 0, totalValue: remaining, profit: 0, creditReceived: true,
-relatedSaleId: sale.id, syncedAt: new Date().toISOString(), isRepModeEntry: false
-}, false, false));
-partialPaymentMade = true; remaining = 0; updatedCount++; break;
-}
-}
-if (remaining > 0 && updatedCount > 0) {
-const ls = pending[pending.length - 1];
-const collId = generateUUID('pay-coll');
-customerSales.push(ensureRecordIntegrity({
-id: collId, timestamp: nowEpoch, createdAt: nowEpoch, updatedAt: nowEpoch,
-date: nowISODate, time: nowTime,
-customerName: currentManagingCustomer, customerPhone: ls?.customerPhone || '', quantity: 0,
-supplyStore: ls?.supplyStore || 'STORE_A', paymentType: 'COLLECTION', salesRep: 'NONE',
-totalCost: 0, totalValue: remaining, profit: 0, creditReceived: true,
-syncedAt: new Date().toISOString(), isRepModeEntry: false
-}, false, false));
-}
-if (updatedCount > 0 || partialPaymentMade) {
-await saveWithTracking('customer_sales', customerSales);
-const changedIds = new Set(pending.map(s => s.id));
-for (const sale of customerSales) {
-if (changedIds.has(sale.id) || sale.paymentType === 'PARTIAL_PAYMENT' || sale.paymentType === 'COLLECTION') {
-await saveRecordToFirestore('customer_sales', sale);
-}
-}
-notifyDataChange('sales'); triggerAutoSync();
-let msg = `Payment of ${safeToFixed(amount, 2)} processed successfully. `;
-msg += partialPaymentMade ? 'Partial payment applied.' : remaining === 0 ? `${updatedCount} transaction(s) fully cleared.` : `${updatedCount} cleared, ${safeToFixed(remaining, 2)} extra.`;
-showToast(msg, 'info', 5000);
-document.getElementById('bulkPaymentAmount').value = '';
-renderCustomerTransactions(currentManagingCustomer);
-refreshAllCalculations();
-} else { showToast('No changes made.', 'info', 2500); }
-} catch (e) {
-customerSales.length = 0; customerSales.push(...snapshot);
-await idb.set('customer_sales', customerSales).catch(() => {});
-showToast('Failed to process bulk payment. Please try again.', 'error');
-}
-}
-function filterCustomerManagementHistory() {
-const term = document.getElementById('cust-trans-search').value.toLowerCase();
-document.querySelectorAll('#customerManagementHistoryList .cust-history-item').forEach(item => {
-item.style.display = item.innerText.toLowerCase().includes(term) ? 'flex' : 'none';
-});
-}
-async function processRepBulkPayment() {
-const amount = parseFloat(document.getElementById('repBulkPaymentAmount').value);
-if (!amount || amount <= 0) { showToast('Please enter a valid amount', 'warning', 3000); return; }
-const snapshot = [...repSales];
-try {
-let remaining = amount, updatedCount = 0, partialPaymentMade = false;
-const pending = repSales.filter(s =>
-s.customerName === currentManagingRepCustomer &&
-s.salesRep === currentRepProfile &&
-s.paymentType === 'CREDIT' && !s.creditReceived
-).sort((a, b) => a.timestamp - b.timestamp);
-if (pending.length === 0) { showToast('No pending credit transactions found for this customer.', 'info', 4000); return; }
-const nowDate = new Date();
-const nowISODate = nowDate.toISOString().split('T')[0];
-const nowTime = nowDate.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
-const nowEpoch = getTimestamp();
-for (const sale of pending) {
-if (remaining <= 0) break;
-const amountDue = sale.isMerged && typeof sale.creditValue === 'number'
-? sale.creditValue
-: (sale.totalValue || 0) - (sale.partialPaymentReceived || 0);
-if (remaining >= amountDue) {
-sale.creditReceived = true;
-sale.creditReceivedDate = nowISODate;
-if (!sale.isMerged) sale.partialPaymentReceived = sale.totalValue;
-sale.updatedAt = nowEpoch;
-remaining -= amountDue; updatedCount++;
-} else {
-if (!sale.isMerged) {
-sale.partialPaymentReceived = (sale.partialPaymentReceived || 0) + remaining;
-sale.creditReceived = false; sale.updatedAt = nowEpoch;
-}
-const partialId = generateUUID('rep-partial');
-repSales.push(ensureRecordIntegrity({
-id: partialId, timestamp: nowEpoch, createdAt: nowEpoch, updatedAt: nowEpoch,
-date: nowISODate, time: nowTime,
-customerName: currentManagingRepCustomer, customerPhone: sale.customerPhone || '', quantity: 0,
-supplyStore: sale.supplyStore || 'STORE_A', paymentType: 'PARTIAL_PAYMENT', salesRep: currentRepProfile,
-totalCost: 0, totalValue: remaining, profit: 0, creditReceived: true,
-relatedSaleId: sale.id, syncedAt: new Date().toISOString(), isRepModeEntry: true
-}, false, false));
-partialPaymentMade = true; remaining = 0; updatedCount++; break;
-}
-}
-if (remaining > 0 && updatedCount > 0) {
-const ls = pending[pending.length - 1];
-const collId = generateUUID('rep-coll');
-repSales.push(ensureRecordIntegrity({
-id: collId, timestamp: nowEpoch, createdAt: nowEpoch, updatedAt: nowEpoch,
-date: nowISODate, time: nowTime,
-customerName: currentManagingRepCustomer, customerPhone: ls?.customerPhone || '', quantity: 0,
-supplyStore: ls?.supplyStore || 'STORE_A', paymentType: 'COLLECTION', salesRep: currentRepProfile,
-totalCost: 0, totalValue: remaining, profit: 0, creditReceived: true,
-syncedAt: new Date().toISOString(), isRepModeEntry: true
-}, false, false));
-}
-if (updatedCount > 0 || partialPaymentMade) {
-await saveWithTracking('rep_sales', repSales);
-const changedIds = new Set(pending.map(s => s.id));
-for (const sale of repSales) {
-if (changedIds.has(sale.id) || sale.paymentType === 'PARTIAL_PAYMENT' || sale.paymentType === 'COLLECTION') {
-await saveRecordToFirestore('rep_sales', sale);
-}
-}
-notifyDataChange('rep'); triggerAutoSync();
-let msg = `Payment of ${safeToFixed(amount, 2)} processed successfully. `;
-msg += partialPaymentMade ? 'Partial payment applied.' : remaining === 0 ? `${updatedCount} transaction(s) fully cleared.` : `${updatedCount} cleared, ${safeToFixed(remaining, 2)} extra.`;
-showToast(msg, 'info', 5000);
-document.getElementById('repBulkPaymentAmount').value = '';
-renderRepCustomerTransactions(currentManagingRepCustomer);
-renderRepCustomerTable();
-} else { showToast('No changes made.', 'info', 2500); }
-} catch (e) {
-repSales.length = 0; repSales.push(...snapshot);
-await idb.set('rep_sales', repSales).catch(() => {});
-showToast('Failed to process bulk payment. Please try again.', 'error');
-}
-}
-function filterRepCustomerManagementHistory() {
-const term = document.getElementById('rep-cust-trans-search').value.toLowerCase();
-document.querySelectorAll('#repCustomerManagementHistoryList .cust-history-item').forEach(item => {
-item.style.display = item.innerText.toLowerCase().includes(term) ? 'flex' : 'none';
-});
-}
-function refreshAllCalculations() {
-calculateCashTracker();
-calculateNetCash();
-calculatePaymentSummaries();
-refreshEntityBalances();
-updateUnitsAvailableIndicator();
-}
-const toastContainer = document.createElement('div');
-toastContainer.className = 'toast-container';
-document.body.appendChild(toastContainer);
-// Re-insert as last child of body each time a toast is shown so it always
-// sits above every overlay, modal, or stacking-context element added later.
-function _ensureToastOnTop() {
-  if (document.body.lastElementChild !== toastContainer) {
-    document.body.appendChild(toastContainer);
-  }
-}
-const _toastQueue = [];
-let _toastActive = false;
-function _playNextToast() {
-if (_toastActive || _toastQueue.length === 0) return;
-_toastActive = true;
-const { message, type, duration } = _toastQueue.shift();
-const icons = {
-success: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`,
-warning: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
-error: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`,
-info: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`,
-};
-const msgStr = String(message);
-// Allow wrapping for longer messages, single line for short
-const isLong = msgStr.length > 48;
-const toast = document.createElement('div');
-toast.className = `liquid-toast toast-${type}`;
-toast.innerHTML = `
-<div class="toast-inner" style="${isLong ? 'white-space:normal;' : ''}">
-<div class="toast-icon-wrap">
-<span class="toast-icon-glyph">${icons[type] || ''}</span>
-</div>
-<div class="toast-text" style="${isLong ? 'white-space:normal;max-width:260px;' : ''}">${esc(msgStr)}</div>
-<div class="toast-progress-bar"></div>
-</div>
-`;
-toast.classList.add('pre-show');
-_ensureToastOnTop();
-toastContainer.appendChild(toast);
-requestAnimationFrame(() => {
-requestAnimationFrame(() => {
-toast.classList.remove('pre-show');
-toast.classList.add('show');
-const bar = toast.querySelector('.toast-progress-bar');
-if (bar) {
-bar.style.animationDuration = duration + 'ms';
-bar.classList.add('animating');
-}
-});
-});
-let removed = false;
-const dismiss = () => {
-if (removed) return;
-removed = true;
-toast.classList.add('hiding');
-toast.style.pointerEvents = 'none';
-setTimeout(() => {
-if (toast.parentNode === toastContainer) toastContainer.removeChild(toast);
-_toastActive = false;
-_playNextToast();
-}, 350);
-};
-setTimeout(dismiss, duration);
-toast.addEventListener('click', dismiss, { once: true });
-}
-function showToast(message, type = 'info', duration = 3000) {
-const typeMap = { danger: 'error', warn: 'warning', ok: 'success' };
-type = typeMap[type] || (['success','warning','error','info'].includes(type) ? type : 'info');
-_toastQueue.push({ message, type, duration });
-_playNextToast();
-}
-window.showToast = showToast;
-function showGlassConfirm(message, {
-title = 'Confirm',
-confirmText = 'Confirm',
-cancelText = 'Cancel',
-danger = false,
-icon = null
-} = {}) {
-return new Promise(resolve => {
-const autoIcon = icon !== null ? icon
-: danger ? '' : '●';
-const iconClass = danger ? 'icon-danger' : 'icon-primary';
-const backdrop = document.createElement('div');
-backdrop.className = 'glass-confirm-backdrop';
-backdrop.innerHTML = `
-<div class="glass-confirm-box${danger ? ' is-danger' : ''}">
-<div class="glass-confirm-icon ${iconClass}">${autoIcon}</div>
-<div class="glass-confirm-title">${esc(title)}</div>
-<div class="glass-confirm-msg">${esc(String(message)).replace(/\n/g, '<br>')}</div>
-<div class="glass-confirm-divider"></div>
-<div class="glass-confirm-btns">
-<button class="glass-confirm-btn gc-cancel">${esc(cancelText)}</button>
-<button class="glass-confirm-btn ${danger ? 'danger' : 'primary'} gc-confirm">${esc(confirmText)}</button>
-</div>
-</div>
-`;
-document.body.appendChild(backdrop);
-let settled = false;
-const cleanup = (result) => {
-if (settled) return;
-settled = true;
-const box = backdrop.querySelector('.glass-confirm-box');
-backdrop.classList.add('closing');
-if (box) box.classList.add('closing');
-setTimeout(() => { backdrop.remove(); resolve(result); }, 200);
-};
-backdrop.querySelector('.gc-confirm').addEventListener('click', () => cleanup(true), { once: true });
-backdrop.querySelector('.gc-cancel').addEventListener('click', () => cleanup(false), { once: true });
-backdrop.addEventListener('click', e => { if (e.target === backdrop) cleanup(false); });
-const onKey = (e) => {
-if (e.key === 'Enter') { e.preventDefault(); cleanup(true); }
-if (e.key === 'Escape') { e.preventDefault(); cleanup(false); }
-};
-document.addEventListener('keydown', onKey);
-backdrop.addEventListener('animationend', () => {
-if (!backdrop.isConnected) document.removeEventListener('keydown', onKey);
-});
-setTimeout(() => {
-const btn = backdrop.querySelector('.gc-confirm');
-if (btn) btn.focus();
-}, 60);
-});
-}
-window.showGlassConfirm = showGlassConfirm;
-function filterCustomers() {
-// Re-render through the virtual scroller so it applies to
-// the full dataset, not just currently-visible DOM rows.
-renderCustomersTable();
-}
 async function openDataMenu() {
 if (appMode === 'rep') {
 return;
@@ -13691,6 +11263,9 @@ const adminSection = document.getElementById('admin-controls-section');
 if (adminSection) {
 adminSection.style.display = 'block';
 }
+// Always refresh sync button state when menu opens so it reflects
+// the current auth state, not a stale state from an earlier render.
+if (typeof updateSyncButton === 'function') updateSyncButton();
 requestAnimationFrame(() => {
 document.body.style.overflow = 'hidden';
 document.documentElement.style.overflow = 'hidden';
@@ -13711,6 +11286,436 @@ document.documentElement.style.overflow = '';
 document.getElementById('dataMenuOverlay').style.display = 'none';
 });
 }
+const _recoveredThisSession = new Set();
+async function purgeRecoveredId(id, collectionName, cleanRecord, newId) {
+  const sid    = String(id);
+  const newSid = newId ? String(newId) : sid;
+  _recoveredThisSession.add(sid);
+  deletedRecordIds.delete(sid);
+  if (typeof deletionRecords !== 'undefined' && Array.isArray(deletionRecords)) {
+    deletionRecords = deletionRecords.filter(r =>
+      r.id !== sid && r.recordId !== sid
+    );
+  }
+  try {
+    const freshDeletionRecords = await idb.get('deletion_records', []);
+    const prunedDeletionRecords = Array.isArray(freshDeletionRecords)
+      ? freshDeletionRecords.filter(r => r.id !== sid && r.recordId !== sid)
+      : [];
+    await idb.set('deletion_records', prunedDeletionRecords);
+  } catch(e) { console.warn('[RecycleBin] purge IDB deletion_records failed:', e); }
+  try {
+    await idb.set('deleted_records', Array.from(deletedRecordIds));
+  } catch(e) { console.warn('[RecycleBin] purge IDB deleted_records failed:', e); }
+  if (typeof OfflineQueue !== 'undefined') {
+    const _isStaleDeleteOp = (item) => {
+      const op = item.operation || {};
+      return (
+        (op.action === 'delete' && op.docId === sid) ||
+        (op.action === 'set'    && op.docId === sid && (op.data === null || op.data === undefined))
+      );
+    };
+    const qBefore = OfflineQueue.queue.length;
+    OfflineQueue.queue = OfflineQueue.queue.filter(item => !_isStaleDeleteOp(item));
+    if (OfflineQueue.queue.length !== qBefore) {
+      try { await OfflineQueue.saveQueue(); } catch(e) {}
+    }
+    const dlBefore = (OfflineQueue.deadLetterQueue || []).length;
+    if (Array.isArray(OfflineQueue.deadLetterQueue)) {
+      OfflineQueue.deadLetterQueue = OfflineQueue.deadLetterQueue.filter(item => !_isStaleDeleteOp(item));
+      if (OfflineQueue.deadLetterQueue.length !== dlBefore) {
+        try { await OfflineQueue.saveDeadLetterQueue(); } catch(e) {}
+      }
+    }
+  }
+  if (firebaseDB && currentUser) {
+    (async () => {
+      try {
+        const userRef = firebaseDB.collection('users').doc(currentUser.uid);
+        const batch = firebaseDB.batch();
+        batch.delete(userRef.collection('deletions').doc(sid));
+        if (cleanRecord && collectionName) {
+          const sanitized = typeof sanitizeForFirestore === 'function'
+            ? sanitizeForFirestore({ ...cleanRecord, syncedAt: new Date().toISOString() })
+            : { ...cleanRecord, syncedAt: new Date().toISOString() };
+          sanitized.id = newSid;
+          delete sanitized.originalId; 
+          sanitized.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
+          batch.set(
+            userRef.collection(collectionName).doc(newSid),
+            sanitized,
+            { merge: true }
+          );
+        }
+        await batch.commit();
+        trackFirestoreWrite(cleanRecord ? 2 : 1);
+      } catch(e) {
+        console.warn('[RecycleBin] Cloud purge failed — queuing for retry:', e);
+        if (typeof OfflineQueue !== 'undefined') {
+          await OfflineQueue.add({
+            action: 'delete',
+            collection: 'deletions',
+            docId: sid,
+            data: null
+          });
+          if (cleanRecord && collectionName) {
+            const queuedRecord = typeof sanitizeForFirestore === 'function'
+              ? sanitizeForFirestore({ ...cleanRecord, syncedAt: new Date().toISOString() })
+              : { ...cleanRecord, syncedAt: new Date().toISOString() };
+            queuedRecord.id = newSid;
+            delete queuedRecord.originalId; 
+            await OfflineQueue.add({
+              action: 'set',
+              collection: collectionName,
+              docId: newSid,
+              data: queuedRecord
+            });
+          }
+        }
+      }
+    })();
+  }
+}
+window.purgeRecoveredId = purgeRecoveredId;
+async function recoverRecord(deletedId, collectionName) {
+  if (!deletedId || !collectionName) return false;
+  try {
+    const idbKey = getIndexedDBKey(collectionName);
+    let recoveredData = null;
+    const localDeletionRecords = await idb.get('deletion_records', []);
+    const tombstoneLocal = Array.isArray(localDeletionRecords)
+      ? localDeletionRecords.find(r => r.id === deletedId || r.recordId === deletedId)
+      : null;
+    if (tombstoneLocal && tombstoneLocal.snapshot) {
+      recoveredData = tombstoneLocal.snapshot;
+    }
+    if (!recoveredData && firebaseDB && currentUser) {
+      try {
+        const userRef = firebaseDB.collection('users').doc(currentUser.uid);
+        const tombDoc = await userRef.collection('deletions').doc(String(deletedId)).get();
+        if (tombDoc.exists) {
+          const td = tombDoc.data();
+          if (td && td.snapshot) recoveredData = td.snapshot;
+        }
+        if (!recoveredData) {
+          const origDoc = await userRef.collection(collectionName).doc(String(deletedId)).get();
+          if (origDoc.exists) recoveredData = origDoc.data();
+        }
+      } catch(e) { console.warn('[RecycleBin] snapshot fetch failed:', e); }
+    }
+    let cleanRecord = null;
+    if (recoveredData) {
+      cleanRecord = { ...recoveredData };
+      delete cleanRecord.deletedAt;
+      delete cleanRecord.tombstoned_at;
+      delete cleanRecord.deleted_by;
+      delete cleanRecord.deletion_version;
+      delete cleanRecord.recoveredAt;
+      delete cleanRecord._placeholder;
+      delete cleanRecord.isDeleted;
+      delete cleanRecord.softDeleted;
+      cleanRecord.updatedAt   = Date.now();
+      cleanRecord.recoveredAt = Date.now();
+      cleanRecord.syncedAt    = new Date().toISOString();
+    }
+    const newId = (typeof generateUUID === 'function')
+      ? generateUUID()
+      : String(deletedId);
+    const oldId = String(deletedId);
+    if (cleanRecord) {
+      cleanRecord.id = newId; 
+      delete cleanRecord.originalId; 
+    }
+    await purgeRecoveredId(oldId, collectionName, cleanRecord, newId);
+    if (cleanRecord && idbKey) {
+      let localArr = await idb.get(idbKey, []);
+      if (!Array.isArray(localArr)) localArr = [];
+      localArr = localArr.filter(r => r.id !== oldId && r.id !== newId);
+      localArr.push(cleanRecord);
+      await idb.set(idbKey, localArr);
+    }
+    if (typeof invalidateAllCaches === 'function') {
+      await invalidateAllCaches();
+    }
+    triggerAutoSync();
+    return true;
+  } catch(e) {
+    console.error('[RecycleBin] recoverRecord error:', _safeErr(e));
+    _recoveredThisSession.delete(String(deletedId));
+    return false;
+  }
+}
+window.recoverRecord = recoverRecord;
+window.registerDeletion = registerDeletion;
+const RECYCLE_COLLECTION_TO_TAB = {
+  'sales':              'tab_sales',
+  'sales_customers':    'tab_sales',
+  'rep_sales':          'tab_rep',
+  'rep_customers':      'tab_rep',
+  'production':         'tab_production',
+  'returns':            'tab_production',
+  'calculator_history': 'tab_calculator',
+  'factory_history':    'tab_factory',
+  'inventory':          'tab_factory',
+  'transactions':       'tab_payments',
+  'expenses':           'tab_payments',
+  'entities':           'tab_payments',
+  'unknown':            'tab_payments',
+};
+const RECYCLE_BIN_COLLECTION_LABELS = {
+  'sales':              'Customer Sale',
+  'sales_customers':    'Customer Contact',
+  'rep_sales':          'Rep Sale',
+  'rep_customers':      'Rep Customer',
+  'production':         'Production Batch',
+  'returns':            'Stock Return',
+  'calculator_history': 'Calculator Entry',
+  'factory_history':    'Factory Production',
+  'inventory':          'Inventory Item',
+  'transactions':       'Transaction',
+  'expenses':           'Expense',
+  'entities':           'Payment Entity',
+  'unknown':            'Record',
+};
+const RECYCLE_TAB_LABELS = {
+  'tab_sales':       'Sales Tab',
+  'tab_rep':         'Rep Tab',
+  'tab_production':  'Manufacturing Tab',
+  'tab_calculator':  'Calculator Tab',
+  'tab_factory':     'Factory Tab',
+  'tab_payments':    'Payments Tab',
+};
+const RECYCLE_RECOVERABLE_COLLECTIONS = new Set([
+  'sales','transactions','rep_sales','expenses','production',
+  'factory_history','inventory','returns','calculator_history',
+  'sales_customers','rep_customers','entities'
+]);
+async function openRecycleBin() {
+  closeDataMenu();
+  requestAnimationFrame(() => {
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+    const overlay = document.getElementById('recycleBinOverlay');
+    if (overlay) overlay.style.display = 'flex';
+  });
+  await renderRecycleBin();
+}
+function closeRecycleBin() {
+  requestAnimationFrame(() => {
+    document.body.style.overflow = '';
+    document.documentElement.style.overflow = '';
+    const overlay = document.getElementById('recycleBinOverlay');
+    if (overlay) overlay.style.display = 'none';
+  });
+}
+async function renderRecycleBin(filterCollection = 'all') {
+  const container = document.getElementById('recycleBinList');
+  const statsEl   = document.getElementById('recycleBinStats');
+  if (!container) return;
+  container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);">Loading...</div>';
+  try {
+    let deletionRecords = await idb.get('deletion_records', []);
+    if (!Array.isArray(deletionRecords)) deletionRecords = [];
+    deletionRecords = deletionRecords.filter(r =>
+      !_recoveredThisSession.has(r.id) && !_recoveredThisSession.has(r.recordId)
+    );
+    if (firebaseDB && currentUser) {
+      try {
+        const userRef = firebaseDB.collection('users').doc(currentUser.uid);
+        const snap = await userRef.collection('deletions').orderBy('deletedAt', 'desc').limit(200).get();
+        const seenIds = new Set(deletionRecords.map(r => String(r.id)));
+        const seenRecordIds = new Set(deletionRecords.map(r => String(r.recordId || r.id)));
+        snap.docs.forEach(doc => {
+          const d = doc.data();
+          if (!d || d._placeholder) return;
+          const docId = String(doc.id);
+          const recId = String(d.recordId || d.id || doc.id);
+          if (_recoveredThisSession.has(docId) || _recoveredThisSession.has(recId)) return;
+          if (seenIds.has(docId) || seenRecordIds.has(docId) ||
+              seenIds.has(recId)  || seenRecordIds.has(recId)) return;
+          seenIds.add(docId);
+          seenRecordIds.add(recId);
+          deletionRecords.push({
+            id: docId,
+            recordId: recId,
+            collection: d.collection || d.recordType || 'unknown',
+            deletedAt: d.deletedAt?.toMillis ? d.deletedAt.toMillis() : (d.deletedAt || Date.now()),
+            syncedToCloud: true,
+            deleted_by: d.deleted_by || 'user',
+            snapshot: d.snapshot || null,
+            displayName: d.displayName || null,
+            displayDetail: d.displayDetail || null,
+            displayAmount: d.displayAmount || null,
+          });
+        });
+      } catch(e) {   }
+    }
+    const _seen = new Map(); 
+    deletionRecords.forEach(r => {
+      const key = String(r.id || r.recordId);
+      const existing = _seen.get(key);
+      if (!existing || (!existing.displayName && r.displayName) ||
+          (!existing.snapshot && r.snapshot)) {
+        _seen.set(key, r);
+      }
+    });
+    deletionRecords = Array.from(_seen.values());
+    deletionRecords.sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0));
+    if (statsEl) {
+      statsEl.textContent = `${deletionRecords.length} deleted record${deletionRecords.length !== 1 ? 's' : ''} (kept for 90 days)`;
+    }
+    const filterSel = document.getElementById('recycleBinFilter');
+    if (filterSel && filterSel.value !== filterCollection) filterSel.value = filterCollection;
+    const filtered = filterCollection === 'all'
+      ? deletionRecords
+      : deletionRecords.filter(r => {
+          const tab = RECYCLE_COLLECTION_TO_TAB[r.collection || 'unknown'] || 'tab_payments';
+          return tab === filterCollection;
+        });
+    if (filtered.length === 0) {
+      container.innerHTML = `<div style="text-align:center;padding:50px 20px;color:var(--text-muted);">
+        <div style="font-size:2.5rem;margin-bottom:12px;">🗑️</div>
+        <div style="font-size:1rem;font-weight:600;">Recycle Bin is empty</div>
+        <div style="font-size:0.78rem;margin-top:6px;">Deleted transactions will appear here and can be recovered within 90 days.</div>
+      </div>`;
+      return;
+    }
+    container.innerHTML = filtered.map(rec => {
+      const col = rec.collection || 'unknown';
+      const tabKey = RECYCLE_COLLECTION_TO_TAB[col] || 'tab_payments';
+      const tabLabel = RECYCLE_TAB_LABELS[tabKey] || tabKey;
+      const typeLabel = `${tabLabel} › ${RECYCLE_BIN_COLLECTION_LABELS[col] || col}`;
+      const deletedDate = rec.deletedAt
+        ? new Date(rec.deletedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+        : 'Unknown date';
+      const daysAgo = rec.deletedAt ? Math.floor((Date.now() - rec.deletedAt) / 86400000) : '?';
+      const expiresIn = rec.deletedAt ? Math.max(0, 90 - Math.floor((Date.now() - rec.deletedAt) / 86400000)) : '?';
+      const canRecover = RECYCLE_RECOVERABLE_COLLECTIONS.has(col);
+      let displayName = rec.displayName || null;
+      let displayDetail = rec.displayDetail || null;
+      let displayAmount = rec.displayAmount || null;
+      if (!displayName && rec.snapshot) {
+        const snap = _captureRecordSnapshot._fromObj
+          ? _captureRecordSnapshot._fromObj(rec.snapshot, col)
+          : null;
+        if (snap && snap.displayName) {
+          displayName   = snap.displayName;
+          displayDetail = snap.displayDetail;
+          displayAmount = snap.displayAmount;
+        } else {
+          const s = rec.snapshot;
+          if (col === 'sales' || col === 'rep_sales') {
+            displayName   = s.customerName || s.name || null;
+            displayDetail = [s.supplyStore || s.store || '', s.paymentType || '', s.date || ''].filter(Boolean).join(' · ');
+            displayAmount = s.totalValue != null ? `₨${Number(s.totalValue).toLocaleString()}` : null;
+          } else if (col === 'transactions') {
+            displayName   = s.entityName || s.description || s.name || null;
+            displayDetail = [s.type === 'IN' ? '↓ IN' : s.type === 'OUT' ? '↑ OUT' : (s.type || ''), s.date || ''].filter(Boolean).join(' · ');
+            displayAmount = s.amount != null ? `₨${Number(s.amount).toLocaleString()}` : null;
+          } else if (col === 'expenses') {
+            displayName   = s.name || s.description || null;
+            displayDetail = [s.category || '', s.date || ''].filter(Boolean).join(' · ');
+            displayAmount = s.amount != null ? `₨${Number(s.amount).toLocaleString()}` : null;
+          } else if (col === 'production') {
+            displayName   = s.supplyStore || s.store ? `Production – ${s.supplyStore || s.store}` : 'Production Batch';
+            displayDetail = s.date || '';
+            displayAmount = s.net != null ? `${s.net} kg` : null;
+          } else if (col === 'returns') {
+            displayName   = s.store ? `Return – ${s.store}` : 'Stock Return';
+            displayDetail = s.date || '';
+            displayAmount = s.quantity != null ? `${s.quantity} kg` : null;
+          } else if (col === 'factory_history') {
+            displayName   = s.store ? `Factory – ${s.store}` : 'Factory Production';
+            displayDetail = s.date || '';
+            displayAmount = s.units != null ? `${s.units} units` : null;
+          } else if (col === 'calculator_history') {
+            displayName   = s.customerName || s.customer || s.name || 'Calculator Entry';
+            displayDetail = s.supplyStore || s.store || '';
+            displayAmount = s.totalValue != null ? `₨${Number(s.totalValue).toLocaleString()}` : null;
+          } else {
+            displayName = s.customerName || s.entityName || s.name || s.description || null;
+            displayAmount = (s.amount ?? s.totalValue) != null ? `₨${Number(s.amount ?? s.totalValue).toLocaleString()}` : null;
+          }
+        }
+      }
+      if (!displayName) {
+        const snap = _captureRecordSnapshot(rec.id, col);
+        if (snap.displayName) {
+          displayName   = snap.displayName;
+          displayDetail = snap.displayDetail;
+          displayAmount = snap.displayAmount;
+        }
+      }
+      const nameHtml = displayName
+        ? `<span style="font-size:0.88rem;font-weight:700;color:var(--text-main);">${esc(displayName)}</span>`
+        : `<span style="font-size:0.82rem;font-weight:600;color:var(--text-muted);">${esc(RECYCLE_BIN_COLLECTION_LABELS[col] || col)} (no name)</span>`;
+      const detailHtml = displayDetail
+        ? `<span style="font-size:0.72rem;color:var(--text-muted);">${esc(displayDetail)}</span>`
+        : '';
+      const amountHtml = displayAmount
+        ? `<span style="font-size:0.78rem;font-weight:700;color:var(--accent);">${esc(displayAmount)}</span>`
+        : '';
+      const syncBadge = rec.syncedToCloud
+        ? `<span style="font-size:0.62rem;background:rgba(16,185,129,0.15);color:#10b981;padding:2px 6px;border-radius:999px;white-space:nowrap;">☁ synced</span>`
+        : `<span style="font-size:0.62rem;background:rgba(239,68,68,0.12);color:#ef4444;padding:2px 6px;border-radius:999px;white-space:nowrap;">⚠ local</span>`;
+      const colDot = {
+        'sales':'#10b981','transactions':'#3b82f6','rep_sales':'#8b5cf6',
+        'expenses':'#f59e0b','production':'#ec4899','factory_history':'#14b8a6',
+        'returns':'#f97316','unknown':'#9ca3af'
+      }[col] || '#9ca3af';
+      const typeTag = `<span style="font-size:0.62rem;background:rgba(255,255,255,0.06);color:var(--text-muted);padding:2px 7px;border-radius:999px;border:1px solid var(--glass-border);white-space:nowrap;">${esc(typeLabel)}</span>`;
+      return `<div style="background:var(--input-bg);border:1px solid var(--glass-border);border-radius:12px;padding:12px 14px;margin-bottom:9px;display:flex;align-items:center;gap:11px;">
+        <div style="width:9px;height:9px;min-width:9px;border-radius:50%;background:${colDot};flex-shrink:0;"></div>
+        <div style="flex:1;min-width:0;overflow:hidden;">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:2px;">
+            ${nameHtml}
+            ${amountHtml}
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px;">
+            ${typeTag}
+            ${detailHtml}
+            ${syncBadge}
+          </div>
+          <div style="font-size:0.68rem;color:var(--text-muted);">
+            Deleted ${daysAgo === 0 ? 'today' : daysAgo + 'd ago'} · ${deletedDate} · expires in ${expiresIn}d
+          </div>
+        </div>
+        ${canRecover
+          ? `<button onclick="attemptRecoverRecord('${esc(rec.id)}','${esc(col)}')" style="flex-shrink:0;padding:7px 13px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);border-radius:999px;font-size:0.78rem;font-weight:700;cursor:pointer;">↩ Recover</button>`
+          : `<span style="flex-shrink:0;font-size:0.7rem;color:var(--text-muted);padding:4px 8px;">—</span>`}
+      </div>`;
+    }).join('');
+  } catch(e) {
+    container.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text-muted);">Failed to load recycle bin.</div>`;
+    console.error('[RecycleBin] render error', _safeErr(e));
+  }
+}
+async function attemptRecoverRecord(id, collectionName) {
+  const tabKey = RECYCLE_COLLECTION_TO_TAB[collectionName] || 'tab_payments';
+  const tabLabel = RECYCLE_TAB_LABELS[tabKey] || tabKey;
+  const label = `${tabLabel} › ${RECYCLE_BIN_COLLECTION_LABELS[collectionName] || collectionName}`;
+  if (!(await showGlassConfirm(
+    `Recover this ${label}?\n\nIt will be restored to its original collection and become visible again in all views.`,
+    { title: '↩ Recover Record', confirmText: 'Recover', danger: false }
+  ))) return;
+  showToast('Recovering record…', 'info', 1500);
+  const ok = await recoverRecord(id, collectionName);
+  if (ok) {
+    showToast(`${label} recovered successfully!`, 'success');
+    notifyDataChange('all');
+    if (typeof calculateNetCash === 'function') calculateNetCash();
+    if (typeof calculateCashTracker === 'function') calculateCashTracker();
+    const filterSel = document.getElementById('recycleBinFilter');
+    const current = filterSel ? filterSel.value : 'all';
+    await renderRecycleBin(current);
+  } else {
+    showToast('Recovery failed. The record may have been permanently purged from cloud.', 'error');
+  }
+}
+window.openRecycleBin = openRecycleBin;
+window.closeRecycleBin = closeRecycleBin;
+window.renderRecycleBin = renderRecycleBin;
+window.attemptRecoverRecord = attemptRecoverRecord;
 async function triggerLocalBackup() {
 closeDataMenu();
 if (!currentUser) {
@@ -13738,15 +11743,14 @@ expenses: await idb.get('expenses', []),
 stockReturns: stockReturns,
 settings: await idb.get('naswar_default_settings', defaultSettings),
 deleted_records: Array.from(deletedRecordIds),
-_meta: { encryptedFor: currentUser.email, createdAt: Date.now(), version: 2 },
+_meta: { encryptedFor: currentUser.email, createdAt: Date.now(), version: 3, syncScheme: 'uuid-v2' },
 backupMetadata: {
-version: '2.0',
+version: '3.0',
 timestamp: Date.now(),
 date: new Date().toISOString(),
 deviceInfo: navigator.userAgent.substring(0, 100)
 }
 };
-
 const encPassword = await promptVerifiedBackupPassword({ inputId: 'enc_local_bkp_pwd' });
 if (!encPassword) {
 showToast('Backup cancelled.', 'info');
@@ -13862,10 +11866,6 @@ userRef.collection('factorySettings').doc('config').get(),
 userRef.collection('expenseCategories').doc('categories').get(),
 userRef.collection('deletions').get()
 ]);
-for (const collection of ['production', 'sales', 'calculator_history', 'rep_sales', 'transactions',
-'entities', 'inventory', 'factory_history', 'returns']) {
-await DeltaSync.setLastSyncTimestamp(collection);
-}
 const cloudData = {
 mfg_pro_pkr: prodSnap.docs.filter(doc => doc.id !== '_placeholder_' && !doc.data()._placeholder).map(doc => ({ id: doc.id, ...doc.data() })),
 customer_sales: salesSnap.docs.filter(doc => doc.id !== '_placeholder_' && !doc.data()._placeholder).map(doc => ({ id: doc.id, ...doc.data() })),
@@ -13920,6 +11920,19 @@ cloudData.repProfile = {};
 function mergeArrays(cloudArr, fileArr) {
 if (!Array.isArray(cloudArr)) cloudArr = [];
 if (!Array.isArray(fileArr)) fileArr = [];
+const _getMs = (rec) => {
+  if (!rec) return 0;
+  const ts = rec.updatedAt || rec.timestamp || rec.createdAt || rec.date || 0;
+  if (typeof ts === 'number') return ts;
+  if (ts && typeof ts.toMillis === 'function') return ts.toMillis();
+  if (ts && typeof ts === 'object') {
+    if (typeof ts.seconds === 'number') return ts.seconds * 1000;
+    if (typeof ts._seconds === 'number') return ts._seconds * 1000;
+  }
+  if (ts instanceof Date) return ts.getTime();
+  if (typeof ts === 'string') { try { const t = new Date(ts).getTime(); if (!isNaN(t)) return t; } catch(e){} }
+  return 0;
+};
 const map = new Map();
 cloudArr.forEach(item => {
 if (item && item.id) map.set(item.id, item);
@@ -13931,9 +11944,10 @@ const existing = map.get(item.id);
 if (!existing) {
 map.set(item.id, item);
 } else {
-const fileTime = item.timestamp || new Date(item.date || 0).getTime() || 0;
-const cloudTime = existing.timestamp || new Date(existing.date || 0).getTime() || 0;
-if (fileTime >= cloudTime) {
+const _cmpMerge = (typeof compareRecordVersions === 'function')
+  ? compareRecordVersions(item, existing)
+  : _getMs(item) - _getMs(existing);
+if (_cmpMerge >= 0) {
 map.set(item.id, item);
 }
 }
@@ -14111,14 +12125,12 @@ operationCount++;
 if (operationCount > 0) {
 batches.push(currentBatch);
 }
-// Commit batches one at a time, yielding to the browser between each
-// so the UI stays smooth even with hundreds of records.
 for (let _bi = 0; _bi < batches.length; _bi++) {
 	await batches[_bi].commit();
 	if (batches.length > 1) {
 		showToast('Uploading... ' + (_bi + 1) + ' / ' + batches.length + ' batches', 'info');
 	}
-	await new Promise(r => setTimeout(r, 0)); // yield to browser
+	await new Promise(r => setTimeout(r, 0)); 
 }
 const counts = {
 production: normalized.mfg_pro_pkr.length,
@@ -14195,7 +12207,7 @@ notifyDataChange('all');
 triggerAutoSync();
 return true;
 } catch (err) {
-console.error('Failed to save data locally.', err);
+console.error('Failed to save data locally.', _safeErr(err));
 showToast('Failed to save data locally.', 'error');
 throw err;
 }
@@ -14222,1493 +12234,6 @@ return false;
 }
 }
 };
-async function enableBiometricLock() {
-try {
-const success = await BiometricAuth.register("Manager");
-if(success) {
-showToast("Biometric Lock Enabled! ", "success");
-const _bioBtn = document.getElementById('bio-toggle-btn');
-if (_bioBtn) { _bioBtn.innerText = "Disable Biometric Lock"; _bioBtn.onclick = disableBiometricLock; }
-}
-} catch (e) {
-showToast("Setup failed: " + e.message, "error");
-}
-}
-async function disableBiometricLock() {
-const _bioMsg = `Remove the biometric (fingerprint / Face ID) lock from this app?\n\nAfter removal:\n • Anyone with access to this device can open the app without biometric verification\n • To re-enable, go to Security Settings and set up biometrics again\n\nYour data will not be affected.`;
-if (await showGlassConfirm(_bioMsg, { title: "Remove Biometric Lock", confirmText: "Remove Lock", danger: true })) {
-await idb.remove('bio_enabled');
-await idb.remove('bio_cred_id');
-showToast("Biometric Lock Removed", "info");
-const _bioBtnD = document.getElementById('bio-toggle-btn');
-if (_bioBtnD) _bioBtnD.innerText = "Enable Biometric Lock ";
-document.getElementById('bio-toggle-btn').onclick = enableBiometricLock;
-}
-}
-async function checkBiometricLock() {
-const isEnabled = await idb.get('bio_enabled');
-if (isEnabled === 'true' || isEnabled === true) {
-const lockScreen = document.createElement('div');
-lockScreen.id = 'app-lock-screen';
-lockScreen.style.cssText = `
-position: fixed; inset: 0;
-background: var(--bg-gradient); z-index: 100000;
-display: flex; flex-direction: column; align-items: center; justify-content: center;
-`;
-lockScreen.innerHTML = `
-<div style="font-size: 3rem; margin-bottom: 20px;">※</div>
-<h2 style="color: var(--text-main); margin-bottom: 10px;">Security Locked</h2>
-<p style="color: var(--text-muted); font-size: 0.9rem;">Biometric authentication required</p>
-<button class="btn btn-main" style="margin-top: 25px; padding: 12px 30px;" onclick="triggerUnlock()">
-Unlock App
-</button>
-`;
-document.body.appendChild(lockScreen);
-window.triggerUnlock = async () => {
-try {
-const success = await BiometricAuth.authenticate();
-if (success) {
-const screen = document.getElementById('app-lock-screen');
-if(screen) screen.remove();
-showToast("Unlocked Successfully", "success");
-} else {
-showToast("Authentication Failed. Try again.", "error");
-}
-} catch (e) {
-showToast("Biometric Error: " + e.message, "error");
-}
-};
-setTimeout(() => window.triggerUnlock(), 500);
-}
-}
-let repTransactionMode = 'sale';
-async function setRepMode(mode) {
-repTransactionMode = mode;
-const _setRep = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
-const _btnSale = document.getElementById('btn-mode-sale'); if (_btnSale) _btnSale.className = `toggle-opt ${mode === 'sale' ? 'active' : ''}`;
-const _btnColl = document.getElementById('btn-mode-coll'); if (_btnColl) _btnColl.className = `toggle-opt ${mode === 'collection' ? 'active' : ''}`;
-if(mode === 'sale') {
-const _saleIn = document.getElementById('rep-sale-inputs'); if (_saleIn) _saleIn.classList.remove('hidden');
-const _collIn = document.getElementById('rep-coll-inputs'); if (_collIn) _collIn.classList.add('hidden');
-_setRep('rep-result-label', "Total Sale Value:");
-calculateRepSalePreview();
-} else {
-const _saleIn2 = document.getElementById('rep-sale-inputs'); if (_saleIn2) _saleIn2.classList.add('hidden');
-const _collIn2 = document.getElementById('rep-coll-inputs'); if (_collIn2) _collIn2.classList.remove('hidden');
-_setRep('rep-result-label', "New Balance After Collection:");
-const _credEl = document.getElementById('rep-customer-current-credit');
-const currentDebtText = _credEl ? _credEl.innerText.replace('₨','').replace(/,/g,'') : '0';
-const currentDebt = parseFloat(currentDebtText) || 0;
-const formattedDebt = await formatCurrency(currentDebt);
-_setRep('rep-total-value', formattedDebt);
-}
-}
-function selectRepCustomer(name) {
-document.getElementById('rep-cust-name').value = name;
-document.getElementById('rep-customer-search-results').classList.add('hidden');
-calculateRepCustomerStats(name);
-}
-function calculateRepCustomerStatsForDisplay(name) {
-calculateRepCustomerStats(name);
-}
-function calculateRepCustomerStats(name) {
-if(salesRepsList.includes(name)) {
-document.getElementById('rep-customer-info-display').classList.add('hidden');
-showToast("Cannot create transaction with representative name", "warning");
-return;
-}
-const history = repSales.filter(s =>
-s && s.customerName && s.customerName.toLowerCase() === name.toLowerCase() &&
-s.salesRep === currentRepProfile
-);
-let debt = 0;
-history.forEach(h => {
-if (h.paymentType === 'CREDIT' && !h.creditReceived) {
-if (h.isMerged && typeof h.creditValue === 'number') {
-debt += h.creditValue;
-} else {
-const partialPaid = h.partialPaymentReceived || 0;
-debt += ((h.totalValue || 0) - partialPaid);
-}
-}
-if (h.paymentType === 'COLLECTION') debt -= (h.totalValue || 0);
-});
-const _repCred = document.getElementById('rep-customer-current-credit');
-if (_repCred) _repCred.innerText = "" + safeNumber(debt, 0).toFixed(2);
-const _repInfo = document.getElementById('rep-customer-info-display');
-if (_repInfo) _repInfo.classList.remove('hidden');
-if(repTransactionMode === 'collection') {
-const inputAmt = parseFloat(document.getElementById('rep-amount-collected')?.value) || 0;
-const _repTV = document.getElementById('rep-total-value');
-if (_repTV) _repTV.innerText = "" + safeNumber(debt - inputAmt, 0).toFixed(2);
-}
-}
-function calculateRepSalePreview() {
-if(repTransactionMode === 'sale') {
-const qty = parseFloat(document.getElementById('rep-quantity').value) || 0;
-const salePrice = getSalePriceForStore('STORE_A'); 
-const _repTVS = document.getElementById('rep-total-value');
-if (_repTVS) _repTVS.innerText = "" + safeNumber(qty * salePrice, 0).toFixed(2);
-}
-}
-
-async function saveRepTransaction() {
-const submitBtn = document.querySelector('#rep-new-transaction-card .btn-main');
-if (submitBtn) {
-if (submitBtn.disabled) return;
-submitBtn.disabled = true;
-}
-function restoreBtn() {
-if (submitBtn) submitBtn.disabled = false;
-}
-try {
-const date = document.getElementById('rep-date').value;
-const name = document.getElementById('rep-cust-name').value.trim();
-const phoneInput = document.getElementById('rep-new-cust-phone');
-const phoneNumber = (!document.getElementById('rep-new-customer-phone-container').classList.contains('hidden'))
-? phoneInput.value.trim()
-: '';
-if(!date || !name) {
-showToast("Date and Name required", "warning");
-restoreBtn();
-return;
-}
-let gpsCoords = null;
-try {
-gpsCoords = await Promise.race([
-getPosition(),
-new Promise(resolve => setTimeout(() => resolve(null), 3000))
-]);
-} catch (e) {
-console.error('An unexpected error occurred.', e);
-showToast('An unexpected error occurred.', 'error');
-}
-const now = new Date();
-const timeString = now.toLocaleTimeString('en-US', {hour: '2-digit', minute:'2-digit', hour12: true});
-const costPerKg = getCostPriceForStore('STORE_A'); 
-const salePrice = getSalePriceForStore('STORE_A'); 
-let transactionRecord = {};
-if(repTransactionMode === 'sale') {
-const qty = parseFloat(document.getElementById('rep-quantity').value) || 0;
-const payType = document.getElementById('rep-payment-value').value;
-if(qty <= 0) {
-showToast("Enter Quantity", "warning");
-restoreBtn();
-return;
-}
-const totalValue = qty * salePrice;
-let saleId = generateUUID('rep_sale');
-if (!validateUUID(saleId)) {
-saleId = generateUUID('rep_sale');
-}
-transactionRecord = {
-id: saleId,
-date: date,
-time: timeString,
-customerName: name,
-customerPhone: phoneNumber,
-quantity: qty,
-supplyStore: 'STORE_A',
-paymentType: payType,
-salesRep: currentRepProfile,
-gps: gpsCoords,
-totalCost: qty * costPerKg,
-totalValue: totalValue,
-profit: totalValue - (qty * costPerKg),
-// Store the canonical fixed sale price per kg at transaction time.
-unitPrice: salePrice,
-creditReceived: (payType === 'CASH'),
-createdAt: getTimestamp(),
-updatedAt: getTimestamp(),
-timestamp: getTimestamp(),
-isRepModeEntry: true,
-affectsInventory: false,
-syncedAt: new Date().toISOString()
-};
-transactionRecord = ensureRecordIntegrity(transactionRecord, false);
-} else {
-const amount = parseFloat(document.getElementById('rep-amount-collected').value) || 0;
-if(amount <= 0) {
-showToast("Enter Amount", "warning");
-restoreBtn();
-return;
-}
-let collId = generateUUID('rep_coll');
-if (!validateUUID(collId)) {
-collId = generateUUID('rep_coll');
-}
-transactionRecord = {
-id: collId,
-date: date,
-time: timeString,
-customerName: name,
-customerPhone: phoneNumber,
-quantity: 0,
-supplyStore: 'STORE_A',
-paymentType: 'COLLECTION',
-salesRep: currentRepProfile,
-gps: gpsCoords,
-totalCost: 0,
-totalValue: amount,
-profit: amount,
-creditReceived: true,
-isCollection: true,
-createdAt: getTimestamp(),
-updatedAt: getTimestamp(),
-timestamp: getTimestamp(),
-isRepModeEntry: true,
-affectsInventory: false,
-syncedAt: new Date().toISOString()
-};
-transactionRecord = ensureRecordIntegrity(transactionRecord, false);
-}
-repSales.push(transactionRecord);
-await saveWithTracking('rep_sales', repSales);
-if (firebaseDB && currentUser) {
-saveRecordToFirestore('rep_sales', transactionRecord).catch(e => {
-});
-}
-notifyDataChange('rep');
-if (navigator.onLine) {
-emitSyncUpdate({ rep_sales: repSales }).catch(e => {
-});
-}
-if (gpsCoords) {
-autoUpdateCustomerLocation(name, gpsCoords).catch(e => {
-});
-}
-document.getElementById('rep-quantity').value = '';
-const savedCustomerName = name;
-document.getElementById('rep-amount-collected').value = '';
-if(repTransactionMode === 'sale') {
-const _custName = document.getElementById('rep-cust-name'); if (_custName) _custName.value = '';
-const _custInfo = document.getElementById('rep-customer-info-display'); if (_custInfo) _custInfo.classList.add('hidden');
-const _repTV1 = document.getElementById('rep-total-value'); if (_repTV1) _repTV1.innerText = '0.00';
-} else {
-const _custName2 = document.getElementById('rep-cust-name'); if (_custName2) _custName2.value = savedCustomerName;
-calculateRepCustomerStats(savedCustomerName);
-const _repTV2 = document.getElementById('rep-total-value'); if (_repTV2) _repTV2.innerText = '0.00';
-}
-if(phoneInput) phoneInput.value = '';
-document.getElementById('rep-new-customer-phone-container').classList.add('hidden');
-renderRepCustomerTable();
-renderRepHistory();
-showToast("Transaction Saved Successfully", "success");
-} catch (error) {
-showToast('Failed to save transaction. Please try again.', 'error');
-} finally {
-restoreBtn();
-}
-}
-function getDistanceFromLatLonInMeters(lat1, lon1, lat2, lon2) {
-const R = 6371e3;
-const dLat = deg2rad(lat2 - lat1);
-const dLon = deg2rad(lon2 - lon1);
-const a =
-Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
-Math.sin(dLon / 2) * Math.sin(dLon / 2);
-const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-return R * c;
-}
-function deg2rad(deg) {
-return deg * (Math.PI / 180);
-}
-async function autoUpdateCustomerLocation(customerName, currentGps) {
-if (!currentGps || !currentGps.lat || !currentGps.lng) return;
-const contactIndex = repCustomers.findIndex(
-c => c && c.name && c.name.toLowerCase() === customerName.toLowerCase()
-);
-if (contactIndex === -1) return;
-const contact = repCustomers[contactIndex];
-const isManualAddress = contact.address && contact.address.length > 5 && !contact.address.startsWith('GPS:');
-if (isManualAddress) return;
-const matchFound = repSales.some(sale => {
-if (sale.timestamp > Date.now() - 2000) return false;
-if (sale && sale.customerName && sale.customerName.toLowerCase() === customerName.toLowerCase() && sale.gps) {
-return getDistanceFromLatLonInMeters(
-currentGps.lat, currentGps.lng,
-sale.gps.lat, sale.gps.lng
-) < 100;
-}
-return false;
-});
-if (matchFound) {
-const coordsString = `GPS: ${safeNumber(currentGps.lat, 0).toFixed(2)}, ${safeNumber(currentGps.lng, 0).toFixed(2)}`;
-const isNewLocation = contact.address !== coordsString;
-repCustomers[contactIndex].address = coordsString;
-repCustomers[contactIndex].updatedAt = getTimestamp();
-await idb.set('rep_customers', repCustomers);
-notifyDataChange('rep');
-if (typeof showToast === 'function' && isNewLocation) {
-showToast(`Location confirmed! Saved as default for ${customerName}.`, "success");
-}
-}
-}
-let repMap = null;
-let repMapMarkers = [];
-let repPolyline = null;
-function getPosition() {
-return new Promise((resolve, reject) => {
-if (!navigator.geolocation) {
-resolve(null);
-return;
-}
-navigator.geolocation.getCurrentPosition(
-(position) => resolve({
-lat: position.coords.latitude,
-lng: position.coords.longitude,
-accuracy: position.coords.accuracy
-}),
-(error) => {
-resolve(null);
-},
-{ enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
-);
-});
-}
-function initRepMap() {
-if (repMap) return;
-const mapContainer = document.getElementById('rep-map-container');
-if (!mapContainer) return;
-repMap = L.map('rep-map-container').setView([32.9910, 70.6055], 13);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-attribution: '© OpenStreetMap contributors'
-}).addTo(repMap);
-setTimeout(() => {
-if (repMap) {
-repMap.invalidateSize();
-}
-}, 100);
-}
-function updateRepLiveMap() {
-if (typeof L === 'undefined') return;
-const container = document.getElementById('rep-map-container');
-if (!container || container.offsetParent === null) return;
-if (!repMap) initRepMap();
-if (repMap) {
-repMap.invalidateSize();
-}
-repMapMarkers.forEach(layer => repMap.removeLayer(layer));
-repMapMarkers = [];
-if (repPolyline) {
-repMap.removeLayer(repPolyline);
-repPolyline = null;
-}
-const dateInput = document.getElementById('rep-date');
-const selectedDate = dateInput ? dateInput.value : new Date().toISOString().split('T')[0];
-const dailyRoute = repSales
-.filter(s => s.salesRep === currentRepProfile && s.date === selectedDate && s.gps)
-.sort((a, b) => a.timestamp - b.timestamp);
-if (dailyRoute.length === 0) {
-return;
-}
-const latLngs = [];
-dailyRoute.forEach(txn => {
-if (txn.gps && txn.gps.lat && txn.gps.lng) {
-const lat = txn.gps.lat;
-const lng = txn.gps.lng;
-latLngs.push([lat, lng]);
-let color = '#3b82f6';
-let typeStr = 'Cash Sale';
-let detailStr = `${txn.quantity.toFixed(2)} kg`;
-if (txn.paymentType === 'COLLECTION') {
-color = '#10b981';
-typeStr = 'Collection';
-detailStr = `${txn.totalValue.toFixed(2)}`;
-} else if (txn.paymentType === 'CREDIT') {
-color = '#f59e0b';
-typeStr = 'Credit Sale';
-detailStr = `${txn.quantity.toFixed(2)} kg (Credit)`;
-}
-const marker = L.circleMarker([lat, lng], {
-radius: 8,
-fillColor: color,
-color: '#fff',
-weight: 2,
-opacity: 1,
-fillOpacity: 0.8
-})
-.bindPopup(`
-<strong>${txn.customerName}</strong><br>
-<small>${txn.time}</small><br>
-<span style="color:${color}; font-weight:bold;">${typeStr}</span>: ${detailStr}
-`);
-marker.addTo(repMap);
-repMapMarkers.push(marker);
-}
-});
-if (latLngs.length > 1) {
-repPolyline = L.polyline(latLngs, {
-color: '#2563eb',
-weight: 3,
-opacity: 0.6,
-dashArray: '5, 10'
-}).addTo(repMap);
-}
-if (repMapMarkers.length > 0) {
-const group = new L.featureGroup(repMapMarkers);
-repMap.fitBounds(group.getBounds().pad(0.1));
-}
-}
-function adminSwitchRepProfile(newProfile) {
-if (appMode !== 'admin') return;
-currentRepProfile = newProfile;
-refreshRepUI();
-setTimeout(() => {
-if (repMap) {
-repMap.invalidateSize();
-}
-updateRepLiveMap();
-}, 200);
-calculateRepAnalytics();
-if(typeof showToast === 'function') {
-showToast(`Viewing dashboard for ${newProfile}`, 'info');
-}
-}
-let currentRepAnalyticsMode = 'day';
-function setRepAnalyticsMode(mode) {
-currentRepAnalyticsMode = mode;
-document.querySelectorAll('#admin-rep-analytics .toggle-group .toggle-opt').forEach(opt => {
-opt.classList.remove('active');
-});
-document.getElementById(`rep-analytics-${mode}-btn`).classList.add('active');
-calculateRepAnalytics();
-}
-function calculateRepAnalytics() {
-if (appMode !== 'admin') return;
-const adminDateInput = document.getElementById('admin-rep-date');
-const selectedDate = (adminDateInput && adminDateInput.value) || new Date().toISOString().split('T')[0];
-const selectedDateObj = new Date(selectedDate);
-const selectedYear = selectedDateObj.getFullYear();
-const selectedMonth = selectedDateObj.getMonth();
-let startDate = new Date(selectedDate);
-let endDate = new Date(selectedDate);
-startDate.setHours(0,0,0,0);
-endDate.setHours(23,59,59,999);
-if (currentRepAnalyticsMode === 'week') {
-startDate.setDate(selectedDateObj.getDate() - 6);
-} else if (currentRepAnalyticsMode === 'month') {
-startDate = new Date(selectedYear, selectedMonth, 1);
-endDate = new Date(selectedYear, selectedMonth + 1, 0, 23, 59, 59);
-} else if (currentRepAnalyticsMode === 'year') {
-startDate = new Date(selectedYear, 0, 1);
-endDate = new Date(selectedYear, 11, 31, 23, 59, 59);
-} else if (currentRepAnalyticsMode === 'all') {
-startDate = new Date('2000-01-01');
-endDate = new Date('2100-12-31');
-}
-let collections = 0;
-let cashSales = 0;
-let creditSales = 0;
-repSales.forEach(sale => {
-if (sale.salesRep !== currentRepProfile) return;
-const saleDate = new Date(sale.date);
-if (saleDate >= startDate && saleDate <= endDate) {
-if (sale.isMerged && sale.mergedSummary) {
-
-const ms = sale.mergedSummary;
-cashSales   += (ms.cashSales           || 0);
-creditSales += (ms.unpaidCredit        || 0);
-collections += (ms.collectionsReceived || 0);
-} else if (sale.paymentType === 'COLLECTION') {
-collections += sale.totalValue || 0;
-} else if (sale.paymentType === 'CASH') {
-cashSales += sale.totalValue || 0;
-} else if (sale.paymentType === 'CREDIT') {
-
-if (sale.creditReceived) {
-cashSales += sale.totalValue || 0; 
-} else {
-creditSales += (sale.totalValue || 0) - (sale.partialPaymentReceived || 0);
-}
-}
-}
-});
-const collectionsEl = document.getElementById('rep-analytics-collections');
-const cashSalesEl = document.getElementById('rep-analytics-cash-sales');
-const creditSalesEl = document.getElementById('rep-analytics-credit-sales');
-if (collectionsEl) collectionsEl.textContent = `${collections.toFixed(2)}`;
-if (cashSalesEl) cashSalesEl.textContent = `${cashSales.toFixed(2)}`;
-if (creditSalesEl) creditSalesEl.textContent = `${creditSales.toFixed(2)}`;
-}
-async function renderRepCustomerTable(page = 1) {
-const tbody = document.getElementById('rep-customers-table-body');
-if (!tbody) {
-return;
-}
-try {
-const freshRepSales = await idb.get('rep_sales', []);
-if (Array.isArray(freshRepSales)) {
-const recordMap = new Map(freshRepSales.map(s => [s.id, s]));
-if (Array.isArray(repSales)) {
-repSales.forEach(s => {
-if (!recordMap.has(s.id)) {
-recordMap.set(s.id, s);
-}
-});
-}
-repSales = Array.from(recordMap.values());
-}
-} catch (error) {
-console.error('Rep sales operation failed.', error);
-showToast('Rep sales operation failed.', 'error');
-}
-const filterInput = document.getElementById('rep-filter');
-const filter = filterInput ? filterInput.value.toLowerCase() : '';
-const myData = repSales.filter(s =>
-s.salesRep === currentRepProfile
-);
-const custMap = {};
-myData.forEach(s => {
-if(!custMap[s.customerName]) custMap[s.customerName] = { debt: 0, count: 0 };
-custMap[s.customerName].count++;
-if(s.paymentType === 'CREDIT' && !s.creditReceived) {
-if (s.isMerged && typeof s.creditValue === 'number') {
-custMap[s.customerName].debt += s.creditValue;
-} else {
-const partialPaid = s.partialPaymentReceived || 0;
-custMap[s.customerName].debt += ((s.totalValue || 0) - partialPaid);
-}
-}
-if(s.paymentType === 'COLLECTION' || s.paymentType === 'PARTIAL_PAYMENT') {
-custMap[s.customerName].debt -= (s.totalValue || 0);
-}
-});
-const sortedCustomers = Object.keys(custMap).sort();
-const filteredCustomers = sortedCustomers.filter(name => {
-if (!filter) return true;
-return name && typeof name === 'string' && name.toLowerCase().includes(filter);
-});
-const pageCustomers = filteredCustomers;
-const validPage = 1;
-const totalPages = 1;
-const totalItems = filteredCustomers.length;
-const startIndex = 0;
-const endIndex = filteredCustomers.length;
-const repCustomersData = {
-pageCustomers,
-custMap,
-totalItems,
-totalPages,
-validPage
-};
-if (repCustomersData && repCustomersData.pageCustomers) {
-renderRepCustomersFromCache(repCustomersData, tbody);
-} else {
-tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; padding:20px; color:var(--danger);">Failed to load customer data</td></tr>`;
-}
-}
-function renderRepCustomersFromCache(data, tbody) {
-if (!data) {
-tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:20px; color:var(--danger);">Error loading customers</td></tr>`;
-return;
-}
-const { pageCustomers, custMap, totalItems, totalPages, validPage } = data;
-if (!pageCustomers || !Array.isArray(pageCustomers) || !custMap) {
-tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:20px; color:var(--danger);">Invalid customer data</td></tr>`;
-return;
-}
-if (totalItems === 0) {
-if (Object.keys(custMap).length === 0) {
-tbody.innerHTML = `<tr><td class="u-empty-state-md" colspan="5" >No customers yet. Add your first sale to get started!</td></tr>`;
-} else {
-const filterInput = document.getElementById('rep-filter');
-const filter = filterInput ? filterInput.value : '';
-tbody.innerHTML = `<tr><td class="u-empty-state-md" colspan="5" >No customers match "${esc(filter)}"</td></tr>`;
-}
-return;
-}
-function buildRepCustomerRow(name) {
-const customerData = custMap[name];
-const customerTransactions = repSales.filter(s =>
-s.customerName === name &&
-s.salesRep === currentRepProfile
-);
-const latestTransaction = customerTransactions.sort((a, b) => b.timestamp - a.timestamp)[0];
-const displayDate = latestTransaction?.date ? formatDisplayDate(latestTransaction.date) : '-';
-const repContact = repCustomers.find(c => c && c.name && c.name.toLowerCase() === name.toLowerCase());
-const phone = repContact?.phone || latestTransaction?.customerPhone || '-';
-const tr = document.createElement('tr');
-tr.style.borderBottom = '1px solid var(--glass-border)';
-const safeNameForAttr = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-tr.innerHTML = `
-<td class="u-table-td">${displayDate}</td>
-<td style="padding: 8px 2px; font-size: 0.8rem; color: var(--text-main); font-weight: 600;">${esc(name)}</td>
-<td class="u-table-td">${phoneActionHTML(phone)}</td>
-<td style="padding: 8px 2px; text-align: right; font-size: 0.8rem; color: ${customerData.debt > 1 ? 'var(--warning)' : 'var(--accent-emerald)'}; font-weight: 700;">
-${customerData.debt.toLocaleString()}
-</td>
-<td style="padding: 6px 2px; text-align: center;">
-<button class="tbl-action-btn" onclick="event.stopPropagation(); openRepCustomerManagement('${safeNameForAttr}')">View</button>
-</td>`;
-return tr;
-}
-GNDVirtualScroll.mount('vs-scroller-rep-customers', pageCustomers, buildRepCustomerRow, tbody);
-}
-async function openRepCustomerManagement(customerName) {
-currentManagingRepCustomer = customerName;
-const _repMCT = document.getElementById('repManageCustomerTitle'); if (_repMCT) _repMCT.innerText = customerName;
-const _repBulk = document.getElementById('repBulkPaymentAmount'); if (_repBulk) _repBulk.value = '';
-requestAnimationFrame(() => {
-document.body.style.overflow = 'hidden';
-document.documentElement.style.overflow = 'hidden';
-document.getElementById('repCustomerManagementOverlay').style.display = 'flex';
-});
-await renderRepCustomerTransactions(customerName);
-}
-function closeRepCustomerManagement() {
-requestAnimationFrame(() => {
-document.body.style.overflow = '';
-document.documentElement.style.overflow = '';
-document.getElementById('repCustomerManagementOverlay').style.display = 'none';
-});
-currentManagingRepCustomer = null;
-setTimeout(async () => {
-try {
-const freshRepSales = await idb.get('rep_sales', []);
-if (Array.isArray(freshRepSales)) {
-const m = new Map(freshRepSales.map(s => [s.id, s]));
-if (Array.isArray(repSales)) repSales.forEach(s => { if (!m.has(s.id)) m.set(s.id, s); });
-repSales = Array.from(m.values());
-}
-} catch(e) {
-showToast('Rep sales operation failed.', 'error');
-console.warn('closeRepCustomerManagement IDB error', e);
-}
-if (typeof renderRepCustomerTable === 'function') renderRepCustomerTable();
-}, 100);
-}
-async function renderRepCustomerTransactions(name) {
-const list = document.getElementById('repCustomerManagementHistoryList');
-if (!list) return;
-list.innerHTML = '';
-let transactions = [];
-try {
-const dbSales = await idb.get('rep_sales', []);
-if (Array.isArray(dbSales)) {
-const recordMap = new Map(dbSales.map(s => [s.id, s]));
-if (Array.isArray(repSales)) repSales.forEach(s => { if (!recordMap.has(s.id)) recordMap.set(s.id, s); });
-repSales = Array.from(recordMap.values());
-transactions = repSales.filter(s => s.customerName === name && s.salesRep === currentRepProfile);
-} else {
-transactions = repSales.filter(s => s.customerName === name && s.salesRep === currentRepProfile);
-}
-} catch (e) {
-console.error('Rep sales operation failed.', e);
-showToast('Rep sales operation failed.', 'error');
-transactions = repSales.filter(s => s.customerName === name && s.salesRep === currentRepProfile);
-}
-const rangeSelect = document.getElementById('repCustomerPdfRange');
-const range = rangeSelect ? rangeSelect.value : 'all';
-if (range !== 'all') {
-const today = new Date(); today.setHours(0,0,0,0);
-transactions = transactions.filter(t => {
-if (!t.date) return false;
-const d = new Date(t.date);
-if (range === 'today') return d >= today;
-if (range === 'week') { const w = new Date(today); w.setDate(w.getDate() - 7); return d >= w; }
-if (range === 'month') { const m = new Date(today); m.setMonth(m.getMonth() - 1); return d >= m; }
-if (range === 'year') { const y = new Date(today); y.setFullYear(y.getFullYear() - 1); return d >= y; }
-return true;
-});
-}
-const repContacts = repCustomers;
-const contact = repContacts.find(c => c && c.name && c.name.toLowerCase() === name.toLowerCase());
-const phone = contact?.phone || transactions.find(t => t && t.customerPhone)?.customerPhone || '';
-const address = contact?.address || '';
-const headerTitle = document.getElementById('repManageCustomerTitle');
-headerTitle.innerHTML = `
-<div style="display:flex; align-items:center; gap:8px;">
-<span>${esc(name)}</span>
-<button class="btn-theme" style="padding:2px 6px; font-size:0.8rem; border:1px solid var(--accent); color:var(--accent); border-radius:50%;"
-onclick="openRepCustomerEditModal('${esc(name).split("'").join("\\\'")}')" title="Edit Contact Info"></button>
-</div>
-<div style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal; margin-top:4px;">
-${phone ? phoneActionHTML(phone) : 'No Phone'} ${address ? `| ◆ ${esc(address)}` : ''}
-</div>
-`;
-let currentDebt = 0;
-transactions.forEach(t => {
-if (t.paymentType === 'CREDIT' && !t.creditReceived) {
-if (t.isMerged && typeof t.creditValue === 'number') {
-currentDebt += t.creditValue;
-} else {
-currentDebt += ((t.totalValue || 0) - (t.partialPaymentReceived || 0));
-}
-}
-if (t.paymentType === 'COLLECTION' || t.paymentType === 'PARTIAL_PAYMENT') {
-currentDebt -= (t.totalValue || 0);
-}
-});
-const _repMCS = document.getElementById('repManageCustomerStats'); if (_repMCS) _repMCS.innerText = `Current Debt: ${await formatCurrency(currentDebt)}`;
-transactions.sort((a, b) => {
-const ap = (a.paymentType === 'CREDIT' && !a.creditReceived) ? 1 : 0;
-const bp = (b.paymentType === 'CREDIT' && !b.creditReceived) ? 1 : 0;
-if (bp !== ap) return bp - ap;
-return b.timestamp - a.timestamp;
-});
-if (transactions.length === 0) {
-list.innerHTML = '<div class="u-empty-state-sm" >No history found</div>';
-return;
-}
-for (const t of transactions) {
-const isCredit = t.paymentType === 'CREDIT';
-const isPartialPayment = t.paymentType === 'PARTIAL_PAYMENT';
-const isCollection = t.paymentType === 'COLLECTION';
-const isOldDebt = t.transactionType === 'OLD_DEBT';
-const partialPaid = t.partialPaymentReceived || 0;
-const effectiveDue = (t.isMerged && typeof t.creditValue === 'number') ? t.creditValue : ((t.totalValue || 0) - partialPaid);
-const hasPartialPayment = isCredit && !t.creditReceived && partialPaid > 0 && !t.isMerged;
-let statusClass = t.creditReceived ? 'paid' : 'pending';
-let btnText = t.creditReceived ? 'PAID' : 'PENDING';
-let toggleBtnHtml = '';
-if (t.isMerged) {
-const mergedSettled = t.creditReceived || effectiveDue <= 0.01;
-toggleBtnHtml = mergedSettled
-? `<span class="status-toggle-btn paid" style="opacity:0.8;">SETTLED</span>`
-: `<span class="status-toggle-btn pending" style="opacity:0.8;">PENDING</span>`;
-} else if (isCredit) {
-if (hasPartialPayment) {
-const remaining = effectiveDue;
-btnText = `PARTIAL (${await formatCurrency(remaining)} due)`;
-statusClass = 'partial';
-}
-toggleBtnHtml = `<button class="status-toggle-btn ${statusClass}" onclick="toggleRepTransactionStatus('${t.id}')">${btnText}</button>`;
-} else if (isPartialPayment) {
-toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(255,159,10,0.1);color:var(--warning);">PARTIAL PAYMENT</span>`;
-} else if (isCollection) {
-toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(48,209,88,0.1);color:var(--accent-emerald);">COLLECTION</span>`;
-} else {
-toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(37,99,235,0.1);color:var(--accent);">CASH SALE</span>`;
-}
-const deleteBtnHtml = t.isMerged ? '' : `<button class="btn btn-sm btn-danger u-p-4-8" onclick="deleteRepTransactionFromOverlay('${esc(t.id)}')">⌫</button>`;
-const item = document.createElement('div');
-item.className = 'cust-history-item';
-let itemContent = '';
-if (isPartialPayment || isCollection) {
-itemContent = `
-<div class="cust-history-info">
-<div style="font-weight:700;font-size:0.85rem;color:var(--text-main);">${formatDisplayDate(t.date)}${_mergedBadgeHtml(t, {inline:true})}</div>
-<div style="font-size:0.75rem;color:var(--accent-emerald);">Payment: ${await formatCurrency(t.totalValue)}</div>
-<div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px;">${isPartialPayment ? 'Partial Payment' : 'Bulk Payment'}</div>
-</div>
-<div class="cust-history-actions">
-${toggleBtnHtml}
-${deleteBtnHtml}
-</div>`;
-} else if (isOldDebt) {
-itemContent = `
-<div class="cust-history-info">
-<div style="font-weight:700;font-size:0.85rem;color:var(--text-main);">
-${formatDisplayDate(t.date)}
-<span style="background:rgba(255,159,10,0.15);color:var(--warning);padding:2px 6px;border-radius:4px;font-size:0.65rem;margin-left:6px;font-weight:600;">OLD DEBT</span>${_mergedBadgeHtml(t, {inline:true})}
-</div>
-<div style="font-size:0.75rem;color:var(--warning);">Previous Balance: ${await formatCurrency(t.totalValue)}</div>
-<div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px;">${esc(t.notes || 'Brought forward from previous records')}</div>
-</div>
-<div class="cust-history-actions">
-${toggleBtnHtml}
-${deleteBtnHtml}
-</div>`;
-} else {
-// Canonical sale price: use stored unitPrice (set on merge) or fixed
-// getSalePriceForStore rate — never divide totalValue/quantity (averaged).
-const _repDisplayUnitPrice = (t.unitPrice && t.unitPrice > 0)
-  ? t.unitPrice
-  : getSalePriceForStore(t.supplyStore || 'STORE_A');
-itemContent = `
-<div class="cust-history-info">
-<div style="font-weight:700;font-size:0.85rem;color:var(--text-main);">${formatDisplayDate(t.date)}${_mergedBadgeHtml(t, {inline:true})}</div>
-<div style="font-size:0.75rem;color:var(--text-muted);">${t.quantity.toFixed(2)} kg @ ${await formatCurrency(_repDisplayUnitPrice)}</div>
-${hasPartialPayment ? `<div style="font-size:0.7rem;color:var(--accent-emerald);margin-top:2px;">Paid: ${await formatCurrency(partialPaid)}</div>` : ''}
-</div>
-<div class="cust-history-actions">
-${toggleBtnHtml}
-${deleteBtnHtml}
-</div>`;
-}
-item.innerHTML = itemContent;
-list.appendChild(item);
-}
-}
-function openCustomerEditModal(customerName) {
-document.getElementById('edit-cust-name').value = customerName;
-const contact = salesCustomers.find(c => c && c.name && c.name.toLowerCase() === customerName.toLowerCase());
-const saleRecord = customerSales.find(s =>
-s && s.customerName === customerName &&
-s.isRepModeEntry !== true &&
-(!s.salesRep || s.salesRep === 'NONE') &&
-s.customerPhone
-);
-document.getElementById('edit-cust-phone').value = contact?.phone || saleRecord?.customerPhone || '';
-document.getElementById('edit-cust-address').value = contact?.address || '';
-document.getElementById('edit-cust-old-debit').value = contact?.oldDebit || 0;
-requestAnimationFrame(() => {
-document.body.style.overflow = 'hidden';
-document.documentElement.style.overflow = 'hidden';
-document.getElementById('customerEditOverlay').style.display = 'flex';
-});
-}
-function closeCustomerEditModal() {
-requestAnimationFrame(() => {
-document.body.style.overflow = '';
-document.documentElement.style.overflow = '';
-document.getElementById('customerEditOverlay').style.display = 'none';
-});
-}
-async function saveCustomerDetails() {
-const name = document.getElementById('edit-cust-name').value.trim();
-const phone = document.getElementById('edit-cust-phone').value.trim();
-const address = document.getElementById('edit-cust-address').value.trim();
-const oldDebit = parseFloat(document.getElementById('edit-cust-old-debit').value) || 0;
-if (!name) { showToast('Customer name is required', 'error'); return; }
-try {
-let contact = salesCustomers.find(c => c && c.name && c.name.toLowerCase() === name.toLowerCase());
-const previousOldDebit = contact?.oldDebit || 0;
-if (contact) {
-contact.phone = phone; contact.address = address; contact.oldDebit = oldDebit; contact.updatedAt = getTimestamp();
-} else {
-contact = { id: generateUUID(), name, phone, address, oldDebit,
-createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
-salesCustomers.push(contact);
-}
-await idb.set('sales_customers', salesCustomers);
-notifyDataChange('sales');
-triggerAutoSync();
-let salesArray = await idb.get('customer_sales', []);
-if (!Array.isArray(salesArray)) salesArray = [];
-const oldDebtIdx = salesArray.findIndex(s =>
-s && s.customerName === name &&
-s.transactionType === 'OLD_DEBT' &&
-s.isRepModeEntry !== true &&
-(!s.salesRep || s.salesRep === 'NONE' || s.salesRep === 'ADMIN')
-);
-if (oldDebtIdx !== -1) { }
-let oldDebtModified = false, oldDebtRecord = null;
-if (oldDebit > 0) {
-if (oldDebtIdx !== -1) {
-const tx = salesArray[oldDebtIdx];
-tx.totalValue = oldDebit; tx.customerPhone = phone; tx.timestamp = getTimestamp();
-tx.updatedAt = getTimestamp(); tx.date = new Date().toISOString().split('T')[0];
-tx.creditReceived = false; tx.partialPaymentReceived = 0;
-if (!tx.time) tx.time = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-oldDebtModified = true; oldDebtRecord = tx;
-} else {
-const tx = { id: generateUUID(), date: new Date().toISOString().split('T')[0],
-customerName: name, customerPhone: phone, salesRep: 'ADMIN', quantity: 0,
-supplyStore: 'N/A', paymentType: 'CREDIT', transactionType: 'OLD_DEBT',
-totalValue: oldDebit, creditReceived: false, partialPaymentReceived: 0,
-time: new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}),
-timestamp: getTimestamp(), createdAt: getTimestamp(), updatedAt: getTimestamp(),
-notes: 'Previous balance brought forward', isRepModeEntry: false };
-salesArray.push(tx); oldDebtModified = true; oldDebtRecord = tx;
-}
-} else if (oldDebit === 0 && oldDebtIdx !== -1) {
-salesArray.splice(oldDebtIdx, 1); oldDebtModified = true;
-}
-let phoneUpdated = false;
-salesArray.forEach(s => { if (s && s.customerName === name && s.customerPhone !== phone) { s.customerPhone = phone; phoneUpdated = true; } });
-customerSales.length = 0; customerSales.push(...salesArray);
-if (oldDebtModified || phoneUpdated) {
-await saveWithTracking('customer_sales', salesArray);
-if (oldDebtRecord) await saveRecordToFirestore('customer_sales', oldDebtRecord);
-}
-const message = oldDebit > 0 ? `Customer updated with old debt of ₨${oldDebit.toLocaleString()}`
-: (oldDebit === 0 && previousOldDebit > 0) ? 'Customer updated and old debt cleared'
-: 'Customer details updated successfully';
-showToast(message, 'success');
-closeCustomerEditModal();
-await new Promise(r => setTimeout(r, 350));
-const overlay = document.getElementById('customerManagementOverlay');
-if (overlay && overlay.style.display === 'flex') await renderCustomerTransactions(currentManagingCustomer || name);
-if (typeof renderCustomersTable === 'function') renderCustomersTable();
-notifyDataChange('entities');
-triggerAutoSync();
-} catch (error) {
-showToast('Failed to save customer details. Please try again.', 'error');
-}
-}
-async function fetchDeviceLocation() {
-const statusDiv = document.getElementById('location-status');
-const addressInput = document.getElementById('edit-cust-address');
-const btn = document.querySelector('button[onclick="fetchDeviceLocation()"]');
-if (!navigator.geolocation) {
-statusDiv.textContent = "GPS not supported on this device.";
-statusDiv.style.color = "var(--danger)";
-return;
-}
-if(btn) btn.disabled = true;
-statusDiv.innerHTML = '<span class="update-indicator"></span> Pinpointing satellite location...';
-statusDiv.style.color = "var(--accent)";
-addressInput.placeholder = "Fetching location...";
-const gpsOptions = {
-enableHighAccuracy: true,
-timeout: 20000,
-maximumAge: 0
-};
-navigator.geolocation.getCurrentPosition(async (position) => {
-const lat = position.coords.latitude;
-const lon = position.coords.longitude;
-const accuracy = position.coords.accuracy;
-const googleMapsLink = `https://www.google.com/maps?q=${lat},${lon}`;
-const coordsText = `${safeNumber(lat, 0).toFixed(2)}, ${safeNumber(lon, 0).toFixed(2)}`;
-statusDiv.textContent = `GPS Accuracy: ±${Math.round(accuracy)}m. Decoding name...`;
-try {
-const controller = new AbortController();
-const apiTimeout = setTimeout(() => controller.abort(), 10000);
-const response = await fetch(
-`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1&extratags=1&namedetails=1`,
-{ headers: { 'User-Agent': 'NaswarApp/1.0' }, signal: controller.signal }
-);
-clearTimeout(apiTimeout);
-if (!response.ok) throw new Error("Map API Error");
-const data = await response.json();
-if (data && data.address) {
-const addr = data.address;
-const placeName = addr.amenity || addr.shop || addr.building || addr.tourism || addr.historic || addr.leisure || addr.office || '';
-const localArea = addr.neighbourhood || addr.suburb || addr.hamlet || addr.village || addr.quarter || '';
-const road = addr.road || addr.pedestrian || addr.street || '';
-const city = addr.town || addr.city || addr.county || 'Bannu';
-let finalAddress = "";
-if (placeName) {
-finalAddress += placeName + ", ";
-}
-if (road) {
-finalAddress += road + ", ";
-} else if (!placeName) {
-finalAddress += "Near ";
-}
-if (localArea) {
-finalAddress += localArea + ", ";
-}
-finalAddress += city;
-if (finalAddress.trim() === "Bannu" || finalAddress.trim() === "Near Bannu") {
-const parts = data.display_name.split(', ');
-finalAddress = parts.slice(0, 3).join(', ');
-}
-addressInput.value = `${finalAddress} (${coordsText})`;
-statusDiv.textContent = `◆ Location Found: ${localArea || placeName || city}`;
-statusDiv.style.color = "var(--accent-emerald)";
-if(typeof showToast === 'function') showToast("Address updated successfully", "success");
-} else {
-throw new Error("Address not found");
-}
-} catch (error) {
-console.error('An unexpected error occurred.', error);
-showToast('An unexpected error occurred.', 'error');
-addressInput.value = `GPS: ${coordsText}`;
-statusDiv.textContent = "Address lookup failed. Saved GPS Coordinates.";
-statusDiv.style.color = "var(--warning)";
-} finally {
-if(btn) btn.disabled = false;
-}
-}, (error) => {
-let msg = "Location error.";
-switch(error.code) {
-case error.PERMISSION_DENIED: msg = " Permission denied. Check Phone Settings."; break;
-case error.POSITION_UNAVAILABLE: msg = " Weak GPS signal. Go outside."; break;
-case error.TIMEOUT: msg = " GPS timeout. Try again."; break;
-}
-statusDiv.textContent = msg;
-statusDiv.style.color = "var(--danger)";
-if(btn) btn.disabled = false;
-}, gpsOptions);
-}
-function openRepCustomerEditModal(customerName) {
-document.getElementById('rep-edit-cust-name').value = customerName;
-const contact = repCustomers.find(c => c && c.name && c.name.toLowerCase() === customerName.toLowerCase());
-const saleRecord = repSales.find(s => s && s.customerName === customerName && s.salesRep === currentRepProfile && s.customerPhone);
-document.getElementById('rep-edit-cust-phone').value = contact?.phone || saleRecord?.customerPhone || '';
-document.getElementById('rep-edit-cust-address').value = contact?.address || '';
-document.getElementById('rep-edit-cust-old-debit').value = contact?.oldDebit || 0;
-requestAnimationFrame(() => {
-document.body.style.overflow = 'hidden';
-document.documentElement.style.overflow = 'hidden';
-document.getElementById('repCustomerEditOverlay').style.display = 'flex';
-});
-}
-function closeRepCustomerEditModal() {
-requestAnimationFrame(() => {
-document.body.style.overflow = '';
-document.documentElement.style.overflow = '';
-document.getElementById('repCustomerEditOverlay').style.display = 'none';
-});
-}
-async function saveRepCustomerDetails() {
-const name = document.getElementById('rep-edit-cust-name').value.trim();
-const phone = document.getElementById('rep-edit-cust-phone').value.trim();
-const address = document.getElementById('rep-edit-cust-address').value.trim();
-const oldDebit = parseFloat(document.getElementById('rep-edit-cust-old-debit').value) || 0;
-if (!name) { showToast('Customer name is required', 'error'); return; }
-try {
-let contact = repCustomers.find(c => c && c.name && c.name.toLowerCase() === name.toLowerCase());
-const previousOldDebit = contact?.oldDebit || 0;
-if (contact) {
-contact.phone = phone; contact.address = address; contact.oldDebit = oldDebit; contact.updatedAt = getTimestamp();
-} else {
-contact = { id: generateUUID(), name, phone, address, oldDebit,
-createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
-repCustomers.push(contact);
-}
-await idb.set('rep_customers', repCustomers);
-let salesArray = await idb.get('rep_sales', []);
-if (!Array.isArray(salesArray)) salesArray = [];
-const oldDebtIdx = salesArray.findIndex(s => s && s.customerName === name &&
-s.transactionType === 'OLD_DEBT' && s.salesRep === currentRepProfile);
-let oldDebtModified = false, oldDebtRecord = null;
-if (oldDebit > 0) {
-if (oldDebtIdx !== -1) {
-const tx = salesArray[oldDebtIdx];
-tx.totalValue = oldDebit; tx.customerPhone = phone; tx.timestamp = getTimestamp();
-tx.updatedAt = getTimestamp(); tx.date = new Date().toISOString().split('T')[0];
-tx.creditReceived = false; tx.partialPaymentReceived = 0;
-if (!tx.time) tx.time = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-oldDebtModified = true; oldDebtRecord = tx;
-} else {
-const tx = { id: generateUUID(), date: new Date().toISOString().split('T')[0],
-customerName: name, customerPhone: phone, salesRep: currentRepProfile, quantity: 0,
-supplyStore: 'N/A', paymentType: 'CREDIT', transactionType: 'OLD_DEBT',
-totalValue: oldDebit, creditReceived: false, partialPaymentReceived: 0,
-time: new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}),
-timestamp: getTimestamp(), createdAt: getTimestamp(), updatedAt: getTimestamp(),
-notes: 'Previous balance brought forward', isRepModeEntry: true };
-salesArray.push(tx); oldDebtModified = true; oldDebtRecord = tx;
-}
-} else if (oldDebit === 0 && oldDebtIdx !== -1) {
-salesArray.splice(oldDebtIdx, 1); oldDebtModified = true;
-}
-let phoneUpdated = false;
-salesArray.forEach(s => { if (s && s.customerName === name && s.customerPhone !== phone) { s.customerPhone = phone; phoneUpdated = true; } });
-repSales.length = 0; repSales.push(...salesArray);
-if (oldDebtModified || phoneUpdated) {
-await saveWithTracking('rep_sales', salesArray);
-if (oldDebtRecord) await saveRecordToFirestore('rep_sales', oldDebtRecord);
-}
-const message = oldDebit > 0 ? `Rep customer updated with old debt of ₨${oldDebit.toLocaleString()}`
-: (oldDebit === 0 && previousOldDebit > 0) ? 'Rep customer updated and old debt cleared'
-: 'Rep customer details updated successfully';
-showToast(message, 'success');
-closeRepCustomerEditModal();
-await new Promise(r => setTimeout(r, 350));
-const overlay = document.getElementById('repCustomerManagementOverlay');
-if (overlay && overlay.style.display === 'flex') await renderRepCustomerTransactions(currentManagingRepCustomer || name);
-if (typeof renderRepCustomerTable === 'function') renderRepCustomerTable();
-notifyDataChange('rep');
-triggerAutoSync();
-} catch (error) {
-showToast('Failed to save rep customer details. Please try again.', 'error');
-}
-}
-async function fetchRepDeviceLocation() {
-const statusDiv = document.getElementById('rep-location-status');
-const addressInput = document.getElementById('rep-edit-cust-address');
-const btn = document.querySelector('button[onclick="fetchRepDeviceLocation()"]');
-if (!navigator.geolocation) {
-statusDiv.textContent = 'GPS not supported on this device.';
-statusDiv.style.color = 'var(--danger)';
-return;
-}
-if (btn) btn.disabled = true;
-statusDiv.innerHTML = '<span class="update-indicator"></span> Pinpointing satellite location...';
-statusDiv.style.color = 'var(--accent)';
-addressInput.placeholder = 'Fetching location...';
-const gpsOptions = { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 };
-navigator.geolocation.getCurrentPosition(async (position) => {
-const lat = position.coords.latitude;
-const lon = position.coords.longitude;
-const accuracy = position.coords.accuracy;
-const coordsText = `${safeNumber(lat, 0).toFixed(2)}, ${safeNumber(lon, 0).toFixed(2)}`;
-statusDiv.textContent = `GPS Accuracy: ±${Math.round(accuracy)}m. Decoding name...`;
-try {
-const controller = new AbortController();
-const apiTimeout = setTimeout(() => controller.abort(), 10000);
-const response = await fetch(
-`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1&extratags=1&namedetails=1`,
-{ headers: { 'User-Agent': 'NaswarApp/1.0' }, signal: controller.signal }
-);
-clearTimeout(apiTimeout);
-if (!response.ok) throw new Error('Map API Error');
-const data = await response.json();
-if (data && data.address) {
-const addr = data.address;
-const placeName = addr.amenity || addr.shop || addr.building || addr.tourism || addr.historic || addr.leisure || addr.office || '';
-const localArea = addr.neighbourhood || addr.suburb || addr.hamlet || addr.village || addr.quarter || '';
-const road = addr.road || addr.pedestrian || addr.street || '';
-const city = addr.town || addr.city || addr.county || 'Bannu';
-let finalAddress = '';
-if (placeName) finalAddress += placeName + ', ';
-if (road) finalAddress += road + ', ';
-else if (!placeName) finalAddress += 'Near ';
-if (localArea) finalAddress += localArea + ', ';
-finalAddress += city;
-if (finalAddress.trim() === 'Bannu' || finalAddress.trim() === 'Near Bannu') {
-finalAddress = data.display_name.split(', ').slice(0, 3).join(', ');
-}
-addressInput.value = `${finalAddress} (${coordsText})`;
-statusDiv.textContent = `◆ Location Found: ${localArea || placeName || city}`;
-statusDiv.style.color = 'var(--accent-emerald)';
-if (typeof showToast === 'function') showToast('Address updated successfully', 'success');
-} else { throw new Error('Address not found'); }
-} catch (error) {
-console.error('An unexpected error occurred.', error);
-showToast('An unexpected error occurred.', 'error');
-addressInput.value = `GPS: ${coordsText}`;
-statusDiv.textContent = 'Address lookup failed. Saved GPS Coordinates.';
-statusDiv.style.color = 'var(--warning)';
-} finally { if (btn) btn.disabled = false; }
-}, (error) => {
-let msg = 'Location error.';
-if (error.code === error.PERMISSION_DENIED) msg = ' Permission denied. Check Phone Settings.';
-else if (error.code === error.POSITION_UNAVAILABLE) msg = ' Weak GPS signal. Go outside.';
-else if (error.code === error.TIMEOUT) msg = ' GPS timeout. Try again.';
-statusDiv.textContent = msg;
-statusDiv.style.color = 'var(--danger)';
-if (btn) btn.disabled = false;
-}, gpsOptions);
-}
-async function exportRepCustomerToPDF() {
-const titleElement = document.getElementById('repManageCustomerTitle');
-if (!titleElement) { showToast('No rep customer selected', 'warning'); return; }
-const titleHTML = titleElement.innerHTML;
-const nameMatch = titleHTML.match(/<span>([^<]+)<\/span>/) || titleHTML.match(/^([^<]+)/);
-const customerName = nameMatch ? nameMatch[1].trim() : titleElement.innerText.split('\n')[0].trim();
-if (!customerName) { showToast('No rep customer selected', 'warning'); return; }
-const rangeSelect = document.getElementById('repCustomerPdfRange');
-const range = rangeSelect ? rangeSelect.value : 'all';
-showToast("Generating PDF...", "info");
-try {
-if (!window.jspdf) {
-await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
-await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js');
-await new Promise(r => setTimeout(r, 200));
-}
-if (!window.jspdf || !window.jspdf.jsPDF) throw new Error("Failed to load PDF library.");
-let transactions = repSales.filter(s =>
-s &&
-s.customerName === customerName &&
-s.salesRep === currentRepProfile
-);
-const now = new Date();
-const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-if (range !== 'all') {
-transactions = transactions.filter(t => {
-if (!t.date) return false;
-const d = new Date(t.date);
-switch(range) {
-case 'today': return d >= today;
-case 'week': { const w = new Date(today); w.setDate(w.getDate() - 7); return d >= w; }
-case 'month': { const m = new Date(today); m.setMonth(m.getMonth() - 1); return d >= m; }
-case 'year': { const y = new Date(today); y.setFullYear(y.getFullYear() - 1); return d >= y; }
-default: return true;
-}
-});
-}
-
-transactions.sort((a, b) => {
-if (a.isMerged && !b.isMerged) return -1;
-if (!a.isMerged && b.isMerged) return 1;
-const ap = (a.paymentType === 'CREDIT' && !a.creditReceived) ? 1 : 0;
-const bp = (b.paymentType === 'CREDIT' && !b.creditReceived) ? 1 : 0;
-if (bp !== ap) return bp - ap;
-return new Date(a.date) - new Date(b.date);
-});
-const contact = repCustomers.find(c => c && c.name && c.name.toLowerCase() === customerName.toLowerCase());
-const phone = contact?.phone || transactions.find(t => t.customerPhone)?.customerPhone || 'N/A';
-const address = contact?.address || transactions.find(t => t.customerAddress)?.customerAddress || 'N/A';
-const { jsPDF } = window.jspdf;
-const doc = new jsPDF('p', 'mm', 'a4');
-const pageW = doc.internal.pageSize.getWidth();
-const hdrColor = [40, 167, 69];
-doc.setFillColor(...hdrColor);
-doc.rect(0, 0, pageW, 22, 'F');
-doc.setFontSize(16); doc.setFont(undefined, 'bold'); doc.setTextColor(255, 255, 255);
-doc.text('GULL AND ZUBAIR NASWAR DEALERS', pageW / 2, 10, { align: 'center' });
-doc.setFontSize(9); doc.setFont(undefined, 'normal');
-doc.text('Naswar Manufacturers & Dealers · Rep Sales Tab Statement', pageW / 2, 17, { align: 'center' });
-const rangeName = range === 'all' ? 'All Time' : range === 'today' ? 'Today' :
-range === 'week' ? 'This Week' : range === 'month' ? 'This Month' : 'This Year';
-doc.setFontSize(12); doc.setFont(undefined, 'bold'); doc.setTextColor(50, 50, 50);
-doc.text(`Rep Customer Account Statement · ${rangeName}`, pageW / 2, 30, { align: 'center' });
-doc.setFontSize(9); doc.setFont(undefined, 'normal'); doc.setTextColor(80, 80, 80);
-let yPos = 38;
-doc.setFont(undefined, 'bold'); doc.text('Customer:', 14, yPos);
-doc.setFont(undefined, 'normal'); doc.text(customerName, 36, yPos);
-doc.setFont(undefined, 'bold'); doc.text('Phone:', 14, yPos + 5);
-doc.setFont(undefined, 'normal'); doc.text(phone, 36, yPos + 5);
-doc.setFont(undefined, 'bold'); doc.text('Address:', 14, yPos + 10);
-doc.setFont(undefined, 'normal'); doc.text(address.substring(0, 50), 36, yPos + 10);
-doc.setFont(undefined, 'bold'); doc.text('Sales Rep:', pageW / 2, yPos);
-doc.setFont(undefined, 'normal'); doc.text(currentRepProfile || 'N/A', pageW / 2 + 22, yPos);
-doc.setFont(undefined, 'bold'); doc.text('Generated:', pageW / 2, yPos + 5);
-doc.setFont(undefined, 'normal');
-doc.text(now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }), pageW / 2 + 22, yPos + 5);
-yPos += 18;
-doc.setDrawColor(...hdrColor); doc.setLineWidth(0.5);
-doc.line(14, yPos, pageW - 14, yPos);
-yPos += 5;
-if (transactions.length > 0) {
-// Use stored unitPrice (set at save/merge time) or fixed getSalePriceForStore —
-// never divide totalValue/quantity which gives a weighted/partial-payment average.
-const getSalePrice = (t) => {
-  if (t.unitPrice && t.unitPrice > 0) return t.unitPrice;
-  return getSalePriceForStore(t.supplyStore || 'STORE_A');
-};
-
-const buildRepRow = (t, runBal) => {
-  const pt = t.paymentType || 'CASH';
-  const isOldDebt = t.transactionType === 'OLD_DEBT';
-  const sp = getSalePrice(t);
-  let debit=0, credit=0, typeLabel='', detailLabel='', displayDate=formatDisplayDate(t.date);
-  if (isOldDebt){debit=parseFloat(t.totalValue)||0;credit=parseFloat(t.partialPaymentReceived)||0;typeLabel='OLD DEBT';detailLabel=t.notes||'Brought forward';}
-  else if(pt==='CASH'){const v=t.totalValue||(t.quantity||0)*sp;debit=credit=v;typeLabel='CASH';detailLabel=`${safeToFixed(t.quantity||0,2)} kg \xd7 Rs ${safeToFixed(sp,0)}`;}
-  else if(pt==='CREDIT'&&!t.creditReceived){const v=t.totalValue||(t.quantity||0)*sp;const p=parseFloat(t.partialPaymentReceived)||0;debit=v;credit=p;typeLabel=p>0?'CREDIT\n(PARTIAL)':'CREDIT';detailLabel=`${safeToFixed(t.quantity||0,2)} kg \xd7 Rs ${safeToFixed(sp,0)}`;if(p>0)detailLabel+=`\nPaid:Rs ${safeToFixed(p,2)} Due:Rs ${safeToFixed(v-p,2)}`;}
-  else if(pt==='CREDIT'&&t.creditReceived){const v=t.totalValue||(t.quantity||0)*sp;debit=credit=v;typeLabel='CREDIT\n(PAID)';detailLabel=`${safeToFixed(t.quantity||0,2)} kg \xd7 Rs ${safeToFixed(sp,0)}`;displayDate=formatDisplayDate(t.creditReceivedDate||t.date);}
-  else if(pt==='COLLECTION'){credit=parseFloat(t.totalValue)||0;typeLabel='COLLECTION';detailLabel='Cash payment received';displayDate=formatDisplayDate(t.creditReceivedDate||t.date);}
-  else if(pt==='PARTIAL_PAYMENT'){credit=parseFloat(t.totalValue)||0;typeLabel='PARTIAL\nPAYMENT';detailLabel='Partial payment received';displayDate=formatDisplayDate(t.creditReceivedDate||t.date);}
-  runBal.val += (debit - credit);
-  const bal = Math.abs(runBal.val)<0.01?'SETTLED':runBal.val>0?'Rs '+safeToFixed(runBal.val,2):'OVERPAID\nRs '+safeToFixed(Math.abs(runBal.val),2);
-  return {row:[displayDate,typeLabel,detailLabel.substring(0,55),debit>0?'Rs '+safeToFixed(debit,2):'-',credit>0?'Rs '+safeToFixed(credit,2):'-',bal],debit,credit,qty:t.quantity||0};
-};
-const mergedRepTxns = transactions.filter(t => t.isMerged === true);
-const normalRepTxns = transactions.filter(t => !t.isMerged);
-
-if (mergedRepTxns.length > 0) {
-  yPos = _pdfDrawMergedSectionHeader(doc, yPos, pageW, 'YEAR-END OPENING BALANCES (Carried Forward)');
-  const mRunBal = {val:0};
-  const mergedRows = mergedRepTxns.map(t => {
-    const ms = t.mergedSummary||{};
-    const isSettled = ms.isSettled || t.creditReceived;
-    const netOut = ms.netOutstanding!=null?ms.netOutstanding:(t.totalValue||0);
-    const details = [_pdfMergedPeriodLabel(t), _pdfMergedCountLabel(t),
-      !isSettled?`Net due: Rs ${safeToFixed(netOut,2)}`:'Settled'].filter(Boolean).join('\n');
-    mRunBal.val += netOut;
-    const pt = t.paymentType||'CASH';
-    return [formatDisplayDate(t.date), isSettled?'SETTLED\n(MERGED)':(pt==='CREDIT'?'CREDIT\n(MERGED)':'CASH\n(MERGED)'),
-      details.substring(0,70), netOut>0?'Rs '+safeToFixed(netOut,2):'-',
-      isSettled?'Rs '+safeToFixed(ms.cashSales||0,2):'-',
-      isSettled?'SETTLED':'Rs '+safeToFixed(netOut,2)];
-  });
-  const mNet = mergedRepTxns.reduce((s,t)=>s+((t.mergedSummary||{}).netOutstanding||t.totalValue||0),0);
-  mergedRows.push(['','SUBTOTAL',`${mergedRepTxns.length} year-end record${mergedRepTxns.length!==1?'s':''}`,
-    mNet>0?'Rs '+safeToFixed(mNet,2):'-','',mNet<=0.01?'SETTLED':'Rs '+safeToFixed(mNet,2)]);
-  doc.autoTable({startY:yPos,head:[['Date','Type','Year Period / Summary','Outstanding','Settled','Balance']],body:mergedRows,theme:'grid',
-    headStyles:{fillColor:PDF_MERGED_HDR_COLOR,textColor:255,fontSize:8.5,fontStyle:'bold',halign:'center'},
-    styles:{fontSize:7.5,cellPadding:2.5,lineWidth:0.15,lineColor:[200,180,230],overflow:'linebreak'},
-    columnStyles:{0:{cellWidth:22,halign:'center'},1:{cellWidth:22,halign:'center',fontStyle:'bold'},2:{cellWidth:52},3:{cellWidth:27,halign:'right',fontStyle:'bold'},4:{cellWidth:27,halign:'right',fontStyle:'bold'},5:{cellWidth:26,halign:'center',fontStyle:'bold'}},
-    didParseCell:function(data){const isSub=data.row.index===mergedRows.length-1;if(isSub){data.cell.styles.fillColor=[230,210,255];data.cell.styles.fontStyle='bold';}else{data.cell.styles.fillColor=PDF_MERGED_ROW_COLOR;data.cell.styles.textColor=[80,40,120];}
-    if(data.column.index===3&&!isSub)data.cell.styles.textColor=[180,40,40];if(data.column.index===4&&!isSub)data.cell.styles.textColor=[40,130,60];if(data.column.index===5&&!isSub){const txt=(data.cell.text||[]).join('');data.cell.styles.textColor=txt==='SETTLED'?[100,100,100]:[126,34,206];}},
-    margin:{left:14,right:14}});
-  yPos = doc.lastAutoTable.finalY + 6;
-  if (yPos > 255) { doc.addPage(); yPos = 20; }
-}
-
-const rows = [];
-const txRunBal = {val:0};
-let totDebit=0,totCredit=0,totQty=0;
-for (const t of normalRepTxns) {
-  const r = buildRepRow(t, txRunBal);
-  rows.push(r.row); totDebit+=r.debit; totCredit+=r.credit; totQty+=r.qty;
-}
-const finalBal = totDebit - totCredit;
-if (normalRepTxns.length > 0) {
-  doc.setFontSize(8.5);doc.setFont(undefined,'bold');doc.setTextColor(...hdrColor);
-  doc.text('INDIVIDUAL TRANSACTIONS',14,yPos);doc.setTextColor(80,80,80);doc.setFont(undefined,'normal');yPos+=5;
-  rows.push(['TOTALS','',`${safeToFixed(totQty,2)} kg total`,'Rs '+safeToFixed(totDebit,2),'Rs '+safeToFixed(totCredit,2),
-    Math.abs(finalBal)<0.01?'SETTLED':finalBal>0?'DUE\nRs '+safeToFixed(finalBal,2):'OVERPAID\nRs '+safeToFixed(Math.abs(finalBal),2)]);
-  doc.autoTable({startY:yPos,head:[['Date','Type','Details','Debit (Sale)','Credit (Rcvd)','Balance']],body:rows,theme:'grid',
-    headStyles:{fillColor:hdrColor,textColor:255,fontSize:8.5,fontStyle:'bold',halign:'center'},
-    styles:{fontSize:7.5,cellPadding:2.5,lineWidth:0.15,lineColor:[180,180,180],overflow:'linebreak'},
-    columnStyles:{0:{cellWidth:22,halign:'center'},1:{cellWidth:22,halign:'center',fontStyle:'bold'},2:{cellWidth:52},3:{cellWidth:27,halign:'right',textColor:[220,53,69],fontStyle:'bold'},4:{cellWidth:27,halign:'right',textColor:[40,167,69],fontStyle:'bold'},5:{cellWidth:26,halign:'center',fontStyle:'bold'}},
-    didParseCell:function(data){const isTotal=data.row.index===rows.length-1;if(isTotal){data.cell.styles.fontStyle='bold';data.cell.styles.fillColor=[235,255,235];data.cell.styles.fontSize=9;}
-    if(data.column.index===1&&!isTotal){const txt=(data.cell.text||[]).join('');if(txt.includes('CASH'))data.cell.styles.textColor=[40,167,69];if(txt.includes('CREDIT'))data.cell.styles.textColor=[200,100,0];if(txt.includes('COLLECTION'))data.cell.styles.textColor=[40,167,69];if(txt.includes('PARTIAL'))data.cell.styles.textColor=[200,100,0];if(txt.includes('OLD DEBT'))data.cell.styles.textColor=[220,53,69];}
-    if(data.column.index===5&&!isTotal){const txt=(data.cell.text||[]).join('');if(txt==='SETTLED')data.cell.styles.textColor=[100,100,100];else if(txt.includes('OVERPAID'))data.cell.styles.textColor=[40,167,69];else data.cell.styles.textColor=[220,53,69];}},
-    margin:{left:14,right:14}});
-}
-const afterY = (normalRepTxns.length > 0 ? doc.lastAutoTable.finalY : yPos - 5) + 5;
-if (afterY < 268) {
-doc.setFillColor(245, 255, 245);
-doc.roundedRect(14, afterY, pageW - 28, 20, 2, 2, 'F');
-doc.setDrawColor(...hdrColor); doc.setLineWidth(0.3);
-doc.roundedRect(14, afterY, pageW - 28, 20, 2, 2, 'S');
-doc.setFontSize(8); doc.setFont(undefined, 'normal');
-doc.setTextColor(220, 53, 69);
-doc.text(`Total Debit (Sales): Rs ${safeToFixed(totDebit, 2)}`, 20, afterY + 7);
-doc.setTextColor(40, 167, 69);
-doc.text(`Total Credit (Rcvd): Rs ${safeToFixed(totCredit, 2)}`, 20, afterY + 14);
-doc.setTextColor(Math.abs(finalBal) < 0.01 ? 100 : finalBal > 0 ? 220 : 40,
-Math.abs(finalBal) < 0.01 ? 100 : finalBal > 0 ? 53 : 167,
-Math.abs(finalBal) < 0.01 ? 100 : finalBal > 0 ? 69 : 69);
-doc.setFont(undefined, 'bold');
-const balStr = Math.abs(finalBal) < 0.01 ? 'SETTLED'
-: finalBal > 0 ? `Outstanding Due: Rs ${safeToFixed(finalBal, 2)}`
-: `Overpaid by: Rs ${safeToFixed(Math.abs(finalBal), 2)}`;
-doc.text(balStr, 110, afterY + 10.5);
-}
-} else {
-doc.setFont(undefined, 'normal'); doc.setFontSize(10); doc.setTextColor(150);
-doc.text('No sales recorded for this period.', pageW / 2, yPos + 15, { align: 'center' });
-}
-const pageCount = doc.internal.getNumberOfPages();
-for (let i = 1; i <= pageCount; i++) {
-doc.setPage(i);
-doc.setFontSize(7); doc.setTextColor(160);
-doc.text(
-`Generated on ${now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })} at ${now.toLocaleTimeString('en-US')} | GULL AND ZUBAIR NASWAR DEALERS`,
-pageW / 2, 291, { align: 'center' }
-);
-doc.text(`Page ${i} of ${pageCount}`, pageW / 2, 287, { align: 'center' });
-}
-await new Promise(r => setTimeout(r, 100));
-const filename = `Rep_Customer_Statement_${customerName.replace(/[^a-z0-9]/gi, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
-doc.save(filename);
-showToast("PDF exported successfully", "success");
-} catch (error) {
-showToast("Error generating PDF: " + error.message, "error");
-}
-}
-const refreshEntityList = renderEntityTable;
-function renderRepHistory() {
-const list = document.getElementById('repHistoryList');
-if (!list) return;
-list.innerHTML = '';
-const dateInput = document.getElementById('rep-date');
-const selectedDate = dateInput && dateInput.value ? dateInput.value : new Date().toISOString().split('T')[0];
-const isToday = selectedDate === new Date().toISOString().split('T')[0];
-const headerText = isToday ? "Today's Activity" : `Activity for ${selectedDate}`;
-const activityData = repSales
-.filter(s =>
-s.salesRep === currentRepProfile &&
-s.date === selectedDate &&
-s.paymentType !== 'PARTIAL_PAYMENT'
-)
-.sort((a,b) => b.timestamp - a.timestamp);
-if(activityData.length === 0) {
-list.innerHTML = `<div class="u-empty-state-sm" >No activity found for ${esc(selectedDate)}</div>`;
-return;
-}
-let tableHTML = `
-<div class="section liquid-card" style="padding: 15px;">
-<h4 style="margin: 0 0 15px 0; color: var(--accent); font-size: 0.9rem;">${esc(headerText)}</h4>
-<div style="max-height: 400px; overflow-y: auto;">
-`;
-activityData.forEach(item => {
-let typeIcon = '';
-let typeColor = '';
-let qtyAmount = '';
-if (item.paymentType === 'COLLECTION') {
-typeIcon = '';
-typeColor = 'var(--accent-emerald)';
-qtyAmount = `Collection: ${item.totalValue.toFixed(2)}`;
-} else if (item.paymentType === 'CREDIT') {
-typeIcon = '';
-typeColor = 'var(--warning)';
-qtyAmount = item.transactionType === 'OLD_DEBT'
-? `Previous Balance: ${item.totalValue.toFixed(2)}`
-: `${item.quantity.toFixed(2)} kg - ${item.totalValue.toFixed(2)}`;
-} else {
-typeIcon = '';
-typeColor = 'var(--accent)';
-qtyAmount = `${item.quantity.toFixed(2)} kg - ${item.totalValue.toFixed(2)}`;
-}
-tableHTML += `
-<div style="
-display: flex;
-justify-content: space-between;
-align-items: center;
-padding: 12px;
-margin-bottom: 8px;
-background: var(--input-bg);
-border-radius: 10px;
-border: 1px solid var(--glass-border);
-transition: all 0.2s;
-">
-<div class="u-flex-1" >
-<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
-<span style="font-size: 1.2rem;">${typeIcon}</span>
-<strong style="color: var(--text-main); font-size: 0.9rem;">${esc(item.customerName)}</strong>
-${item.isMerged ? _mergedBadgeHtml(item, {inline:true}) : ''}
-</div>
-<div style="font-size: 0.75rem; color: ${typeColor}; font-weight: 600;">
-${qtyAmount}
-</div>
-</div>
-<div style="text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 5px;">
-<div class="u-fs-sm u-text-muted" >
-${esc(item.time || '')}
-</div>
-${item.isMerged ? '' : `<button class="tbl-action-btn danger" onclick="(async () => { await deleteRepTransaction('${esc(item.id)}') })()">Delete</button>`}
-</div>
-</div>
-`;
-});
-tableHTML += `
-</div>
-</div>
-`;
-list.innerHTML = tableHTML;
-}
-async function refreshRepUI(force = false) {
-if (idb && idb.getBatch) {
-try {
-const repKeys = ['rep_sales', 'rep_customers'];
-const repDataMap = await idb.getBatch(repKeys);
-if (repDataMap.get('rep_sales') !== undefined && repDataMap.get('rep_sales') !== null) {
-let freshRepSales = repDataMap.get('rep_sales') || [];
-let fixedCount = 0;
-if (Array.isArray(freshRepSales) && freshRepSales.length > 0) {
-freshRepSales = freshRepSales.map(record => {
-if (!record.id || !validateUUID(record.id) ||
-!record.createdAt || !validateTimestamp(record.createdAt) ||
-!record.updatedAt || !validateTimestamp(record.updatedAt)) {
-record = ensureRecordIntegrity(record, false, true);
-fixedCount++;
-}
-return record;
-});
-if (fixedCount > 0) {
-await idb.set('rep_sales', freshRepSales);
-}
-freshRepSales.sort((a, b) => compareTimestamps(getRecordTimestamp(b), getRecordTimestamp(a)));
-}
-repSales = freshRepSales;
-}
-if (repDataMap.get('rep_customers') !== undefined && repDataMap.get('rep_customers') !== null) {
-let freshRepCustomers = repDataMap.get('rep_customers') || [];
-let fixedCount = 0;
-if (Array.isArray(freshRepCustomers) && freshRepCustomers.length > 0) {
-freshRepCustomers = freshRepCustomers.map(record => {
-if (!record.id || !validateUUID(record.id) ||
-!record.createdAt || !validateTimestamp(record.createdAt) ||
-!record.updatedAt || !validateTimestamp(record.updatedAt)) {
-record = ensureRecordIntegrity(record, false, true);
-fixedCount++;
-}
-return record;
-});
-if (fixedCount > 0) {
-await idb.set('rep_customers', freshRepCustomers);
-}
-}
-repCustomers = freshRepCustomers;
-}
-} catch (error) {
-console.error('Failed to save data locally.', error);
-showToast('Failed to save data locally.', 'error');
-}
-}
-const adminRepSel = document.getElementById('admin-rep-selector');
-if (adminRepSel && adminRepSel.value !== currentRepProfile) {
-adminRepSel.value = currentRepProfile;
-}
-renderRepCustomerTable();
-renderRepHistory();
-if (appMode === 'admin') {
-if (typeof updateRepLiveMap === 'function') {
-setTimeout(updateRepLiveMap, 200);
-}
-}
-}
 async function forceAppModeFromCloud(targetMode, repName = null) {
 if (!firebaseDB || !currentUser) {
 showToast('Not logged in', 'error', 3000);
@@ -15962,11 +12487,9 @@ console.warn('enforceRepModeLock: failed to read mode from IDB, defaulting to ad
 }
 }
 function preventAdminAccess() {
-// Save the true original showTab once so wrapping is never nested across calls
 if (!window._originalShowTab && typeof window.showTab === 'function') {
 window._originalShowTab = window.showTab;
 }
-// Always reset to the original before re-applying any wrapper
 if (window._originalShowTab) window.showTab = window._originalShowTab;
 if (appMode === 'rep') {
 const originalShowTab = window._originalShowTab || window.showTab;
@@ -16061,7 +12584,6 @@ location.reload();
 function unlockToAdminMode() {
 unlockAdminMode();
 }
-
 async function deleteRepTransaction(id) {
 if (!id || !validateUUID(id)) {
 showToast('Invalid transaction ID', 'error');
@@ -16088,34 +12610,32 @@ let confirmMsg, confirmTitle;
 if (_rtIsOldDebt) {
 confirmTitle = '\u26a0 Delete Old Debt Record';
 confirmMsg = `Permanently delete an OLD DEBT record for ${_rtCust} (Rep: ${_rtRep}).`;
-confirmMsg += `\nBalance: ${_rtAmt.toFixed(2)}`;
+confirmMsg += `\nBalance: ${fmtAmt(_rtAmt)}`;
 confirmMsg += `\nRecorded: ${_rtDate}`;
 if (transaction.notes) confirmMsg += `\nNote: ${transaction.notes}`;
-confirmMsg += `\n\n\u26a0 Warning: This will erase the carried-forward balance from this rep customer's history. If the debt is still owed, it will vanish from all records permanently.`;
-confirmMsg += `\n\nOnly delete if this was entered by mistake or has already been fully settled elsewhere.`;
+confirmMsg += `\n\n\u26a0 Warning: This will erase the carried-forward balance from this rep customer's history permanently.`;
 } else if (_rtPayType === 'COLLECTION') {
 confirmTitle = 'Delete Rep Bulk Collection';
-confirmMsg = `Delete this bulk collection payment?\n\nRep: ${_rtRep}\nCustomer: ${_rtCust}\nDate: ${_rtDate}\nAmount Collected: ${_rtAmt.toFixed(2)}`;
-confirmMsg += `\n\n\u21a9 This will reverse the collection and restore the customer's outstanding balance with this rep.`;
+confirmMsg = `Delete this bulk collection payment?\n\nRep: ${_rtRep}\nCustomer: ${_rtCust}\nDate: ${_rtDate}\nAmount Collected: ${fmtAmt(_rtAmt)}`;
+confirmMsg += `\n\n\u21a9 This will reverse the collection and restore the customer's outstanding balance.`;
 } else if (_rtPayType === 'PARTIAL_PAYMENT') {
 confirmTitle = 'Delete Rep Partial Payment';
-confirmMsg = `Delete this partial payment?\n\nRep: ${_rtRep}\nCustomer: ${_rtCust}\nDate: ${_rtDate}\nPayment: ${_rtAmt.toFixed(2)}`;
-confirmMsg += `\n\n\u21a9 This will reverse the partial payment and restore the pending credit balance on the linked rep sale.`;
+confirmMsg = `Delete this partial payment?\n\nRep: ${_rtRep}\nCustomer: ${_rtCust}\nDate: ${_rtDate}\nPayment: ${fmtAmt(_rtAmt)}`;
+confirmMsg += `\n\n\u21a9 This will reverse the partial payment and restore the pending credit balance.`;
 } else if (_rtPayType === 'CREDIT') {
 confirmTitle = 'Delete Rep Credit Sale';
-confirmMsg = `Delete this credit sale permanently?\n\nRep: ${_rtRep}\nCustomer: ${_rtCust}\nDate: ${_rtDate}\nQty: ${_rtQty} kg — ${_rtAmt.toFixed(2)}`;
-if (_rtPartialPaid > 0) confirmMsg += `\n\n\u26a0 ${_rtPartialPaid.toFixed(2)} has already been partially collected. Deleting will erase both the sale and the partial payment record.`;
-else if (transaction.creditReceived) confirmMsg += `\n\n\u26a0 This sale is already marked PAID. Deleting it will remove the payment record from this rep\'s account.`;
-else confirmMsg += `\n\n\u26a0 This credit sale is UNPAID. Deleting will remove the outstanding balance from the rep customer's account and affect the rep's sales totals.`;
+confirmMsg = `Delete this credit sale permanently?\n\nRep: ${_rtRep}\nCustomer: ${_rtCust}\nDate: ${_rtDate}\nQty: ${_rtQty} kg — ${fmtAmt(_rtAmt)}`;
+if (_rtPartialPaid > 0) confirmMsg += `\n\n\u26a0 ${fmtAmt(_rtPartialPaid)} partially collected. Deleting will erase both the sale and partial payment.`;
+else if (transaction.creditReceived) confirmMsg += `\n\n\u26a0 This sale is already marked PAID. Deleting will remove the payment record.`;
+else confirmMsg += `\n\n\u26a0 This credit sale is UNPAID. Deleting will remove the outstanding balance.`;
 } else {
 confirmTitle = 'Delete Rep Cash Sale';
-confirmMsg = `Delete this cash sale permanently?\n\nRep: ${_rtRep}\nCustomer: ${_rtCust}\nDate: ${_rtDate}\nQty: ${_rtQty} kg — ${_rtAmt.toFixed(2)}`;
+confirmMsg = `Delete this cash sale permanently?\n\nRep: ${_rtRep}\nCustomer: ${_rtCust}\nDate: ${_rtDate}\nQty: ${_rtQty} kg — ${fmtAmt(_rtAmt)}`;
 confirmMsg += `\n\n\u21a9 ${_rtQty} kg will be restored to inventory.`;
 }
 confirmMsg += `\n\nThis cannot be undone.`;
 if (await showGlassConfirm(confirmMsg, { title: confirmTitle || 'Delete Rep Transaction', confirmText: "Delete", danger: true })) {
 try {
-const deletedQuantity = transaction.quantity || 0;
 const wasCredit = transaction.paymentType === 'CREDIT';
 const wasPartialPayment = transaction.paymentType === 'PARTIAL_PAYMENT';
 const wasCollection = transaction.paymentType === 'COLLECTION';
@@ -16124,24 +12644,16 @@ const relatedSaleId = transaction.relatedSaleId;
 if (wasPartialPayment && relatedSaleId) {
 const relatedSale = repSales.find(s => s.id === relatedSaleId);
 if (relatedSale) {
-relatedSale.partialPaymentReceived = (relatedSale.partialPaymentReceived || 0) - paymentAmount;
-if (relatedSale.partialPaymentReceived < 0) relatedSale.partialPaymentReceived = 0;
-if (relatedSale.partialPaymentReceived === 0) {
-relatedSale.creditReceived = false;
-delete relatedSale.creditReceivedDate;
-}
+relatedSale.partialPaymentReceived = Math.max(0, (relatedSale.partialPaymentReceived || 0) - paymentAmount);
+if (relatedSale.partialPaymentReceived === 0) { relatedSale.creditReceived = false; delete relatedSale.creditReceivedDate; }
 relatedSale.updatedAt = getTimestamp();
 }
 }
-transaction.deletedAt = getTimestamp();
-transaction.updatedAt = getTimestamp();
 repSales = repSales.filter(t => t.id !== id);
-await unifiedDelete('rep_sales', repSales, id);
+await unifiedDelete('rep_sales', repSales, id, { strict: true });
 if (wasPartialPayment && relatedSaleId) {
 const relatedSale = repSales.find(s => s.id === relatedSaleId);
-if (relatedSale) {
-await saveRecordToFirestore('rep_sales', relatedSale);
-}
+if (relatedSale) await saveRecordToFirestore('rep_sales', relatedSale);
 }
 await refreshRepUI(true);
 if (currentManagingRepCustomer && typeof renderRepCustomerTransactions === 'function') {
@@ -16152,7 +12664,7 @@ triggerAutoSync();
 let message = ` ${wasPartialPayment ? 'Payment' : wasCollection ? 'Collection' : 'Transaction'} deleted!`;
 if ((wasPartialPayment || wasCollection || (wasCredit && transaction.partialPaymentReceived > 0)) && (paymentAmount > 0 || transaction.partialPaymentReceived > 0)) {
 const refundAmount = wasCredit ? transaction.partialPaymentReceived : paymentAmount;
-message += ` Payment of ${await formatCurrency(refundAmount)} reversed.`;
+message += ` Payment of ${fmtAmt(refundAmount)} reversed.`;
 }
 showToast(message, "success");
 } catch (error) {
@@ -16169,33 +12681,34 @@ const phoneContainer = document.getElementById(phoneContainerId);
 if (!phoneContainer) return;
 const allSales = isRep ?
 (Array.isArray(repSales) ? repSales : []).filter(s => s && s.salesRep === currentRepProfile) :
-(Array.isArray(customerSales) ? customerSales : []).filter(s => s && s.isRepModeEntry !== true);
-const existingNames = [...new Set(
-allSales
+(Array.isArray(customerSales) ? customerSales : []).filter(s => s && isDirectSale(s));
+const allRegistryNames = !isRep && Array.isArray(salesCustomers)
+? salesCustomers.filter(c => c && c.name).map(c => String(c.name).trim().toLowerCase())
+: Array.isArray(repCustomers)
+? repCustomers.filter(c => c && c.name).map(c => String(c.name).trim().toLowerCase())
+: [];
+const existingNames = [...new Set([
+...allSales
 .map(s => s && s.customerName ? s.customerName : null)
 .filter(n => n !== null && n !== undefined && n !== '' && typeof n === 'string')
-.map(n => {
-try {
-return String(n).trim().toLowerCase();
-} catch (e) {
-return null;
-}
-})
-.filter(n => n !== null && n !== '')
-)];
+.map(n => { try { return String(n).trim().toLowerCase(); } catch (e) { return null; } })
+.filter(n => n !== null && n !== ''),
+...allRegistryNames
+])];
 let safeQuery = '';
 try {
 safeQuery = query ? String(query).trim().toLowerCase() : '';
 } catch (e) {
 safeQuery = '';
 }
-if (safeQuery.length > 2 && !existingNames.includes(safeQuery)) {
+const isNewCustomer = safeQuery.length > 2 && !existingNames.includes(safeQuery);
+if (isNewCustomer) {
 phoneContainer.classList.remove('hidden');
 } else {
 phoneContainer.classList.add('hidden');
 }
 }
-function handleUniversalSearch(inputId, resultsId, dataSource) {
+async function handleUniversalSearch(inputId, resultsId, dataSource) {
 const input = document.getElementById(inputId);
 const resultsDiv = document.getElementById(resultsId);
 if (!input || !resultsDiv) return;
@@ -16207,11 +12720,19 @@ return;
 let matches = [];
 let html = '';
 switch(dataSource) {
-case 'customers':
-const uniqueCustomers = [...new Set(customerSales
-.filter(s => s && s.isRepModeEntry !== true)
+case 'customers': {
+let _freshSalesReg = [];
+try { _freshSalesReg = await idb.get('sales_customers', []) || []; } catch(e) {}
+const _salesRegMap = new Map((_freshSalesReg).filter(c => c && c.id).map(c => [c.id, c]));
+if (Array.isArray(salesCustomers)) salesCustomers.forEach(c => { if (c && c.id && !_salesRegMap.has(c.id)) _salesRegMap.set(c.id, c); });
+const _mergedSalesReg = Array.from(_salesRegMap.values());
+const _custNamesFromSales = customerSales
+.filter(s => s && isDirectSale(s))
 .map(s => s.customerName)
-.filter(n => n && typeof n === 'string'))];
+.filter(n => n && typeof n === 'string');
+const _custNamesFromRegistry = _mergedSalesReg
+.filter(c => c && c.name && typeof c.name === 'string').map(c => c.name);
+const uniqueCustomers = [...new Set([..._custNamesFromSales, ..._custNamesFromRegistry])];
 matches = uniqueCustomers.filter(name =>
 name && typeof name === 'string' && name.toLowerCase().includes(query.toLowerCase())
 );
@@ -16232,6 +12753,7 @@ No match found. "${query}" will be created as new customer.
 </div>`;
 }
 break;
+}
 case 'entities':
 if (Array.isArray(paymentEntities)) {
 matches = paymentEntities.filter(entity =>
@@ -16286,11 +12808,19 @@ No matching suppliers found
 </div>`;
 }
 break;
-case 'repCustomers':
-const repUniqueCustomers = [...new Set(repSales
+case 'repCustomers': {
+let _freshRepReg = [];
+try { _freshRepReg = await idb.get('rep_customers', []) || []; } catch(e) {}
+const _repRegMap = new Map((_freshRepReg).filter(c => c && c.id).map(c => [c.id, c]));
+if (Array.isArray(repCustomers)) repCustomers.forEach(c => { if (c && c.id && !_repRegMap.has(c.id)) _repRegMap.set(c.id, c); });
+const _mergedRepReg = Array.from(_repRegMap.values());
+const _repNamesFromSales = repSales
 .filter(s => s && s.salesRep === currentRepProfile)
 .map(s => s.customerName)
-.filter(n => n && typeof n === 'string'))];
+.filter(n => n && typeof n === 'string');
+const _repNamesFromRegistry = _mergedRepReg
+.filter(c => c && c.name && typeof c.name === 'string').map(c => c.name);
+const repUniqueCustomers = [...new Set([..._repNamesFromSales, ..._repNamesFromRegistry])];
 matches = repUniqueCustomers.filter(name =>
 name && typeof name === 'string' && name.toLowerCase().includes(query.toLowerCase())
 );
@@ -16312,6 +12842,7 @@ No match found. "${query}" will be created.
 }
 break;
 }
+}
 resultsDiv.innerHTML = html;
 resultsDiv.classList.remove('hidden');
 }
@@ -16332,6 +12863,8 @@ if (type === 'name' && inputId === 'cust-name') {
 if (typeof calculateCustomerStatsForDisplay === 'function') {
 calculateCustomerStatsForDisplay(value);
 }
+const _phoneContainer = document.getElementById('new-customer-phone-container');
+if (_phoneContainer) _phoneContainer.classList.add('hidden');
 } else if (type === 'repName' && inputId === 'rep-cust-name') {
 if (typeof calculateRepCustomerStatsForDisplay === 'function') {
 calculateRepCustomerStatsForDisplay(value);
@@ -16356,17 +12889,17 @@ resultsDiv.classList.add('hidden');
 }
 });
 });
-const originalSelectCustomer = window.selectCustomer || selectCustomer;
 window.selectCustomer = function(name) {
-originalSelectCustomer(name);
-document.getElementById('new-customer-phone-container').classList.add('hidden');
-document.getElementById('new-cust-phone').value = '';
+  const base = window._selectCustomerBase;
+  if (typeof base === 'function') base(name);
+  document.getElementById('new-customer-phone-container').classList.add('hidden');
+  document.getElementById('new-cust-phone').value = '';
 };
-const originalSelectRepCustomer = window.selectRepCustomer || selectRepCustomer;
 window.selectRepCustomer = function(name) {
-originalSelectRepCustomer(name);
-document.getElementById('rep-new-customer-phone-container').classList.add('hidden');
-document.getElementById('rep-new-cust-phone').value = '';
+  const base = window._selectRepCustomerBase;
+  if (typeof base === 'function') base(name);
+  document.getElementById('rep-new-customer-phone-container').classList.add('hidden');
+  document.getElementById('rep-new-cust-phone').value = '';
 };
 async function initTheme() {
 const savedTheme = await idb.get('theme') || 'dark';
@@ -16382,7 +12915,6 @@ if (metaThemeColor) {
 metaThemeColor.setAttribute('content', savedTheme === 'light' ? '#ffffff' : '#000000');
 }
 }
-
 const FIRESTORE_ENHANCED_SCHEMA = {
 production: {
 localKey: 'mfg_pro_pkr',
@@ -16592,9 +13124,6 @@ isSyncing = false;
 updateConnectionStatus();
 }
 };
-
-
-
 (function() {
 const body = document.body;
 const threshold = 150;
@@ -16755,7 +13284,7 @@ if (typeof renderExpenseTable === 'function') {
 if (typeof renderRepCustomerTable === 'function') {
 }
 })();
-const ThemeManager = {
+var ThemeManager = { 
 currentTheme: 'dark',
 observers: new Set(),
 init() {
@@ -16906,7 +13435,7 @@ listeners.forEach(cb => cb(newState, oldState));
 }
 }
 }
-const PerformanceMonitor = {
+var PerformanceMonitor = { 
 metrics: {
 renderTime: [],
 queryTime: [],
@@ -16938,7 +13467,6 @@ report() {
 const averages = this.getAverages();
 }
 };
-
 window.addEventListener('beforeunload', function() {
 if (listenerReconnectTimer) {
 clearTimeout(listenerReconnectTimer);
@@ -16950,7 +13478,6 @@ syncChannel.close();
 console.warn('Data validation encountered an error.', e);
 }
 }
-
 if (typeof scrollRafId !== 'undefined' && scrollRafId !== null) {
 cancelAnimationFrame(scrollRafId);
 scrollRafId = null;
@@ -16959,3647 +13486,16 @@ if (window._rafScrollHandler) {
 window.removeEventListener('scroll', window._rafScrollHandler);
 window._rafScrollHandler = null;
 }
-
 if (window._ptrTouchStart) { document.removeEventListener('touchstart', window._ptrTouchStart); window._ptrTouchStart = null; }
 if (window._ptrTouchMove) { document.removeEventListener('touchmove', window._ptrTouchMove); window._ptrTouchMove = null; }
 if (window._ptrTouchEnd) { document.removeEventListener('touchend', window._ptrTouchEnd); window._ptrTouchEnd = null; }
-
 if (window._fbOfflineHandler) { window.removeEventListener('offline', window._fbOfflineHandler); window._fbOfflineHandler = null; }
 if (window._fbVisibilityHandler) { document.removeEventListener('visibilitychange', window._fbVisibilityHandler); window._fbVisibilityHandler = null; }
-
 if (window._tombstoneCleanupInterval) { clearInterval(window._tombstoneCleanupInterval); window._tombstoneCleanupInterval = null; }
 if (window._syncUpdatesCleanupInterval) { clearInterval(window._syncUpdatesCleanupInterval); window._syncUpdatesCleanupInterval = null; }
 if (window._connectionCheckInterval) { clearInterval(window._connectionCheckInterval); window._connectionCheckInterval = null; }
 if (window._perfMonitorInterval) { clearInterval(window._perfMonitorInterval); window._perfMonitorInterval = null; }
 });
-async function showDeltaSyncDetails() {
-if (!firebaseDB || !currentUser) {
-showToast('Please log in to view Firestore structure', 'warning', 3000);
-return;
-}
-const statsInitialized = await initializeSyncStatsIfNeeded();
-if (statsInitialized) {
-}
-const loadingModal = document.createElement('div');
-loadingModal.id = 'delta-stats-modal';
-loadingModal.style.cssText = 'position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 10000;';
-loadingModal.innerHTML = `
-<div style="background: var(--glass); padding: 40px; border-radius: 100px; text-align: center;">
-<div style="margin-bottom: 15px; font-size: 4rem; line-height: 1;">🐦‍🔥</div>
-<div style="color: var(--text); font-size: 1rem;">Loading Firestore</div>
-</div>
-`;
-document.body.appendChild(loadingModal);
-try {
-const userRef = firebaseDB.collection('users').doc(currentUser.uid);
-const [
-productionSnap, salesSnap, calcHistorySnap, repSalesSnap, repCustomersSnap,
-salesCustomersSnap,
-transactionsSnap, entitiesSnap, inventorySnap, factoryHistorySnap,
-returnsSnap, expensesSnap, deletionsSnap,
-settingsDoc, factorySettingsDoc, expenseCategoriesDoc, teamDoc
-] = await Promise.all([
-userRef.collection('production').get(),
-userRef.collection('sales').get(),
-userRef.collection('calculator_history').get(),
-userRef.collection('rep_sales').get(),
-userRef.collection('rep_customers').get(),
-userRef.collection('sales_customers').get(),
-userRef.collection('transactions').get(),
-userRef.collection('entities').get(),
-userRef.collection('inventory').get(),
-userRef.collection('factory_history').get(),
-userRef.collection('returns').get(),
-userRef.collection('expenses').get(),
-userRef.collection('deletions').get(),
-userRef.collection('settings').doc('config').get(),
-userRef.collection('factorySettings').doc('config').get(),
-userRef.collection('expenseCategories').doc('categories').get(),
-userRef.collection('settings').doc('team').get()
-]);
-const stats = await DeltaSync.getSyncStats();
-const collections = [
-{ name: 'production', snap: productionSnap, icon: '', description: 'Production records (db)' },
-{ name: 'sales', snap: salesSnap, icon: '', description: 'Customer sales (customerSales)' },
-{ name: 'rep_sales', snap: repSalesSnap, icon: '', description: 'Representative sales (repSales)' },
-{ name: 'rep_customers', snap: repCustomersSnap, icon: '', description: 'Rep customers with contacts (repCustomers)' },
-{ name: 'sales_customers', snap: salesCustomersSnap, icon: '', description: 'Sales customers with contacts (salesCustomers)' },
-{ name: 'calculator_history', snap: calcHistorySnap, icon: '', description: 'Calculator history (salesHistory)' },
-{ name: 'transactions', snap: transactionsSnap, icon: '', description: 'Payment transactions (paymentTransactions)' },
-{ name: 'entities', snap: entitiesSnap, icon: '', description: 'Payment entities (paymentEntities)' },
-{ name: 'inventory', snap: inventorySnap, icon: '', description: 'Factory inventory (factoryInventoryData)' },
-{ name: 'factory_history', snap: factoryHistorySnap,icon: '', description: 'Factory history (factoryProductionHistory)' },
-{ name: 'returns', snap: returnsSnap, icon: '', description: 'Stock returns (stockReturns)' },
-{ name: 'expenses', snap: expensesSnap, icon: '', description: 'Expense records (expenseRecords)' },
-{ name: 'deletions', snap: deletionsSnap, icon: '', description: 'Tombstones (deletedRecordIds)' }
-];
-const documents = [
-{
-name: 'settings/config',
-doc: settingsDoc,
-icon: '',
-description: 'App settings (defaultSettings, last_synced)',
-keys: ['naswar_default_settings', 'last_synced', 'initialized_at', 'version']
-},
-{
-name: 'settings/team',
-doc: teamDoc,
-icon: '',
-description: 'Team lists (salesRepsList, userRolesList)',
-keys: ['sales_reps', 'user_roles', 'updated_at']
-},
-{
-name: 'factorySettings/config',
-doc: factorySettingsDoc,
-icon: '',
-description: 'Factory formulas & costs (factoryDefaultFormulas, factoryAdditionalCosts, factoryUnitTracking)',
-keys: ['default_formulas', 'additional_costs', 'cost_adjustment_factor', 'sale_prices', 'unit_tracking']
-},
-{
-name: 'expenseCategories/categories',
-doc: expenseCategoriesDoc,
-icon: '',
-description: 'Expense categories (expenseCategories)',
-keys: ['categories']
-}
-];
-let html = `
-<div style="background: var(--glass); padding: 20px; border-radius: 20px; max-width: 700px; max-height: 80vh; overflow-y: auto;">
-<h3 style="margin: 0 0 15px 0; color: var(--accent); display:flex; align-items:center; gap:8px;"> Firestore Database Structure</h3>
-<div style="margin-bottom: 20px; padding: 12px; background: var(--input-bg); border-radius: 16px; border-left: 3px solid var(--accent);">
-<div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 5px;">Database Path:</div>
-<div style="font-size: 0.8rem; color: var(--accent); font-family: 'Geist Mono', 'Courier New', monospace;">
-users/${currentUser.uid}/
-</div>
-</div>
-<div id="device-manager-section" style="margin-bottom: 20px; padding: 15px; background: var(--input-bg); border-radius: 16px; border: 2px solid var(--accent);">
-<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-<h4 style="margin: 0; color: var(--accent); font-size: 0.9rem; display:flex; align-items:center; gap:6px;"> Connected Devices</h4>
-<button onclick="refreshDeviceList()" style="padding: 5px 10px; background: var(--glass); border: 1px solid var(--glass-border); border-radius: 12px; color: var(--text); cursor: pointer; font-size: 0.7rem; display:flex; align-items:center; gap:4px;">
-Refresh
-</button>
-</div>
-<div id="device-list-container" style="max-height: 300px; overflow-y: auto;">
-<div class="u-empty-state-sm" >
-Loading devices...
-</div>
-</div>
-</div>
-<div class="u-mb-20" >
-<h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 0.9rem;"> Collections (${collections.length})</h4>
-`;
-let totalDocs = 0;
-const actualReads = firestoreStats.reads || 0;
-const actualWrites = firestoreStats.writes || 0;
-collections.forEach(col => {
-const count = col.snap.size;
-totalDocs += count;
-const stat = stats[col.name] || { syncCount: 0, totalReads: 0, totalWrites: 0, lastSync: null };
-const lastSync = stat.lastSync ? new Date(stat.lastSync).toLocaleString() : 'Never';
-const hasListener = col.name !== 'deletions';
-html += `
-<div style="margin-bottom: 10px; padding: 12px; background: var(--input-bg); border-radius: 16px; border: 1px solid var(--glass-border);">
-<div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
-<div>
-<div style="font-weight: 600; font-size: 0.85rem; color: var(--text);">
-${col.icon} ${col.name}
-</div>
-<div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 2px;">
-${col.description}
-</div>
-</div>
-<div style="text-align: right;">
-<div style="font-size: 0.75rem; font-weight: 600; color: var(--accent);">
-${count} docs
-</div>
-${hasListener ? '<div style="font-size: 0.65rem; color: #30d158;">● Live</div>' : '<div style="font-size: 0.65rem; color: var(--text-muted);">○ Polling</div>'}
-</div>
-</div>
-<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 0.65rem; color: var(--text-muted);">
-<div>Syncs: ${stat.syncCount || 0}</div>
-<div>Last: ${lastSync}</div>
-</div>
-</div>
-`;
-});
-html += `
-</div>
-<div class="u-mb-20" >
-<h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 0.9rem;"> Configuration Documents (${documents.length})</h4>
-`;
-documents.forEach(docInfo => {
-const exists = docInfo.doc.exists;
-const data = exists ? docInfo.doc.data() : null;
-const hasListener = true;
-html += `
-<div style="margin-bottom: 10px; padding: 12px; background: var(--input-bg); border-radius: 16px; border: 1px solid var(--glass-border);">
-<div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
-<div>
-<div style="font-weight: 600; font-size: 0.85rem; color: var(--text);">
-${docInfo.icon} ${docInfo.name}
-</div>
-<div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 2px;">
-${docInfo.description}
-</div>
-</div>
-<div style="text-align: right;">
-<div style="font-size: 0.75rem; font-weight: 600; color: ${exists ? 'var(--accent)' : '#ff453a'};">
-${exists ? ' Exists' : ' Missing'}
-</div>
-${hasListener ? '<div style="font-size: 0.65rem; color: #30d158;">● Live</div>' : ''}
-</div>
-</div>
-`;
-if (exists && data) {
-html += `<div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 6px;">`;
-html += `<div style="font-weight: 600; margin-bottom: 4px;">Fields:</div>`;
-docInfo.keys.forEach(key => {
-const hasKey = key in data;
-const value = data[key];
-let valueStr = '';
-if (typeof value === 'object' && value !== null) {
-if (Array.isArray(value)) {
-valueStr = `Array(${value.length})`;
-} else {
-valueStr = `Object(${Object.keys(value).length} keys)`;
-}
-} else if (typeof value === 'string') {
-valueStr = value.length > 30 ? value.substring(0, 30) + '...' : value;
-} else {
-valueStr = String(value);
-}
-html += `
-<div style="padding: 2px 0; display: flex; justify-content: space-between;">
-<span style="color: ${hasKey ? 'var(--text)' : '#ff453a'};">
-${hasKey ? '' : ''} ${key}
-</span>
-${hasKey ? `<span style="color: var(--text-muted); font-family: 'Geist Mono', 'Courier New', monospace; font-size: 0.65rem;">${valueStr}</span>` : ''}
-</div>
-`;
-});
-html += `</div>`;
-}
-html += `</div>`;
-});
-html += `
-</div>
-<div style="padding: 15px; background: var(--input-bg); border-radius: 16px; border: 2px solid var(--accent); margin-bottom: 15px;">
-<h4 style="margin: 0 0 10px 0; color: var(--accent); font-size: 0.85rem;">Firestore Usage Summary</h4>
-<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; font-size: 0.75rem;">
-<div>
-<div style="color: var(--text-muted); font-size: 0.65rem;">Total Documents</div>
-<div style="color: var(--text); font-weight: 600; font-size: 1rem;">${totalDocs}</div>
-</div>
-<div>
-<div style="color: var(--text-muted); font-size: 0.65rem;">Firestore Reads</div>
-<div style="color: #30d158; font-weight: 600; font-size: 1rem;">${actualReads}</div>
-</div>
-<div>
-<div style="color: var(--text-muted); font-size: 0.65rem;">Firestore Writes</div>
-<div style="color: #007aff; font-weight: 600; font-size: 1rem;">${actualWrites}</div>
-</div>
-</div>
-<div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--glass-border); font-size: 0.65rem; color: var(--text-muted);">
-<div class="u-row-between" >
-<span style="display:flex;align-items:center;gap:4px;">Tracking Period:</span>
-<span style="color: var(--text);">${(() => {
-const hours = Math.floor((Date.now() - firestoreStats.lastReset) / (1000 * 60 * 60));
-if (hours < 1) return 'Less than 1 hour';
-if (hours === 1) return '1 hour';
-if (hours < 24) return hours + ' hours';
-const days = Math.floor(hours / 24);
-return days + (days === 1 ? ' day' : ' days');
-})()}</span>
-</div>
-<div style="margin-top: 5px; font-size: 0.6rem; color: var(--text-muted);">
-ℹ Stats auto-reset every 24 hours • Reads & writes tracked from actual Firestore operations
-</div>
-</div>
-</div>
-<div style="padding: 12px; background: rgba(48, 209, 88, 0.1); border-radius: 16px; border: 1px solid rgba(48, 209, 88, 0.3); margin-bottom: 15px;">
-<div style="font-size: 0.75rem; color: #30d158; font-weight: 600; margin-bottom: 5px;">
-Active Realtime Listeners
-</div>
-<div style="font-size: 0.7rem; color: var(--text);">
-${collections.filter(c => c.name !== 'deletions').length} collection listeners + 4 document listeners active
-</div>
-<div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 5px;">
-Updates sync automatically in background when data changes in Firestore
-</div>
-</div>
-<button onclick="(async()=>{ await DeltaSync.clearAllTimestamps(); await updateDeltaSyncStatsDisplay(); document.getElementById('delta-stats-modal').remove(); })()"
-style="width: 100%; padding: 10px; margin-bottom: 10px; background: rgba(255, 69, 58, 0.1); border: 1px solid rgba(255, 69, 58, 0.3); border-radius: 16px; color: #ff453a; cursor: pointer; font-size: 0.75rem;">
-Reset Sync History
-</button>
-<button onclick="(async()=>{ document.getElementById('delta-stats-modal').remove(); setTimeout(() => showCloseFinancialYearDialog(), 300); })()"
-style="width: 100%; padding: 10px; margin-bottom: 10px; background: rgba(175, 82, 222, 0.1); border: 1px solid rgba(175, 82, 222, 0.3); border-radius: 16px; color: #af52de; cursor: pointer; font-size: 0.75rem;">
-Close Financial Year
-</button>
-<button onclick="document.getElementById('delta-stats-modal').remove();"
-style="width: 100%; padding: 10px; background: var(--glass); border: 1px solid var(--glass-border); border-radius: 16px; color: var(--text); cursor: pointer; font-size: 0.75rem;">
-Close
-</button>
-</div>
-`;
-loadingModal.innerHTML = html;
-setTimeout(() => {
-if (typeof loadDeviceList === 'function') {
-loadDeviceList();
-}
-}, 500);
-} catch (error) {
-console.error('An unexpected error occurred.', error);
-showToast('An unexpected error occurred.', 'error');
-loadingModal.innerHTML = `
-<div style="background: var(--glass); padding: 40px; border-radius: 20px; text-align: center; max-width: 400px;">
-<div class="u-mb-15" ></div>
-<div style="color: var(--text); font-size: 1rem; margin-bottom: 20px;">
-Error loading database structure
-</div>
-<button onclick="document.getElementById('delta-stats-modal').remove();"
-style="padding: 10px 20px; background: var(--accent); border: none; border-radius: 16px; color: white; cursor: pointer;">
-Close
-</button>
-</div>
-`;
-}
-}
-let closeYearInProgress = false;
-let closeYearAbortController = null;
-let _fyVerifiedPassword = null; 
-
-let pendingFirestoreYearClose = false;
-
-function _storeCodeToLabel(c) {
-  if (c === 'STORE_A') return 'ZUBAIR';
-  if (c === 'STORE_B') return 'MAHMOOD';
-  if (c === 'STORE_C') return 'ASAAN';
-  return c;
-}
-async function showCloseFinancialYearDialog() {
-if (closeYearInProgress) {
-showToast('Close Financial Year is already in progress', 'warning');
-return;
-}
-const summary = await generateCloseYearSummary();
-const modal = document.createElement('div');
-modal.id = 'close-year-modal';
-modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.72);display:flex;align-items:center;justify-content:center;z-index:100000;overflow-y:auto;padding:16px;backdrop-filter:blur(3px) saturate(0.8);-webkit-backdrop-filter:blur(3px) saturate(0.8);animation:confirmBackdropIn 0.20s ease;';
-modal.innerHTML = `
-<style>
-@keyframes _cyModalIn {
-  from { opacity:0; transform:scale(0.88) translateY(24px); filter:blur(6px); }
-  to   { opacity:1; transform:scale(1) translateY(0); filter:blur(0); }
-}
-@keyframes _cyRowIn {
-  from { opacity:0; transform:translateX(-6px); }
-  to   { opacity:1; transform:translateX(0); }
-}
-@keyframes _cyCheckPop {
-  0%   { transform:scale(0.2) rotate(-18deg); opacity:0; }
-  55%  { transform:scale(1.20) rotate(4deg);  opacity:1; }
-  75%  { transform:scale(0.96) rotate(-1deg); }
-  100% { transform:scale(1) rotate(0);        opacity:1; }
-}
-@keyframes _cyShimmer {
-  0%   { background-position:-200% center; }
-  100% { background-position:200% center; }
-}
-@keyframes _cyGlowPulse {
-  0%,100% { opacity:0.5; }
-  50%      { opacity:1; }
-}
-#cy-panel {
-  background: linear-gradient(160deg, rgba(255,255,255,0.045) 0%, rgba(255,255,255,0) 50%), rgba(16,18,24,0.97);
-  border-radius: 24px;
-  max-width: 560px;
-  width: 100%;
-  max-height: 94vh;
-  overflow-y: auto;
-  border: 1px solid rgba(255,255,255,0.11);
-  box-shadow:
-    0 1px 0 rgba(255,255,255,0.06) inset,
-    0 0 0 1px rgba(0,0,0,0.55),
-    0 32px 80px rgba(0,0,0,0.75),
-    0 8px 24px rgba(0,0,0,0.45);
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255,255,255,0.08) transparent;
-  animation: _cyModalIn 0.28s cubic-bezier(0.22,1,0.36,1) forwards;
-  position: relative;
-}
-#cy-panel::after {
-  content: '';
-  position: absolute;
-  top: 0; left: 12%; right: 12%;
-  height: 1px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.18), transparent);
-  pointer-events: none;
-  z-index: 0;
-}
-[data-theme="light"] #cy-panel {
-  background: linear-gradient(160deg, rgba(255,255,255,0.9) 0%, rgba(248,249,252,0.97) 100%);
-  border-color: rgba(0,0,0,0.09);
-  box-shadow:
-    0 1px 0 rgba(255,255,255,1) inset,
-    0 0 0 1px rgba(0,0,0,0.06),
-    0 24px 60px rgba(0,0,0,0.16),
-    0 6px 16px rgba(0,0,0,0.08);
-}
-[data-theme="light"] #cy-panel::after {
-  background: linear-gradient(90deg, transparent, rgba(0,0,0,0.08), transparent);
-}
-/* ─── Header ─── */
-#cy-header {
-  padding: 20px 22px 15px;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  border-bottom: 1px solid rgba(255,255,255,0.07);
-  position: sticky;
-  top: 0;
-  background: inherit;
-  z-index: 2;
-  border-radius: 24px 24px 0 0;
-}
-[data-theme="light"] #cy-header {
-  border-bottom-color: rgba(0,0,0,0.07);
-}
-#cy-header-icon {
-  flex-shrink: 0;
-  width: 44px; height: 44px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, rgba(239,83,80,0.18) 0%, rgba(239,83,80,0.05) 100%);
-  border: 1px solid rgba(239,83,80,0.30);
-  display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 0 0 1px rgba(239,83,80,0.12) inset, 0 4px 14px rgba(239,83,80,0.14);
-}
-/* ─── Data rows ─── */
-.cy-data-row {
-  display: flex;
-  align-items: stretch;
-  border-radius: var(--radius-lg, 12px);
-  border: 1px solid rgba(255,255,255,0.07);
-  overflow: hidden;
-  transition: border-color 0.35s ease, box-shadow 0.35s ease;
-  animation: _cyRowIn 0.28s ease both;
-  position: relative;
-}
-[data-theme="light"] .cy-data-row {
-  border-color: var(--glass-border);
-  background: rgba(0,0,0,0.02);
-}
-.cy-data-row.cy-no-data { opacity: 0.32; }
-.cy-accent-stripe {
-  width: 3px;
-  flex-shrink: 0;
-  align-self: stretch;
-}
-.cy-row-body {
-  flex: 1;
-  padding: 10px 13px;
-  min-width: 0;
-  background: rgba(255,255,255,0.02);
-}
-[data-theme="light"] .cy-row-body { background: transparent; }
-.cy-row-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.cy-row-label {
-  flex: 1; min-width: 0;
-  font-size: 0.81rem; font-weight: 700;
-  font-family: 'Bricolage Grotesque', system-ui, sans-serif;
-  letter-spacing: -0.01em;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.cy-rec-badge {
-  font-size: 0.66rem; font-weight: 700;
-  padding: 2px 8px; border-radius: 999px;
-  background: rgba(255,179,0,0.12); color: var(--warning);
-  border: 1px solid rgba(255,179,0,0.22);
-  flex-shrink: 0; font-family: 'Geist Mono', monospace;
-  letter-spacing: 0.02em;
-}
-.cy-arrow { font-size: 0.62rem; color: rgba(255,255,255,0.22); flex-shrink: 0; }
-[data-theme="light"] .cy-arrow { color: rgba(0,0,0,0.22); }
-.cy-after-badge {
-  font-size: 0.66rem; font-weight: 700;
-  padding: 2px 9px; border-radius: 999px;
-  flex-shrink: 0; font-family: 'Geist', sans-serif;
-  max-width: 168px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  transition: color 0.4s ease;
-  border-width: 1px; border-style: solid;
-}
-.cy-status-badge {
-  display: none;
-  font-size: 0.58rem; font-weight: 800;
-  text-transform: uppercase; letter-spacing: 0.07em;
-  padding: 2px 8px; border-radius: 999px;
-  background: rgba(105,240,174,0.12); color: var(--accent-emerald);
-  border: 1px solid rgba(105,240,174,0.25);
-  flex-shrink: 0; white-space: nowrap;
-}
-.cy-skipped-text {
-  font-size: 0.67rem; color: rgba(255,255,255,0.26);
-  font-style: italic; flex-shrink: 0;
-}
-[data-theme="light"] .cy-skipped-text { color: rgba(0,0,0,0.28); }
-.cy-detail-chips {
-  margin-top: 5px;
-  display: flex; flex-wrap: wrap; gap: 0 2px;
-  align-items: center; line-height: 1.9;
-  transition: all 0.35s ease;
-}
-.cy-chip-lbl { font-size: 0.68rem; color: var(--text-muted); }
-.cy-chip-val { font-size: 0.68rem; font-weight: 700; margin-right: 9px; }
-.cy-result-block {
-  display: none;
-  margin-top: 7px; padding: 7px 11px; border-radius: var(--radius-base, 8px);
-  animation: cy-fade-in 0.32s ease;
-  border-width: 1px; border-style: solid;
-}
-.cy-result-inner  { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.cy-result-lbl    { font-size: 0.73rem; font-weight: 700; }
-.cy-result-tag    { font-size: 0.62rem; color: var(--text-muted); font-family: 'Geist Mono', monospace; }
-.cy-result-note   { font-size: 0.67rem; color: var(--text-muted); margin-top: 3px; line-height: 1.45; }
-/* ─── Progress ─── */
-#cy-progress-inner {
-  margin: 14px 22px 0;
-  padding: 13px 15px;
-  border-radius: var(--radius-lg, 12px);
-  background: rgba(255,255,255,0.025);
-  border: 1px solid rgba(255,255,255,0.07);
-}
-[data-theme="light"] #cy-progress-inner {
-  background: rgba(0,0,0,0.025);
-  border-color: var(--glass-border);
-}
-#cy-progress-meta { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
-#cy-progress-meta-stage { font-size:0.75rem; color:var(--text-muted); font-family:'Geist',sans-serif; }
-#cy-progress-meta-stage b { font-weight:700; color:var(--accent); }
-#cy-progress-pct { font-size:0.73rem; font-weight:800; color:var(--accent); font-family:'Geist Mono',monospace; }
-#cy-progress-track {
-  width:100%; height:4px;
-  background:rgba(255,255,255,0.06);
-  border-radius:999px; overflow:hidden;
-}
-[data-theme="light"] #cy-progress-track { background:rgba(0,0,0,0.08); }
-#close-year-progress-bar {
-  width:0%; height:100%;
-  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-emerald) 100%);
-  transition: width 0.5s cubic-bezier(0.4,0,0.2,1);
-  border-radius:999px;
-  background-size: 200% 100%;
-  animation: _cyShimmer 1.8s linear infinite;
-}
-/* ─── Password section ─── */
-#cy-input-wrap { padding: 14px 22px 20px; }
-#cy-danger-notice {
-  display: flex; align-items: flex-start; gap: 12px;
-  padding: 12px 14px;
-  background: linear-gradient(135deg, rgba(239,83,80,0.09), rgba(239,83,80,0.03));
-  border: 1px solid rgba(239,83,80,0.22);
-  border-radius: var(--radius-lg, 12px);
-  margin-bottom: 12px;
-}
-#cy-danger-icon-wrap {
-  flex-shrink: 0; width: 32px; height: 32px;
-  border-radius: var(--radius-base, 8px);
-  background: rgba(239,83,80,0.13);
-  border: 1px solid rgba(239,83,80,0.24);
-  display: flex; align-items: center; justify-content: center;
-}
-#cy-danger-title { margin:0 0 3px; color:rgba(255,110,100,0.95); font-size:0.79rem; font-weight:700; }
-#cy-danger-desc  { margin:0; color:var(--text-muted); font-size:0.72rem; line-height:1.5; }
-#cy-pwd-field { position:relative; margin-bottom:4px; }
-#close-year-confirm-input {
-  width: 100%;
-  padding: 11px 42px 11px 13px;
-  background: rgba(255,255,255,0.04);
-  border: 1.5px solid rgba(255,255,255,0.10);
-  border-radius: var(--radius-lg, 12px);
-  color: var(--text-main); font-size: 0.87rem;
-  box-sizing: border-box;
-  transition: border-color 0.2s, box-shadow 0.2s;
-  outline: none;
-  font-family: 'Geist', sans-serif;
-  -webkit-font-smoothing: antialiased;
-}
-[data-theme="light"] #close-year-confirm-input {
-  background: rgba(0,0,0,0.03);
-  border-color: var(--glass-border);
-}
-#close-year-confirm-input:focus {
-  border-color: rgba(239,83,80,0.55);
-  box-shadow: 0 0 0 3px rgba(239,83,80,0.10);
-}
-#cy-pwd-eye {
-  position:absolute; right:12px; top:50%; transform:translateY(-50%);
-  background:none; border:none; cursor:pointer; padding:4px;
-  color:var(--text-muted); line-height:0; transition:color 0.15s;
-}
-#cy-pwd-eye:hover { color:var(--text-main); }
-#close-year-pwd-error {
-  min-height: 18px; padding: 0 2px;
-  font-size: 0.71rem; color: var(--danger);
-  display: none; font-family: 'Geist', sans-serif;
-  animation: cy-fade-in 0.2s ease;
-}
-#cy-btn-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 9px;
-  margin-top: 11px;
-}
-#close-year-confirm-btn {
-  padding: 12px 18px;
-  background: linear-gradient(135deg, var(--danger) 0%, #c0392b 100%);
-  border: none; border-radius: var(--radius-lg, 12px);
-  color: #fff; font-weight: 700; cursor: not-allowed;
-  font-size: 0.86rem; opacity: 0.38;
-  transition: all 0.2s cubic-bezier(0.25,1,0.5,1);
-  letter-spacing: 0.01em;
-  font-family: 'Bricolage Grotesque', system-ui, sans-serif;
-  box-shadow: 0 1px 0 rgba(255,255,255,0.14) inset;
-}
-#close-year-confirm-btn:not([disabled]):hover {
-  transform: translateY(-1px);
-  box-shadow: 0 1px 0 rgba(255,255,255,0.14) inset, 0 6px 20px rgba(239,83,80,0.38);
-  filter: brightness(1.08);
-}
-#close-year-confirm-btn:not([disabled]):active { transform:translateY(0); }
-#cy-cancel-btn {
-  padding: 12px 18px;
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.10);
-  border-radius: var(--radius-lg, 12px);
-  color: var(--text-muted); cursor: pointer;
-  font-size: 0.84rem; font-weight: 600;
-  transition: all 0.18s ease;
-  font-family: 'Geist', sans-serif; white-space: nowrap;
-}
-[data-theme="light"] #cy-cancel-btn {
-  background: var(--glass-raised); border-color: var(--glass-border);
-}
-#cy-cancel-btn:hover {
-  background: rgba(255,255,255,0.10);
-  border-color: rgba(255,255,255,0.18);
-  color: var(--text-main);
-}
-/* ─── Completion card ─── */
-#close-year-complete { display:none; padding: 0 16px 20px; }
-#cy-done-card {
-  position: relative; overflow: hidden;
-  border-radius: var(--radius-xl, 16px);
-  padding: 24px 20px 20px;
-  background: linear-gradient(135deg, rgba(105,240,174,0.09) 0%, rgba(105,240,174,0.02) 100%);
-  border: 1px solid rgba(105,240,174,0.20);
-  text-align: center;
-}
-#cy-done-card::before {
-  content: '';
-  position: absolute; top: 0; left: 14%; right: 14%;
-  height: 1px; border-radius: 999px;
-  background: linear-gradient(90deg, transparent, rgba(105,240,174,0.45), transparent);
-  animation: _cyGlowPulse 2.4s ease infinite;
-}
-#cy-done-checkmark {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 56px; height: 56px; border-radius: 16px;
-  background: linear-gradient(135deg, rgba(105,240,174,0.18), rgba(105,240,174,0.05));
-  border: 1px solid rgba(105,240,174,0.30);
-  margin-bottom: 14px;
-  animation: _cyCheckPop 0.45s cubic-bezier(0.34,1.5,0.64,1) forwards;
-  box-shadow: 0 0 0 8px rgba(105,240,174,0.05), 0 4px 18px rgba(105,240,174,0.16);
-}
-#cy-done-title {
-  margin: 0 0 7px;
-  color: var(--accent-emerald);
-  font-size: 1.10rem; font-weight: 800;
-  font-family: 'Bricolage Grotesque', system-ui, sans-serif;
-  letter-spacing: -0.025em;
-}
-#cy-done-subtitle {
-  color: var(--text-muted); font-size: 0.75rem;
-  margin: 0 0 18px; line-height: 1.55;
-  font-family: 'Geist', sans-serif;
-}
-#cy-sync-advisory {
-  display: flex; align-items: flex-start; gap: 11px;
-  padding: 11px 14px; border-radius: var(--radius-base, 8px);
-  background: rgba(255,179,0,0.07); border: 1px solid rgba(255,179,0,0.24);
-  margin-bottom: 14px; text-align: left;
-}
-.cy-sync-adv-icon  { font-size: 0.95rem; line-height: 1.3; flex-shrink: 0; margin-top: 1px; }
-.cy-sync-adv-title { font-size: 0.72rem; font-weight: 700; color: var(--warning); margin-bottom: 3px; }
-.cy-sync-adv-desc  { font-size: 0.67rem; color: var(--text-muted); line-height: 1.45; }
-#cy-continue-btn {
-  width: 100%; padding: 13px;
-  background: linear-gradient(135deg, var(--accent-emerald) 0%, #059669 100%);
-  border: none; border-radius: var(--radius-lg, 12px);
-  color: #fff; font-weight: 800; cursor: pointer;
-  font-size: 0.90rem; letter-spacing: 0.01em;
-  font-family: 'Bricolage Grotesque', system-ui, sans-serif;
-  box-shadow: 0 1px 0 rgba(255,255,255,0.20) inset, 0 4px 16px rgba(105,240,174,0.22);
-  transition: all 0.2s ease;
-}
-#cy-continue-btn:hover {
-  filter: brightness(1.08);
-  transform: translateY(-1px);
-  box-shadow: 0 1px 0 rgba(255,255,255,0.20) inset, 0 7px 22px rgba(105,240,174,0.32);
-}
-#cy-continue-btn:active { transform: translateY(0); }
-</style>
-
-<div id="cy-panel">
-
-  <!-- Header -->
-  <div id="cy-header">
-    <div id="cy-header-icon">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/></svg>
-    </div>
-    <div style="flex:1;min-width:0;">
-      <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;">
-        <h2 style="margin:0;color:var(--text-main);font-size:1.04rem;font-weight:800;font-family:'Bricolage Grotesque',system-ui,sans-serif;letter-spacing:-0.025em;">Close Financial Year</h2>
-        <span id="cy-phase-badge" style="font-size:0.61rem;font-weight:700;text-transform:uppercase;letter-spacing:0.09em;padding:2px 10px;border-radius:999px;background:rgba(29,233,182,0.10);color:var(--accent);border:1px solid rgba(29,233,182,0.20);transition:all 0.4s ease;font-family:'Geist Mono',monospace;">PREVIEW</span>
-      </div>
-      <p style="margin:4px 0 0;color:var(--text-muted);font-size:0.72rem;line-height:1.4;font-family:'Geist',sans-serif;" id="cy-panel-subtitle">Compact all records into opening balances — encrypted backup created automatically</p>
-    </div>
-  </div>
-
-  <!-- Data preview grid -->
-  <div style="padding:15px 22px 0;">
-    <div id="cy-preview-grid" style="display:grid;gap:6px;">${summary.rowsHtml}</div>
-  </div>
-
-  <!-- Progress bar (revealed on execution) -->
-  <div id="close-year-progress-container" style="display:none;">
-    <div id="cy-progress-inner">
-      <div id="cy-progress-meta">
-        <span id="cy-progress-meta-stage">Processing: <b id="close-year-stage">Initializing…</b></span>
-        <span id="cy-progress-pct">0%</span>
-      </div>
-      <div id="cy-progress-track">
-        <div id="close-year-progress-bar"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Password / confirm -->
-  <div id="close-year-input-section">
-    <div id="cy-input-wrap">
-      <div id="cy-danger-notice">
-        <div id="cy-danger-icon-wrap">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,110,100,0.92)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-        </div>
-        <div>
-          <p id="cy-danger-title">Irreversible — original records will be compacted</p>
-          <p id="cy-danger-desc">Enter your account password to encrypt the year-end backup and confirm this action.</p>
-        </div>
-      </div>
-      <div id="cy-pwd-field">
-        <input type="password" id="close-year-confirm-input" placeholder="Account password"
-          autocomplete="current-password"
-          oninput="validateCloseYearInput(this.value)"
-          onkeydown="if(event.key==='Enter'&&!document.getElementById('close-year-confirm-btn').disabled){verifyAndExecuteCloseYear();}">
-        <button type="button" id="cy-pwd-eye" tabindex="-1"
-          onclick="(function(b){const i=document.getElementById('close-year-confirm-input');i.type=i.type==='password'?'text':'password';b.querySelector('svg').style.opacity=i.type==='text'?'1':'0.40';})(this)">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.40;transition:opacity 0.2s;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-        </button>
-      </div>
-      <div id="close-year-pwd-error"></div>
-      <div id="cy-btn-row">
-        <button id="close-year-confirm-btn" disabled onclick="verifyAndExecuteCloseYear()">Close Financial Year</button>
-        <button id="cy-cancel-btn" onclick="closeCloseYearDialog()">Cancel</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Completion card — injected dynamically -->
-  <div id="close-year-complete"></div>
-
-</div>
-`;
-document.body.appendChild(modal);
-document.getElementById('close-year-confirm-input').focus();
-}
-function validateCloseYearInput(value) {
-const confirmBtn = document.getElementById('close-year-confirm-btn');
-const errEl = document.getElementById('close-year-pwd-error');
-if (!confirmBtn) return;
-if (value.trim().length > 0) {
-  confirmBtn.disabled = false;
-  confirmBtn.style.opacity = '1';
-  confirmBtn.style.cursor = 'pointer';
-  confirmBtn.style.boxShadow = '0 3px 10px rgba(255,69,58,0.2)';
-  confirmBtn.onclick = verifyAndExecuteCloseYear;
-} else {
-  confirmBtn.disabled = true;
-  confirmBtn.style.opacity = '0.38';
-  confirmBtn.style.cursor = 'not-allowed';
-  confirmBtn.style.boxShadow = 'none';
-  confirmBtn.onclick = null;
-}
-if (errEl) errEl.style.display = 'none';
-}
-async function verifyAndExecuteCloseYear() {
-const confirmBtn = document.getElementById('close-year-confirm-btn');
-const inp = document.getElementById('close-year-confirm-input');
-const errEl = document.getElementById('close-year-pwd-error');
-const pwd = inp ? inp.value : '';
-if (!pwd) {
-showToast('Please enter your account password to continue.', 'warning', 3000);
-if (inp) inp.focus();
-return;
-}
-
-if (confirmBtn) {
-  confirmBtn.disabled = true;
-  confirmBtn.style.opacity = '0.6';
-  confirmBtn.textContent = 'Verifying…';
-}
-if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
-const valid = await verifyAccountPassword(pwd);
-if (!valid) {
-
-  if (errEl) { errEl.textContent = '✕ Incorrect password — please try again.'; errEl.style.display = 'block'; }
-  showToast('Incorrect password. Please try again.', 'error', 4000);
-  if (confirmBtn) {
-    confirmBtn.disabled = false;
-    confirmBtn.style.opacity = '1';
-    confirmBtn.textContent = 'Close Financial Year';
-    confirmBtn.onclick = verifyAndExecuteCloseYear;
-  }
-  if (inp) { inp.value = ''; inp.focus(); }
-  validateCloseYearInput(''); 
-  return;
-}
-
-_fyVerifiedPassword = pwd;
-executeCloseFinancialYear();
-}
-function closeCloseYearDialog() {
-const modal = document.getElementById('close-year-modal');
-if (modal) {
-modal.remove();
-}
-if (closeYearAbortController) {
-closeYearAbortController.abort();
-closeYearAbortController = null;
-}
-closeYearInProgress = false;
-}
-function updateCloseYearProgress(stage, percent) {
-const stageEl = document.getElementById('close-year-stage');
-const progressBar = document.getElementById('close-year-progress-bar');
-const pctEl = document.getElementById('cy-progress-pct');
-const phaseBadge = document.getElementById('cy-phase-badge');
-if (stageEl) stageEl.textContent = stage;
-if (progressBar) progressBar.style.width = percent + '%';
-if (pctEl) pctEl.textContent = percent + '%';
-
-const stageMap = {
-  'Merging Production Data':   'prod',
-  'Production Data Merged':    'prod',
-  'Merging Sales Data':        'sales',
-  'Sales Data Merged':         'sales',
-  'Merging Calculator Data':   'calc',
-  'Calculator Data Merged':    'calc',
-  'Merging Payment Data':      'pay',
-  'Payment Data Merged':       'pay',
-  'Merging Factory Data':      'factory',
-  'Factory Data Merged':       'factory',
-  'Merging Rep Sales Data':    'repsales',
-  'Rep Sales Data Merged':     'repsales',
-  'Merging Expenses':          'exp',
-  'Expenses Merged':           'exp',
-  'Merging Stock Returns':     'ret',
-  'Stock Returns Merged':      'ret'
-};
-const rowId = Object.entries(stageMap).find(([k])=>stage.includes(k.replace(' Data','').replace(' Merged','').trim()))?.[1];
-if (rowId) {
-  const isDone = stage.includes('Merged') || stage.includes('No New') || stage.includes('No Records');
-  const statusEl = document.getElementById('cy-status-' + rowId);
-  const rowEl    = document.getElementById('cy-row-'    + rowId);
-  if (statusEl) { statusEl.style.display = 'inline-flex'; statusEl.classList.add('ok'); }
-  if (rowEl && isDone) { rowEl.classList.add('cy-done'); rowEl.style.opacity = '1'; }
-}
-if (percent >= 100) {
-  const pb = document.getElementById('close-year-progress-bar');
-  if (pb) pb.classList.add('done');
-}
-if (phaseBadge) {
-  phaseBadge.textContent = 'PROCESSING';
-  phaseBadge.style.background = 'rgba(255,179,0,0.15)';
-  phaseBadge.style.color = 'var(--warning)';
-  phaseBadge.style.borderColor = 'rgba(255,179,0,0.3)';
-}
-
-const procSubtitle = document.getElementById('cy-panel-subtitle');
-if (procSubtitle && procSubtitle.textContent.includes('will be compacted')) {
-  procSubtitle.textContent = '— processing in progress...';
-  procSubtitle.style.color = 'var(--warning)';
-}
-}
-async function generateCloseYearSummary() {
-const S = {
-  production:   { total:0, nonMerged:0, stores: new Set(), returnCount:0, sellerReturns: new Set(), sellerStoreCards: new Set() },
-  sales:        { total:0, nonMerged:0, customers: new Set(), settledCount:0, creditCount:0 },
-  calculator:   { total:0, nonMerged:0, reps: new Set() },
-  payments:     { total:0, nonMerged:0, entities: new Set(), netBalanceCount:0 },
-  factory:      { total:0, nonMerged:0, stores: new Set() },
-  repSales:     { total:0, nonMerged:0, customers: new Set(), reps: new Set(), settledCount:0, creditCount:0 },
-  expenses:     { total:0, nonMerged:0, categories: new Set() },
-  stockReturns: { total:0, nonMerged:0, stores: new Set() }
-};
-if (Array.isArray(db)) {
-  S.production.total = db.length;
-  db.forEach(i => {
-    if (i.store) S.production.stores.add(i.store);
-    if (i.isMerged !== true) {
-      S.production.nonMerged++;
-      if (i.isReturn === true) { S.production.returnCount++; if(i.returnedBy) S.production.sellerReturns.add(i.returnedBy); if(i.returnedBy && i.store) S.production.sellerStoreCards.add(i.returnedBy+'::'+i.store); }
-    }
-  });
-}
-if (Array.isArray(customerSales)) {
-  S.sales.total = customerSales.length;
-  customerSales.forEach(i => {
-    if (i.customerName) S.sales.customers.add(i.customerName);
-    if (i.isMerged !== true && isDirectSale(i)) {
-      S.sales.nonMerged++;
-      if (i.paymentType === 'CASH' || (i.paymentType === 'CREDIT' && i.creditReceived)) S.sales.settledCount++;
-      else if (i.paymentType === 'CREDIT' && !i.creditReceived) S.sales.creditCount++;
-    }
-  });
-}
-if (Array.isArray(salesHistory)) {
-  S.calculator.total = salesHistory.length;
-  salesHistory.forEach(i => { if (i.seller) S.calculator.reps.add(i.seller); if (i.isMerged !== true) S.calculator.nonMerged++; });
-}
-if (Array.isArray(paymentTransactions)) {
-  S.payments.total = paymentTransactions.length;
-  const entityNetMap = {};
-  paymentTransactions.forEach(i => {
-    const ent = paymentEntities.find(e => e.id === i.entityId);
-    if (ent) S.payments.entities.add(ent.name || 'Unknown');
-    if (i.isMerged !== true) {
-      S.payments.nonMerged++;
-      if (!entityNetMap[i.entityId]) entityNetMap[i.entityId] = 0;
-      entityNetMap[i.entityId] += (i.type === 'IN' ? 1 : -1) * (i.amount || 0);
-    }
-  });
-  S.payments.netBalanceCount = Object.values(entityNetMap).filter(v => Math.abs(v) > 0.001).length;
-}
-if (Array.isArray(factoryProductionHistory)) {
-  S.factory.total = factoryProductionHistory.length;
-  factoryProductionHistory.forEach(i => { if (i.store) S.factory.stores.add(i.store); if (i.isMerged !== true) S.factory.nonMerged++; });
-}
-if (Array.isArray(repSales)) {
-  S.repSales.total = repSales.length;
-  repSales.forEach(i => {
-    if (i.customerName) S.repSales.customers.add(i.customerName);
-    if (i.salesRep) S.repSales.reps.add(i.salesRep);
-    if (i.isMerged !== true && isRepSale(i)) {
-      S.repSales.nonMerged++;
-      if (i.paymentType === 'CASH' || (i.paymentType === 'CREDIT' && i.creditReceived)) S.repSales.settledCount++;
-      else if (i.paymentType === 'CREDIT' && !i.creditReceived) S.repSales.creditCount++;
-    }
-  });
-}
-if (Array.isArray(expenseRecords)) {
-  S.expenses.total = expenseRecords.length;
-  expenseRecords.forEach(i => { if (i.category) S.expenses.categories.add(i.category); if (i.isMerged !== true) S.expenses.nonMerged++; });
-}
-if (Array.isArray(stockReturns)) {
-  S.stockReturns.total = stockReturns.length;
-  stockReturns.forEach(i => { if (i.store) S.stockReturns.stores.add(i.store); if (i.isMerged !== true) S.stockReturns.nonMerged++; });
-}
-
-const storeCodeToLabel = _storeCodeToLabel;
-const CY_ICONS = {
-  prod:     '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
-  sales:    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>',
-  calc:     '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="12" y2="14"/></svg>',
-  pay:      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>',
-  factory:  '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z"/></svg>',
-  repsales: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
-  exp:      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>',
-  ret:      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.9L1 10"/></svg>'
-};
-const previewRow = (id, label, key, recCount, details, mergeNote, accent, hasData) => {
-  const cssAccentVar = accent.replace('var(--','').replace(')','');
-  const detailChips = details.map(([lbl,val]) =>
-    '<span class="cy-chip-label">' + lbl + ':&nbsp;</span>' +
-    '<span class="cy-chip-val">' + val + '</span>'
-  ).join('');
-  const resultBlock =
-    '<div id="cy-result-' + id + '" class="cy-result-card" style="--cy-accent:' + accent + ';">' +
-    '<div class="cy-result-top">' +
-    '<span id="cy-result-label-' + id + '" class="cy-result-main"></span>' +
-    '<span class="cy-result-tag">compacted</span>' +
-    '</div>' +
-    '<div id="cy-result-note-' + id + '" class="cy-result-note"></div>' +
-    '</div>';
-  return (
-    '<div id="cy-row-' + id + '" class="cy-row' + (hasData ? '' : ' cy-skipped') + '" style="--cy-accent:' + accent + ';">' +
-    '<div class="cy-row-head">' +
-      '<div class="cy-row-icon">' + (CY_ICONS[id]||'') + '</div>' +
-      '<span class="cy-row-label">' + label + '</span>' +
-      (hasData
-        ? '<span class="cy-pill cy-pill-count">' + recCount + ' rec</span>' +
-          '<span class="cy-arrow">→</span>' +
-          '<span id="cy-val-' + id + '-after" class="cy-pill cy-pill-after">' + mergeNote + '</span>'
-        : '<span class="cy-pill cy-pill-skip">skipped</span>'
-      ) +
-      '<span id="cy-status-' + id + '" class="cy-status-badge ok">✓</span>' +
-    '</div>' +
-    (hasData && details.length
-      ? '<div class="cy-chips">' + detailChips + '</div>'
-      : '') +
-    resultBlock +
-    '</div>'
-  );
-};
-
-let rows = '';
-const storeList  = [...S.production.stores].map(storeCodeToLabel).join(', ') || '\u2014';
-const sellerList = [...S.production.sellerReturns].join(', ') || 'none';
-const prodRetCards   = S.production.sellerStoreCards.size || S.production.sellerReturns.size;
-const prodTotalCards = S.production.stores.size + prodRetCards;
-rows += previewRow('prod', 'Production', 'mfg_pro_pkr',
-  S.production.nonMerged,
-  [
-    ['Stores', storeList, 'var(--text-main)'],
-    ['Returns', S.production.returnCount > 0 ? S.production.returnCount + ' (' + sellerList + ')' : 'none',
-      S.production.returnCount > 0 ? 'var(--accent-emerald)' : 'var(--text-muted)'],
-  ],
-  prodTotalCards + ' cards (' + S.production.stores.size + ' store + ' + prodRetCards + ' ret)',
-  'var(--accent)', S.production.nonMerged > 0
-);
-
-const custCount = S.sales.customers.size;
-rows += previewRow('sales', 'Sales', 'customer_sales',
-  S.sales.nonMerged,
-  [['Customers', custCount, 'var(--text-main)'],
-   ['Settled/Credit', S.sales.settledCount + '/' + S.sales.creditCount, 'var(--text-main)']],
-  custCount + ' balance' + (custCount !== 1 ? 's' : ''),
-  'var(--accent-emerald)', S.sales.nonMerged > 0
-);
-
-const repNameList = [...S.calculator.reps].join(', ') || '\u2014';
-rows += previewRow('calc', 'Calculator', 'noman_history',
-  S.calculator.nonMerged,
-  [['Reps', repNameList, 'var(--text-main)']],
-  S.calculator.reps.size + ' rec \u00b7 returns\u2192Prod',
-  'var(--accent-cyan)', S.calculator.nonMerged > 0
-);
-
-const entCount = S.payments.entities.size;
-rows += previewRow('pay', 'Payments', 'payment_transactions',
-  S.payments.nonMerged,
-  [['Entities', entCount, 'var(--text-main)'],
-   ['w/ balance', S.payments.netBalanceCount, 'var(--text-main)']],
-  S.payments.netBalanceCount + ' opening bal.',
-  'var(--accent-gold)', S.payments.nonMerged > 0
-);
-
-const fStores = [...S.factory.stores].map(storeCodeToLabel).join(', ') || '\u2014';
-rows += previewRow('factory', 'Factory', 'factory_production_history',
-  S.factory.nonMerged,
-  [['Stores', fStores, 'var(--text-main)']],
-  S.factory.stores.size + ' formula rec.',
-  'var(--accent-purple)', S.factory.nonMerged > 0
-);
-
-const rcCount = S.repSales.customers.size;
-rows += previewRow('repsales', 'Rep Sales', 'rep_sales',
-  S.repSales.nonMerged,
-  [['Customers/Reps', rcCount + '/' + S.repSales.reps.size, 'var(--text-main)'],
-   ['Settled/Credit', S.repSales.settledCount + '/' + S.repSales.creditCount, 'var(--text-main)']],
-  '1 per cust \u00d7 rep',
-  'var(--store-b)', S.repSales.nonMerged > 0
-);
-
-const catList = [...S.expenses.categories].join(', ') || '\u2014';
-rows += previewRow('exp', 'Expenses', 'expenses',
-  S.expenses.nonMerged,
-  [['Categories', catList, 'var(--text-main)']],
-  '1 per category + name',
-  'var(--warning)', S.expenses.nonMerged > 0
-);
-
-const srStores = [...S.stockReturns.stores].map(storeCodeToLabel).join(', ') || '\u2014';
-rows += previewRow('ret', 'Stock Returns', 'stock_returns',
-  S.stockReturns.nonMerged,
-  [['Stores', srStores, 'var(--text-main)']],
-  '1 per store + date',
-  'var(--danger)', S.stockReturns.nonMerged > 0
-);
-
-const rowsHtml = rows;
-const html = '<div style="display:grid;gap:4px;">' + rows + '</div>';
-return { html, rowsHtml, summary: S };
-}
-
-async function createMergeBackup() {
-  const backup = {
-    db: Array.isArray(db) ? [...db] : [],
-    customerSales: Array.isArray(customerSales) ? [...customerSales] : [],
-    salesHistory: Array.isArray(salesHistory) ? [...salesHistory] : [],
-    paymentTransactions: Array.isArray(paymentTransactions) ? [...paymentTransactions] : [],
-    factoryProductionHistory: Array.isArray(factoryProductionHistory) ? [...factoryProductionHistory] : [],
-    repSales: Array.isArray(repSales) ? [...repSales] : [],
-    expenseRecords: Array.isArray(expenseRecords) ? [...expenseRecords] : [],
-    stockReturns: Array.isArray(stockReturns) ? [...stockReturns] : [],
-    timestamp: Date.now(),
-    date: new Date().toISOString()
-  };
-
-  try {
-    await idb.set('close_year_backup_' + backup.timestamp, backup);
-
-    return backup.timestamp;
-  } catch (e) {
-    console.error('Failed to create merge backup:', e);
-    throw new Error('Cannot proceed without backup: ' + e.message);
-  }
-}
-
-async function restoreFromBackup(backupTimestamp) {
-  try {
-    const backup = await idb.get('close_year_backup_' + backupTimestamp);
-    if (!backup) {
-      throw new Error('Backup not found: ' + backupTimestamp);
-    }
-
-    db = backup.db;
-    customerSales = backup.customerSales;
-    salesHistory = backup.salesHistory;
-    paymentTransactions = backup.paymentTransactions;
-    factoryProductionHistory = backup.factoryProductionHistory;
-    repSales = backup.repSales;
-    expenseRecords = backup.expenseRecords;
-    stockReturns = backup.stockReturns;
-
-
-    await idb.set('mfg_pro_pkr', db);
-    await idb.set('customer_sales', customerSales);
-    await idb.set('noman_history', salesHistory);
-    await idb.set('payment_transactions', paymentTransactions);
-    await idb.set('factory_production_history', factoryProductionHistory);
-    await idb.set('rep_sales', repSales);
-    await idb.set('expenses', expenseRecords);
-    await idb.set('stock_returns', stockReturns);
-
-
-    // Run Firestore rollback in the background — do not block local restore returning
-    if (firebaseDB && currentUser) {
-      Promise.resolve().then(async () => {
-        try {
-          const userRef = firebaseDB.collection('users').doc(currentUser.uid);
-          const fbCollections = [
-            { name: 'production', local: db },
-            { name: 'sales', local: customerSales },
-            { name: 'calculator_history', local: salesHistory },
-            { name: 'transactions', local: paymentTransactions },
-            { name: 'factory_history', local: factoryProductionHistory },
-            { name: 'rep_sales', local: repSales },
-            { name: 'expenses', local: expenseRecords },
-            { name: 'returns', local: stockReturns }
-          ];
-          for (const col of fbCollections) {
-            try {
-              const snapshot = await userRef.collection(col.name).get();
-              const batch = firebaseDB.batch();
-              let deleteCount = 0;
-              snapshot.docs.forEach(doc => {
-                const data = doc.data();
-                const docCreatedAt = data.createdAt?.toMillis ? data.createdAt.toMillis() :
-                                     (typeof data.createdAt === 'number' ? data.createdAt : 0);
-                if (docCreatedAt >= backupTimestamp) {
-                  batch.delete(doc.ref);
-                  deleteCount++;
-                }
-              });
-              if (deleteCount > 0) {
-                await batch.commit();
-                await new Promise(r => setTimeout(r, 0)); // yield between collections
-              }
-            } catch (colErr) {
-              console.warn(`Firebase rollback warning for ${col.name}:`, colErr);
-            }
-          }
-        } catch (fbErr) {
-          console.warn('Firebase rollback warning:', fbErr);
-        }
-      }).catch(() => {});
-    }
-
-
-    return true;
-  } catch (e) {
-    console.error('Failed to restore from backup:', e);
-    throw e;
-  }
-}
-
-async function verifyMergeConsistency(snap) {
-  const errors = [];
-  const warnings = [];
-
-
-  if (Array.isArray(db)) {
-    const mergedProd = db.filter(i => i.isMerged);
-    const totalNet = mergedProd.reduce((s, i) => s + (i.net || 0), 0);
-    const totalCost = mergedProd.reduce((s, i) => s + (i.totalCost || 0), 0);
-    const totalSale = mergedProd.reduce((s, i) => s + (i.totalSale || 0), 0);
-    const expectedProfit = totalSale - totalCost;
-    const actualProfit = mergedProd.reduce((s, i) => s + (i.profit || 0), 0);
-
-    if (Math.abs(expectedProfit - actualProfit) > 0.01) {
-      errors.push(`Production profit mismatch: expected ${expectedProfit.toFixed(2)}, got ${actualProfit.toFixed(2)}`);
-    }
-  }
-
-
-  if (Array.isArray(customerSales)) {
-    const mergedSales = customerSales.filter(i => i.isMerged && isDirectSale(i));
-    const totalValue = mergedSales.reduce((s, i) => s + (i.totalValue || 0), 0);
-    const totalCost = mergedSales.reduce((s, i) => s + (i.totalCost || 0), 0);
-    const expectedProfit = totalValue - totalCost;
-    const actualProfit = mergedSales.reduce((s, i) => s + (i.profit || 0), 0);
-
-    if (Math.abs(expectedProfit - actualProfit) > 0.01) {
-      errors.push(`Sales profit mismatch: expected ${expectedProfit.toFixed(2)}, got ${actualProfit.toFixed(2)}`);
-    }
-
-
-    mergedSales.forEach(sale => {
-      if (sale.paymentType === 'CREDIT' && !sale.creditReceived) {
-        const expectedCredit = (sale.totalValue || 0) - (sale.partialPaymentReceived || 0);
-        if (Math.abs(expectedCredit - (sale.creditValue || 0)) > 0.01) {
-          warnings.push(`Credit value mismatch for ${sale.customerName}`);
-        }
-      }
-    });
-  }
-
-
-  if (Array.isArray(paymentTransactions)) {
-    const mergedPay = paymentTransactions.filter(i => i.isMerged);
-    mergedPay.forEach(pay => {
-      if (pay.mergedSummary) {
-        const expectedNet = (pay.mergedSummary.originalIn || 0) - (pay.mergedSummary.originalOut || 0);
-        const actualAmount = (pay.type === 'IN' ? 1 : -1) * (pay.amount || 0);
-        if (Math.abs(expectedNet - actualAmount) > 0.01) {
-          errors.push(`Payment balance mismatch for ${pay.entityName}`);
-        }
-      }
-    });
-  }
-
-  return {
-    valid: errors.length === 0,
-    errors,
-    warnings,
-    timestamp: Date.now()
-  };
-}
-
-async function executeCloseFinancialYear() {
-if (closeYearInProgress) return;
-closeYearInProgress = true;
-
-const inputSection  = document.getElementById('close-year-input-section');
-const progressContainer = document.getElementById('close-year-progress-container');
-const phaseBadge    = document.getElementById('cy-phase-badge');
-if (inputSection) inputSection.style.display = 'none';
-if (progressContainer) progressContainer.style.display = 'block';
-
-updateCloseYearProgress('Uploading cloud backup...', 3);
-try {
-  if (!currentUser) throw new Error('Not signed in — cannot create backup');
-
-
-  try {
-    await pushDataToCloud();
-    showToast('☁️ Cloud backup uploaded', 'success', 2500);
-  } catch (cloudErr) {
-    console.warn('Cloud backup warning (proceeding):', cloudErr);
-    showToast('Cloud backup skipped (offline?) — local backup will still be created', 'warning', 3500);
-  }
-
-
-  updateCloseYearProgress('Preparing encrypted local backup...', 10);
-
-  
-
-  const _settingsSnapshot = await idb.get('naswar_default_settings', defaultSettings);
-  const backupData = {
-    mfg: db,
-    sales: await idb.get('noman_history', []),
-    customerSales: await idb.get('customer_sales', []),
-    repSales: repSales,
-    repCustomers: repCustomers,
-    salesCustomers: salesCustomers,
-    factoryInventoryData: factoryInventoryData,
-    factoryProductionHistory: factoryProductionHistory,
-    factoryDefaultFormulas: factoryDefaultFormulas,
-    factoryAdditionalCosts: factoryAdditionalCosts,
-    factoryCostAdjustmentFactor: factoryCostAdjustmentFactor,
-    factorySalePrices: factorySalePrices,
-    factoryUnitTracking: factoryUnitTracking,
-    paymentEntities: paymentEntities,
-    paymentTransactions: paymentTransactions,
-    stockReturns: stockReturns,
-    settings: _settingsSnapshot,
-    deleted_records: Array.from(deletedRecordIds),
-    _meta: {
-      encryptedFor:        currentUser.email,
-      createdAt:           Date.now(),
-      version:             2,
-      source:              'financial_year_close',
-      isYearCloseBackup:   true,
-
-      fyCloseSnapshot: {
-        fyCloseCount:      (_settingsSnapshot.fyCloseCount      || 0),
-        lastYearClosedAt:  (_settingsSnapshot.lastYearClosedAt  || null),
-        lastYearClosedDate:(_settingsSnapshot.lastYearClosedDate || null),
-        capturedAt:        Date.now()
-      }
-    }
-  };
-
-
-  
-
-  let encPassword = null;
-  try {
-    encPassword = _fyVerifiedPassword || null;
-  } finally {
-    _fyVerifiedPassword = null; 
-  }
-
-
-  if (encPassword) {
-    try {
-      updateCloseYearProgress('Encrypting backup file...', 14);
-      const encryptedBlob = await CryptoEngine.encrypt(backupData, currentUser.email, encPassword);
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      _triggerFileDownload(encryptedBlob, `NaswarDealers_YearClose_${timestamp}.gznd`);
-      showToast('🔐 Encrypted year-end backup downloaded!', 'success', 4000);
-    } catch (encErr) {
-      console.error('Encryption failed:', encErr);
-      showToast('Local backup encryption failed — proceeding with cloud backup only.', 'warning', 4000);
-    }
-  } else {
-    showToast('No verified password — skipping local encrypted backup.', 'info', 2500);
-  }
-} catch (bkpPhaseErr) {
-  console.error('Backup phase error:', bkpPhaseErr);
-  const proceed = await showGlassConfirm(
-    'Backup could not be completed.\n\nDo you want to proceed with closing the financial year anyway?\n\n\u26a0\ufe0f This is irreversible — proceed only if you have an existing backup.',
-    { title: 'Backup Failed', confirmText: 'Proceed Anyway', cancelText: 'Abort' }
-  );
-  if (!proceed) {
-    closeYearInProgress = false;
-    closeCloseYearDialog();
-    return;
-  }
-}
-
-updateCloseYearProgress('Creating rollback snapshot...', 20);
-let backupTimestamp;
-try {
-  backupTimestamp = await createMergeBackup();
-} catch (backupErr) {
-  closeYearInProgress = false;
-  showToast('Failed to create rollback snapshot: ' + backupErr.message, 'error');
-  closeCloseYearDialog();
-  return;
-}
-closeYearAbortController = new AbortController();
-const { signal } = closeYearAbortController;
-
-const snap = {
-  prod:    { before: Array.isArray(db)                      ? db.filter(i=>i.isMerged!==true).length : 0 },
-  sales:   { before: Array.isArray(customerSales)           ? customerSales.filter(i=>i.isMerged!==true&&isDirectSale(i)).length : 0 },
-  calc:    { before: Array.isArray(salesHistory)             ? salesHistory.filter(i=>i.isMerged!==true).length : 0 },
-  pay:     { before: Array.isArray(paymentTransactions)      ? paymentTransactions.filter(i=>i.isMerged!==true).length : 0 },
-  factory: { before: Array.isArray(factoryProductionHistory) ? factoryProductionHistory.filter(i=>i.isMerged!==true).length : 0 },
-  repSales:{ before: Array.isArray(repSales)                ? repSales.filter(i=>i.isMerged!==true&&isRepSale(i)).length : 0 },
-  expenses:{ before: Array.isArray(expenseRecords)           ? expenseRecords.filter(i=>i.isMerged!==true).length : 0 },
-  returns: { before: Array.isArray(stockReturns)             ? stockReturns.filter(i=>i.isMerged!==true).length : 0 }
-};
-
-const liveUpdate = (rowId, afterText, accentColor, resultLabel, resultNote) => {
-  const afterEl = document.getElementById('cy-val-' + rowId + '-after');
-  if (afterEl) {
-    afterEl.textContent = afterText;
-    afterEl.style.color = accentColor || 'var(--accent-emerald)';
-  }
-  const statusEl = document.getElementById('cy-status-' + rowId);
-  if (statusEl) statusEl.style.display = 'inline';
-
-  const resultBlock = document.getElementById('cy-result-' + rowId);
-  const resultLabelEl = document.getElementById('cy-result-label-' + rowId);
-  const resultNoteEl  = document.getElementById('cy-result-note-' + rowId);
-  if (resultBlock && resultLabelEl && resultNoteEl) {
-    resultLabelEl.textContent = resultLabel || afterText;
-    resultNoteEl.textContent  = resultNote  || '';
-    resultBlock.style.display = 'block';
-  }
-
-  const detailEl = document.getElementById('cy-detail-' + rowId);
-  if (detailEl) {
-    detailEl.style.opacity = '0.38';
-    detailEl.style.fontSize = '0';
-    detailEl.style.maxHeight = '0';
-    detailEl.style.overflow = 'hidden';
-    detailEl.style.transition = 'all 0.35s ease';
-  }
-};
-updateCloseYearProgress('Merging Production Data', 25);
-try {
-await mergeProductionData(signal);
-const prodMerged = Array.isArray(db) ? db.filter(i=>i.isMerged) : [];
-const storeMerged  = prodMerged.filter(i=>!i.isReturn).length;
-const sellerMerged = prodMerged.filter(i=>i.isReturn).length;
-liveUpdate('prod', `${storeMerged} store + ${sellerMerged} seller return card${sellerMerged!==1?'s':''}`, 'var(--accent)', `${storeMerged + sellerMerged} merged cards`, `${storeMerged} store balance${storeMerged!==1?'s':''} + ${sellerMerged} seller return card${sellerMerged!==1?'s':''}`);
-snap.prod.after = prodMerged.length;
-await mergeSalesData(signal);
-snap.sales.after = Array.isArray(customerSales) ? customerSales.filter(i=>i.isMerged&&isDirectSale(i)).length : 0;
-liveUpdate('sales', `${snap.sales.after} merged record${snap.sales.after!==1?'s':''}`, 'var(--accent-emerald)', `${snap.sales.after} customer records`, 'One opening balance per customer');
-await mergeCalculatorData(signal);
-snap.calc.after = Array.isArray(salesHistory) ? salesHistory.filter(i=>i.isMerged).length : 0;
-liveUpdate('calc', `${snap.calc.after} merged record${snap.calc.after!==1?'s':''} (sales only)`, 'var(--accent-cyan)', `${snap.calc.after} rep totals`, 'Sales totals only — returns moved to Production Tab');
-await mergePaymentData(signal);
-snap.pay.after = Array.isArray(paymentTransactions) ? paymentTransactions.filter(i=>i.isMerged).length : 0;
-liveUpdate('pay', `${snap.pay.after} opening balance record${snap.pay.after!==1?'s':''}`, 'var(--accent-gold)', `${snap.pay.after} opening balances`, 'Zero-balance entities dropped');
-await mergeFactoryData(signal);
-snap.factory.after = Array.isArray(factoryProductionHistory) ? factoryProductionHistory.filter(i=>i.isMerged).length : 0;
-liveUpdate('factory', `${snap.factory.after} merged record${snap.factory.after!==1?'s':''}`, 'var(--accent-purple)', `${snap.factory.after} formula records`, '1 per formula store');
-await mergeRepSalesData(signal);
-snap.repSales.after = Array.isArray(repSales) ? repSales.filter(i=>i.isMerged&&isRepSale(i)).length : 0;
-liveUpdate('repsales', `${snap.repSales.after} merged record${snap.repSales.after!==1?'s':''}`, 'var(--store-b)', `${snap.repSales.after} rep×customer records`, 'Keyed per customer × rep combination');
-await mergeExpensesData(signal);
-snap.expenses.after = Array.isArray(expenseRecords) ? expenseRecords.filter(i=>i.isMerged).length : 0;
-liveUpdate('exp', `${snap.expenses.after} merged record${snap.expenses.after!==1?'s':''}`, 'var(--warning)', `${snap.expenses.after} expense records`, 'Merged per category + name');
-await mergeStockReturnsData(signal);
-snap.returns.after = Array.isArray(stockReturns) ? stockReturns.filter(i=>i.isMerged).length : 0;
-liveUpdate('ret', `${snap.returns.after} merged record${snap.returns.after!==1?'s':''}`, 'var(--danger)', `${snap.returns.after} return records`, '1 per store + date — granularity preserved');
-
-  const consistencyCheck = await verifyMergeConsistency(snap);
-  if (!consistencyCheck.valid) {
-    throw new Error(`Data consistency check failed: ${consistencyCheck.errors.join('; ')}`);
-  }
-
-try {
-  const fyMeta = await idb.get('naswar_default_settings', {});
-  fyMeta.lastYearClosedAt   = Date.now();
-  fyMeta.lastYearClosedDate = new Date().toISOString();
-  fyMeta.fyCloseCount       = (fyMeta.fyCloseCount || 0) + 1;
-  fyMeta.lastConsistencyCheck = consistencyCheck;
-
-  const hasSyncWarning = document.querySelectorAll && [...document.querySelectorAll('[id^="cy-status-"]')].some(el => el.textContent.includes('Sync Failed'));
-  if (hasSyncWarning) {
-    fyMeta.pendingFirestoreYearClose = true;
-    pendingFirestoreYearClose = true;
-    await idb.set('pendingFirestoreYearClose', true);
-  } else {
-    fyMeta.pendingFirestoreYearClose = false;
-    pendingFirestoreYearClose = false;
-    await idb.set('pendingFirestoreYearClose', false);
-  }
-  await idb.set('naswar_default_settings', fyMeta);
-  if (firebaseDB && currentUser) {
-    await firebaseDB.collection('users').doc(currentUser.uid)
-      .collection('settings').doc('naswar_default_settings')
-      .set({ lastYearClosedAt: fyMeta.lastYearClosedAt, lastYearClosedDate: fyMeta.lastYearClosedDate, fyCloseCount: fyMeta.fyCloseCount }, { merge: true });
-  }
-} catch (metaErr) { console.warn('Could not save FY close metadata:', metaErr); }
-if (phaseBadge) {
-  phaseBadge.textContent = 'DONE';
-  phaseBadge.style.background = 'rgba(52,217,116,0.15)';
-  phaseBadge.style.color = 'var(--accent-emerald)';
-  phaseBadge.style.borderColor = 'rgba(52,217,116,0.3)';
-}
-const panelSubtitle = document.getElementById('cy-panel-subtitle');
-if (panelSubtitle) {
-  panelSubtitle.textContent = 'All records compacted successfully';
-  panelSubtitle.style.color = 'var(--accent-emerald)';
-  panelSubtitle.style.fontStyle = 'normal';
-  panelSubtitle.style.fontWeight = '600';
-}
-if (progressContainer) progressContainer.style.display = 'none';
-const prodMergedFinal   = Array.isArray(db) ? db.filter(i=>i.isMerged) : [];
-const storeFinal        = prodMergedFinal.filter(i=>!i.isReturn);
-const sellerRetFinal    = prodMergedFinal.filter(i=>i.isReturn);
-const storesUsed        = [...new Set(storeFinal.map(i=>i.store))].map(_storeCodeToLabel).join(', ') || '—';
-const sellersUsed       = [...new Set(sellerRetFinal.map(i=>i.returnedBy||'?'))].join(', ') || '—';
-const completeSection = document.getElementById('close-year-complete');
-if (completeSection) {
-
-  const syncFailedRows = ['prod','sales','calc','pay','factory','repsales','exp','ret']
-    .filter(id => { const el = document.getElementById('cy-row-' + id); return el && el.style.borderLeftColor && el.style.borderLeftColor.includes('warning') || (el && el.style.borderLeftColor === 'var(--warning)'); });
-  const hasSyncWarnings = document.querySelectorAll('[id^="cy-status-"]') &&
-    [...document.querySelectorAll('[id^="cy-status-"]')].some(el => el.textContent.includes('Sync Failed'));
-
-  // Collect stats from all merged data
-  const totalMergedRecords = [
-    ...(Array.isArray(db) ? db.filter(i=>i.isMerged) : []),
-    ...(Array.isArray(customerSales) ? customerSales.filter(i=>i.isMerged) : []),
-    ...(Array.isArray(salesHistory) ? salesHistory.filter(i=>i.isMerged) : []),
-    ...(Array.isArray(paymentTransactions) ? paymentTransactions.filter(i=>i.isMerged) : []),
-    ...(Array.isArray(factoryProductionHistory) ? factoryProductionHistory.filter(i=>i.isMerged) : []),
-    ...(Array.isArray(repSales) ? repSales.filter(i=>i.isMerged) : []),
-    ...(Array.isArray(expenseRecords) ? expenseRecords.filter(i=>i.isMerged) : []),
-    ...(Array.isArray(stockReturns) ? stockReturns.filter(i=>i.isMerged) : []),
-  ].length;
-  const collectionsCompacted = ['prod','sales','calc','pay','factory','repsales','exp','ret']
-    .filter(id => { const el = document.getElementById('cy-status-' + id); return el && el.style.display !== 'none'; }).length;
-  const fyMeta2 = (typeof fyMeta !== 'undefined') ? fyMeta : {};
-  const closeCount = fyMeta2.fyCloseCount || 1;
-  const closedDateStr = fyMeta2.lastYearClosedDate || new Date().toLocaleDateString('en-PK', { day:'numeric', month:'short', year:'numeric' });
-
-  const syncWarnBlock = hasSyncWarnings ? `
-    <div class="cy-sync-warn">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px;"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-      <div>
-        <div class="cy-sync-warn-title">Cloud Sync Incomplete</div>
-        <div class="cy-sync-warn-body">Local data is fully merged and safe. Marked rows will re-sync automatically when connectivity is restored, or force a manual sync from Settings.</div>
-      </div>
-    </div>` : '';
-
-  completeSection.innerHTML = `
-  <div class="cy-complete-card">
-    <div class="cy-complete-header">
-      <div class="cy-complete-icon">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent-emerald)" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" style="stroke-dasharray:40;stroke-dashoffset:0;animation:cy-checkmark-draw 0.55s 0.2s cubic-bezier(0.22,1,0.36,1) both;"><polyline points="20 6 9 17 4 12"/></svg>
-      </div>
-      <div class="cy-complete-header-text">
-        <h3 class="cy-complete-title">Financial Year Closed</h3>
-        <p class="cy-complete-sub">${closedDateStr} &nbsp;·&nbsp; Year #${closeCount}</p>
-      </div>
-    </div>
-    <div class="cy-stat-grid">
-      <div class="cy-stat-cell">
-        <div class="cy-stat-val">${collectionsCompacted}</div>
-        <div class="cy-stat-label">Collections</div>
-      </div>
-      <div class="cy-stat-cell">
-        <div class="cy-stat-val">${totalMergedRecords}</div>
-        <div class="cy-stat-label">Merged Rec.</div>
-      </div>
-      <div class="cy-stat-cell">
-        <div class="cy-stat-val" style="color:var(--accent-emerald);">✓</div>
-        <div class="cy-stat-label">Backup Safe</div>
-      </div>
-    </div>
-    ${syncWarnBlock}
-    <button class="cy-continue-btn" onclick="closeCloseYearDialog();if(typeof refreshAllDisplays==='function')refreshAllDisplays();">
-      Continue to App →
-    </button>
-  </div>`;
-  completeSection.style.display = 'block';
-  showToast('Financial Year closed successfully!', 'success');
-}
-} catch (error) {
-if (error.name === 'AbortError') {
-  showToast('Close Financial Year was cancelled', 'info');
-} else {
-  console.error('Close Financial Year failed:', error);
-  showToast('Close Financial Year failed: ' + error.message, 'error');
-
-
-  if (typeof backupTimestamp !== 'undefined') {
-    updateCloseYearProgress('Restoring from backup...', 0);
-    try {
-      await restoreFromBackup(backupTimestamp);
-      showToast('Data restored from backup. No changes were committed.', 'info');
-    } catch (restoreErr) {
-      console.error('Failed to restore from backup:', restoreErr);
-      showToast('CRITICAL: Failed to restore from backup. Manual intervention required.', 'error');
-    }
-  }
-
-  closeCloseYearDialog();
-}
-} finally {
-closeYearInProgress = false;
-closeYearAbortController = null;
-}
-}
-async function _commitMergedBatch(userRef, collectionName, mergedRecords, deleteFilter) {
-const OPS_PER_BATCH = 400;
-let batchesTotal = 0;
-let batchesFailed = 0;
-let firstError = null;
-try {
-  const existingSnapshot = await userRef.collection(collectionName).get();
-  const deleteDocs = existingSnapshot.docs.filter(doc => {
-    const d = doc.data(); return deleteFilter ? deleteFilter(d) : !d.isMerged;
-  });
-  const writeDocs = mergedRecords.map(record => {
-    const sanitized = sanitizeForFirestore(record);
-
-    
-    sanitized.updatedAt = record.updatedAt;
-    sanitized.createdAt = record.createdAt;
-    sanitized.timestamp = record.timestamp;
-    return { ref: userRef.collection(collectionName).doc(record.id), data: sanitized };
-  });
-  const allOps = [
-    ...deleteDocs.map(d => ({ type: 'delete', ref: d.ref })),
-    ...writeDocs.map(w => ({ type: 'set', ref: w.ref, data: w.data }))
-  ];
-  for (let i = 0; i < allOps.length; i += OPS_PER_BATCH) {
-    batchesTotal++;
-    const batch = firebaseDB.batch();
-    allOps.slice(i, i + OPS_PER_BATCH).forEach(op => {
-      if (op.type === 'delete') batch.delete(op.ref);
-      else batch.set(op.ref, op.data);
-    });
-    try {
-      await batch.commit();
-    } catch (batchErr) {
-      batchesFailed++;
-      if (!firstError) firstError = batchErr;
-      console.error(`_commitMergedBatch [${collectionName}] batch ${batchesTotal} failed:`, batchErr);
-      throw batchErr; 
-    }
-  }
-} catch (outerErr) {
-
-  console.error(`_commitMergedBatch [${collectionName}] snapshot read failed:`, outerErr);
-  return { ok: false, batchesTotal, batchesFailed: batchesTotal || 1, error: outerErr };
-}
-const ok = batchesFailed === 0;
-return { ok, batchesTotal, batchesFailed, error: firstError || null };
-}
-function _markRowSyncWarning(rowId, commitResult) {
-  try {
-    const rowEl = document.getElementById('cy-row-' + rowId);
-    if (!rowEl) return;
-
-    const statusEl = document.getElementById('cy-status-' + rowId);
-    if (statusEl) {
-      statusEl.textContent = '⚠ Sync Failed';
-      statusEl.style.background = 'rgba(255,179,0,0.15)';
-      statusEl.style.color = 'var(--warning)';
-      statusEl.style.borderColor = 'rgba(255,179,0,0.35)';
-      statusEl.style.display = 'inline';
-    }
-
-    const noteEl = document.getElementById('cy-result-note-' + rowId);
-    if (noteEl) {
-      const failMsg = document.createElement('span');
-      failMsg.style.cssText = 'display:block;margin-top:3px;font-size:0.63rem;color:var(--warning);font-weight:600;';
-      failMsg.textContent = `⚠ Cloud sync incomplete — ${commitResult.batchesFailed}/${commitResult.batchesTotal} Firestore batch${commitResult.batchesFailed!==1?'es':''} failed. Local data is safe. Re-sync when online.`;
-      noteEl.appendChild(failMsg);
-    }
-
-    rowEl.style.borderLeftColor = 'var(--warning)';
-  } catch (e) {   }
-}
-function _buildMergedBase(id, mergeEpoch, nowISODate, nowTime, extra = {}) {
-return {
-  id,
-  date: nowISODate,
-  time: nowTime,
-  createdAt: mergeEpoch,
-  updatedAt: mergeEpoch,
-  timestamp: mergeEpoch,
-  isMerged: true,
-  mergedAt: nowISODate,
-  syncedAt: new Date().toISOString(),
-  ...extra
-};
-}
-
-const isRepSale = (item) => {
-  return item.isRepModeEntry === true || 
-         (item.salesRep && item.salesRep !== 'NONE' && item.salesRep !== 'ADMIN');
-};
-
-const isDirectSale = (item) => {
-  return !isRepSale(item);
-};
-async function mergeProductionData(signal) {
-updateCloseYearProgress('Merging Production Data...', 10);
-if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-if (!Array.isArray(db) || db.length === 0) return;
-const nowDate    = new Date();
-const nowISODate = nowDate.toISOString().split('T')[0];
-const mergeEpoch = nowDate.getTime();
-const nowTime    = nowDate.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
-const mergedRecords = [];
-const nonMerged    = db.filter(i => i.isMerged !== true);
-const prodItems    = nonMerged.filter(i => i.isReturn !== true);
-const returnItems  = nonMerged.filter(i => i.isReturn === true);
-const storeGroups = {};
-prodItems.forEach(item => {
-  const store = item.store || 'UNKNOWN';
-  if (!storeGroups[store]) storeGroups[store] = [];
-  storeGroups[store].push(item);
-});
-for (const [store, items] of Object.entries(storeGroups)) {
-  if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-  const totals = items.reduce((acc, item) => {
-    const isCreditSale = item.paymentStatus === 'CREDIT' && !item.isReturn;
-    acc.net          += (item.net          || 0);
-    acc.totalCost    += (item.totalCost    || 0);
-
-    acc.totalSale    += (item.totalSale    || 0);
-    acc.profit       += (item.profit       || 0);
-    acc.formulaUnits += (item.formulaUnits || 0);
-    acc.formulaCost  += (item.formulaCost  || 0);
-    acc.creditSaleNet+= isCreditSale ? (item.net || 0) : 0;
-    return acc;
-  }, { net:0, totalCost:0, totalSale:0, profit:0, formulaUnits:0, formulaCost:0, creditSaleNet:0 });
-  // cp: weighted average of actual dynamic cost per kg across all production runs
-  //     (each run may differ as formula costs change) — average is correct here.
-  const avgCp = totals.net > 0 ? parseFloat((totals.totalCost / totals.net).toFixed(4)) : (items[0]?.cp || 0);
-  // sp: the fixed canonical sale price for this store from factory settings.
-  //     All items in this store group share the same fixed price — never average.
-  const canonicalSp = getSalePriceForStore(store);
-  const avgSp = canonicalSp > 0 ? canonicalSp : (items[0]?.sp || 0);
-  const allDates = items.map(i => i.date).filter(Boolean).sort();
-  const mergedId = generateUUID('prod-merged');
-  const mergedRecord = ensureRecordIntegrity(_buildMergedBase(mergedId, mergeEpoch, nowISODate, nowTime, {
-    store,
-    net:           totals.net,
-    cp:            avgCp,
-    sp:            avgSp,
-    totalCost:     totals.totalCost,
-    totalSale:     totals.totalSale,
-    profit:        totals.profit,
-    formulaUnits:  totals.formulaUnits,
-    formulaStore:  items[0]?.formulaStore || 'standard',
-    formulaCost:   totals.formulaCost,
-    paymentStatus: 'CASH',
-    creditSaleNet: totals.creditSaleNet,  
-    mergedRecordCount: items.length,
-    mergedSummary: {
-      dateRange:       { from: allDates[0] || nowISODate, to: allDates.slice(-1)[0] || nowISODate },
-      recordCount:     items.length,
-      creditSaleNet:   totals.creditSaleNet  
-    }
-  }), false, true);
-  mergedRecords.push(mergedRecord);
-}
-
-const sellerReturnGroups = {};
-const sellerReturnTotals = {}; 
-returnItems.forEach(item => {
-  const seller = item.returnedBy || item.seller || 'Unknown';
-  const store  = item.store      || 'UNKNOWN';
-  const key    = `${seller}::${store}`;
-  if (!sellerReturnGroups[key]) sellerReturnGroups[key] = { seller, store, items: [] };
-  sellerReturnGroups[key].items.push(item);
-
-  
-  if (!sellerReturnTotals[seller]) {
-    sellerReturnTotals[seller] = { totalNet: 0, returnsByStore: {} };
-  }
-  sellerReturnTotals[seller].totalNet += (item.net || 0);
-  sellerReturnTotals[seller].returnsByStore[store] = (sellerReturnTotals[seller].returnsByStore[store] || 0) + (item.net || 0);
-});
-for (const [, grp] of Object.entries(sellerReturnGroups)) {
-  if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-  const { seller, store, items } = grp;
-  let totalNet = 0, totalCost = 0, totalSale = 0, totalProfit = 0;
-  items.forEach(item => {
-    totalNet    += (item.net       || 0);
-    totalCost   += (item.totalCost || 0);
-    totalSale   += (item.totalSale || 0);
-    totalProfit += (item.profit    || 0);
-  });
-  const avgCp = totalNet > 0 ? parseFloat((totalCost / totalNet).toFixed(4)) : (items[0]?.cp || 0);
-  // sp: fixed canonical sale price for this store — not a weighted average.
-  const canonicalSpRet = getSalePriceForStore(store);
-  const avgSp = canonicalSpRet > 0 ? canonicalSpRet : (items[0]?.sp || 0);
-  const allDates = items.map(i => i.date).filter(Boolean).sort();
-  const mergedId = generateUUID('prod-ret-merged');
-
-  
-  const returnsByStoreForThisSeller = sellerReturnTotals[seller]?.returnsByStore || {};
-
-  const mergedReturn = ensureRecordIntegrity(_buildMergedBase(mergedId, mergeEpoch, nowISODate, nowTime, {
-    store,
-    net:           totalNet,
-    cp:            avgCp,
-    sp:            avgSp,
-    totalCost:     totalCost,
-    totalSale:     totalSale,
-    profit:        totalProfit,
-    formulaUnits:  0,
-    formulaStore:  'standard',
-    formulaCost:   0,
-    paymentStatus: 'CASH',
-    isReturn:      true,
-    returnedBy:    seller,
-    returnNote:    `Merged returns by ${seller} → ${store}`,
-    returnsByStore: returnsByStoreForThisSeller, 
-    mergedRecordCount: items.length,
-    mergedSummary: {
-      dateRange:   { from: allDates[0] || nowISODate, to: allDates.slice(-1)[0] || nowISODate },
-      recordCount: items.length,
-      store,
-      seller,
-      returnsByStore: returnsByStoreForThisSeller 
-    }
-  }), false, true);
-  mergedRecords.push(mergedReturn);
-}
-if (Object.keys(storeGroups).length === 0 && Object.keys(sellerReturnGroups).length === 0) {
-  updateCloseYearProgress('Production Data - No New Records to Merge', 20);
-  return;
-}
-if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-if (firebaseDB && currentUser) {
-  const userRef = firebaseDB.collection('users').doc(currentUser.uid);
-  const commitResult = await _commitMergedBatch(userRef, 'production', mergedRecords);
-  if (!commitResult.ok) {
-    console.warn(`mergeProductionData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, commitResult.error);
-    _markRowSyncWarning('prod', commitResult);
-  }
-}
-const existingMerged = db.filter(item => item.isMerged === true);
-db = [...existingMerged, ...mergedRecords];
-await idb.set('mfg_pro_pkr', db);
-emitSyncUpdate({ mfg_pro_pkr: db });
-updateCloseYearProgress('Production Data Merged', 20);
-}
-async function mergeSalesData(signal) {
-updateCloseYearProgress('Merging Sales Data...', 30);
-if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-if (!Array.isArray(customerSales) || customerSales.length === 0) return;
-const nowDate    = new Date();
-const nowISODate = nowDate.toISOString().split('T')[0];
-const mergeEpoch = nowDate.getTime();
-const nowTime    = nowDate.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
-const mergedRecords = [];
-const customerBuckets = {};  
-customerSales.forEach(item => {
-  if (item.isMerged === true) return;
-  if (isRepSale(item)) return;  
-  const name = item.customerName || 'Unknown';
-  if (!customerBuckets[name]) {
-    customerBuckets[name] = {
-      sales: [], oldDebt: 0, collectionTotal: 0, partialPaymentTotal: 0, partialPaymentsBySale: {},
-      phone: '', address: '', supplyStore: ''
-    };
-  }
-  const b = customerBuckets[name];
-  b.phone      = b.phone      || item.customerPhone   || '';
-  b.address    = b.address    || item.customerAddress || '';
-  b.supplyStore= b.supplyStore|| item.supplyStore     || 'STORE_A';
-  if (item.paymentType === 'PARTIAL_PAYMENT') {
-
-    b.partialPaymentTotal += (item.totalValue || 0);
-    const linkedKey = item.relatedSaleId || item.linkedSaleId;
-    if (linkedKey) {
-
-      
-      b.partialPaymentsBySale[linkedKey] = (b.partialPaymentsBySale[linkedKey] || 0) + (item.totalValue || 0);
-
-      if (!b.partialPaymentCustomers) b.partialPaymentCustomers = {};
-      b.partialPaymentCustomers[linkedKey] = item.customerName || name;
-    }
-    return;
-  }
-  if (item.paymentType === 'COLLECTION') {
-
-    b.collectionTotal += (item.totalValue || 0);
-    return;
-  }
-  if (item.transactionType === 'OLD_DEBT') {
-
-    b.oldDebt += Math.max(0, (item.totalValue || 0) - (item.partialPaymentReceived || 0));
-    return;
-  }
-
-  b.sales.push(item);
-});
-for (const [customer, b] of Object.entries(customerBuckets)) {
-  if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-  const { sales, oldDebt, collectionTotal, phone, address, supplyStore } = b;
-
-  let totalQty   = 0, totalValue = 0, totalCost = 0, totalProfit = 0;
-  let realizedProfit = 0, unrealizedProfit = 0;
-  let cashValue  = 0, unpaidCreditNet = 0;
-
-  
-  const originalRecordIds = sales.map(s => s.id);
-  for (const item of sales) {
-    totalQty    += (item.quantity   || 0);
-    totalValue  += (item.totalValue || 0);
-    totalCost   += (item.totalCost  || 0);
-    totalProfit += (item.profit     || 0);
-
-
-    if (item.paymentType === 'CREDIT' && !item.creditReceived) {
-      unrealizedProfit += (item.profit || 0);  
-    } else {
-      realizedProfit += (item.profit || 0);    
-    }
-
-    if (item.paymentType === 'CASH' || (item.paymentType === 'CREDIT' && item.creditReceived)) {
-
-      cashValue += (item.totalValue || 0);
-    } else if (item.paymentType === 'CREDIT' && !item.creditReceived) {
-
-      unpaidCreditNet += Math.max(0, (item.totalValue || 0) - (item.partialPaymentReceived || 0));
-    }
-  }
-
-  const grossOutstanding = unpaidCreditNet + oldDebt;
-
-  const netOutstanding   = Math.max(0, grossOutstanding - collectionTotal);
-
-  const advanceCredit    = Math.max(0, collectionTotal - grossOutstanding);
-  const isSettled = netOutstanding <= 0;
-
-  if (sales.length === 0 && oldDebt <= 0 && collectionTotal <= 0) continue;
-  const allDates  = sales.map(i => i.date).filter(Boolean).sort();
-  const firstItem = sales[0] || {};
-  const recordCount = sales.length + (oldDebt > 0 ? 1 : 0) + (collectionTotal > 0 ? 1 : 0);
-  const mergedId = generateUUID('sale-merged');
-
-  
-
-  
-
-  
-  // unitPrice: the fixed canonical sale price for the supply store from factory
-  // settings — never divide totalValue/quantity (weighted average from partials).
-  const _mergedSupplyStore = supplyStore || firstItem.supplyStore || 'STORE_A';
-  const canonicalUnitPrice = getSalePriceForStore(_mergedSupplyStore);
-  const lastUnitPrice = canonicalUnitPrice > 0
-    ? canonicalUnitPrice
-    : (firstItem.unitPrice || (firstItem.quantity > 0 ? firstItem.totalValue / firstItem.quantity : 0) || 0);
-  const grossSaleValue  = parseFloat(totalValue.toFixed(2));
-  const alreadyPaid     = isSettled ? grossSaleValue : parseFloat((grossSaleValue - netOutstanding).toFixed(2));
-  const mergedRecord = ensureRecordIntegrity(_buildMergedBase(mergedId, mergeEpoch, nowISODate, nowTime, {
-    customerName:          customer,
-    customerPhone:         phone,
-    customerAddress:       address,
-    quantity:              totalQty,
-    unitPrice:             lastUnitPrice,
-    totalValue:            grossSaleValue,
-    totalCost:             totalCost,
-    profit:                totalProfit,
-    supplyStore:           _mergedSupplyStore,
-    salesRep:              'NONE',
-    paymentType:           isSettled ? 'CASH' : 'CREDIT',
-    transactionType:       (oldDebt > 0 && sales.length === 0) ? 'OLD_DEBT' : 'SALE',
-    creditReceived:        isSettled,
-    creditReceivedDate:    isSettled ? nowISODate : null,
-    creditValue:           isSettled ? 0 : netOutstanding,
-    partialPaymentReceived: isSettled ? 0 : alreadyPaid,
-    balancePaid:           alreadyPaid,
-    paid:                  isSettled,
-    isRepModeEntry:        false,
-    notes:                 'Combined year-end balance carried forward from financial year close',
-    mergedRecordCount:     recordCount,
-    mergedSummary: {
-      cashSales:           cashValue,
-      unpaidCredit:        unpaidCreditNet,
-      oldDebt:             oldDebt,
-      collectionsReceived: collectionTotal,
-      partialPayments:     b.partialPaymentTotal || 0,
-      partialPaymentsBySale: b.partialPaymentsBySale || {},
-      advanceCreditHeld:   advanceCredit,
-      realizedProfit:      realizedProfit,
-      unrealizedProfit:    unrealizedProfit,
-      grossOutstanding,
-      netOutstanding,
-      isSettled,
-      dateRange: {
-        from: allDates[0]           || nowISODate,
-        to:   allDates.slice(-1)[0] || nowISODate
-      },
-      recordCount,
-      originalRecordIds:   originalRecordIds  
-    }
-  }), false, true);
-  mergedRecords.push(mergedRecord);
-}
-if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-if (firebaseDB && currentUser) {
-  const userRef = firebaseDB.collection('users').doc(currentUser.uid);
-  const commitResult = await _commitMergedBatch(userRef, 'sales', mergedRecords, d => !d.isMerged);
-  if (!commitResult.ok) {
-    console.warn(`mergeSalesData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, commitResult.error);
-    _markRowSyncWarning('sales', commitResult);
-  }
-}
-const existingMerged = customerSales.filter(i => i.isMerged === true);
-customerSales = [...existingMerged, ...mergedRecords];
-await idb.set('customer_sales', customerSales);
-emitSyncUpdate({ customer_sales: customerSales });
-updateCloseYearProgress('Sales Data Merged', 40);
-}
-async function mergeCalculatorData(signal) {
-updateCloseYearProgress('Merging Calculator Data...', 50);
-if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-if (!Array.isArray(salesHistory) || salesHistory.length === 0) return;
-const repGroups = {};
-salesHistory.forEach(item => {
-  if (item.isMerged === true) return;
-  const seller = item.seller || 'Unknown';
-  if (!repGroups[seller]) repGroups[seller] = [];
-  repGroups[seller].push(item);
-});
-if (Object.keys(repGroups).length === 0) {
-  updateCloseYearProgress('Calculator Data - No New Records to Merge', 60);
-  return;
-}
-const nowDate = new Date();
-const nowISODate = nowDate.toISOString().split('T')[0];
-const mergeEpoch = nowDate.getTime();
-const nowTime = nowDate.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true});
-const mergedRecords = [];
-for (const [seller, items] of Object.entries(repGroups)) {
-  if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-  const firstItem = items[0] || {};
-  const datesSorted = items.map(i => i.date).filter(Boolean).sort();
-
-  const sellerTotals = items.reduce((acc, item) => {
-    acc.totalSold  += (item.totalSold  || 0);
-    acc.returned   += (item.returned   || 0);
-    acc.netSold    = acc.totalSold - acc.returned;
-    acc.creditQty  += (item.creditQty  || 0);
-    acc.cashQty    += (item.cashQty    || 0);
-    acc.revenue    += (item.revenue    || 0);
-    acc.profit     += (item.profit     || 0);
-    acc.totalCost  += (item.totalCost  || 0);
-    acc.creditValue+= (item.creditValue|| 0);
-    acc.prevColl   += (item.prevColl   || 0);
-    acc.received   += (item.received   || 0);
-    acc.totalExpected += (item.totalExpected || 0);
-    if (item.returned > 0 && item.returnStore) {
-      acc.returnsByStore[item.returnStore] = (acc.returnsByStore[item.returnStore] || 0) + (item.returned || 0);
-    }
-    return acc;
-  }, { totalSold:0, returned:0, netSold:0, creditQty:0, cashQty:0, revenue:0, profit:0, totalCost:0, creditValue:0, prevColl:0, received:0, totalExpected:0, returnsByStore:{} });
-
-  const mergedNetSold = sellerTotals.totalSold - sellerTotals.returned;
-  // unitPrice: fixed canonical sale price from factory settings.
-  // Calculator (seller summary) records always use STORE_A (standard price).
-  // Never compute as revenue/qty — that produces a weighted average.
-  const _calcCanonicalSp = getSalePriceForStore('STORE_A');
-  const avgUnitPrice = _calcCanonicalSp > 0
-    ? _calcCanonicalSp
-    : (firstItem.unitPrice || 0);
-  // costPrice: weighted average of actual cost per kg is correct here —
-  // formula material costs can change over the year.
-  const avgCostPrice = mergedNetSold > 0
-    ? parseFloat((sellerTotals.totalCost / mergedNetSold).toFixed(4))
-    : (firstItem.costPrice || calculateSalesCostPerKg('standard') || 0);
-  const returnStoreEntries = Object.entries(sellerTotals.returnsByStore);
-  const primaryReturnStore = returnStoreEntries.length > 0
-    ? returnStoreEntries.sort((a, b) => b[1] - a[1])[0][0]
-    : null;
-
-  
-
-  
-  const primaryId = generateUUID('calc-merged');
-  const primaryRecord = ensureRecordIntegrity(_buildMergedBase(primaryId, mergeEpoch, nowISODate, nowTime, {
-    seller,
-    unitPrice:     avgUnitPrice,
-    costPrice:     avgCostPrice,
-    revenue:       sellerTotals.revenue,
-    profit:        sellerTotals.profit,
-    totalCost:     sellerTotals.totalCost,
-    totalSold:     sellerTotals.totalSold,
-    returned:       sellerTotals.returned,
-    returnStore:    primaryReturnStore,
-    returnsByStore: sellerTotals.returnsByStore,
-    creditQty:     sellerTotals.creditQty,
-    cashQty:       sellerTotals.cashQty,
-    creditValue:   sellerTotals.creditValue,
-    prevColl:      sellerTotals.prevColl,
-    totalExpected: sellerTotals.totalExpected,
-    received:      sellerTotals.received,
-    statusText:    'OPENING BALANCE',
-    statusClass:   'result-box discrepancy-ok',
-    linkedSalesIds:    [],
-    linkedRepSalesIds: [],
-    mergedRecordCount: items.length,
-    mergedSummary: {
-      dateRange:      { from: datesSorted[0] || nowISODate, to: datesSorted.slice(-1)[0] || nowISODate },
-      recordCount:    items.length,
-      returnsByStore: sellerTotals.returnsByStore
-    }
-  }), false, true);
-  mergedRecords.push(primaryRecord);
-}
-if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-if (firebaseDB && currentUser) {
-  const userRef = firebaseDB.collection('users').doc(currentUser.uid);
-  const commitResult = await _commitMergedBatch(userRef, 'calculator_history', mergedRecords);
-  if (!commitResult.ok) {
-    console.warn(`mergeCalculatorData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, commitResult.error);
-    _markRowSyncWarning('calc', commitResult);
-  }
-}
-const existingMergedCalc = salesHistory.filter(item => item.isMerged === true);
-salesHistory = [...existingMergedCalc, ...mergedRecords];
-await idb.set('noman_history', salesHistory);
-emitSyncUpdate({ noman_history: salesHistory });
-updateCloseYearProgress('Calculator Data Merged', 60);
-}
-async function mergePaymentData(signal) {
-updateCloseYearProgress('Merging Payment Data...', 70);
-if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-if (!Array.isArray(paymentTransactions) || paymentTransactions.length === 0) return;
-const entityGroups = {};
-paymentTransactions.forEach(item => {
-  if (item.isMerged === true) return;
-  const entityId = item.entityId || 'unknown';
-  if (!entityGroups[entityId]) entityGroups[entityId] = [];
-  entityGroups[entityId].push(item);
-});
-if (Object.keys(entityGroups).length === 0) {
-  updateCloseYearProgress('Payment Data - No New Records to Merge', 80);
-  return;
-}
-const nowDate = new Date();
-const nowISODate = nowDate.toISOString().split('T')[0];
-const mergeEpoch = nowDate.getTime();
-const nowTime = nowDate.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true});
-const mergedRecords = [];
-for (const [entityId, items] of Object.entries(entityGroups)) {
-  if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-  const entity = paymentEntities.find(e => e.id === entityId);
-  const totals = items.reduce((acc, item) => {
-    if (item.type === 'IN') acc.in += (item.amount || 0);
-    else if (item.type === 'OUT') acc.out += (item.amount || 0);
-    return acc;
-  }, { in: 0, out: 0 });
-  const netBalance = parseFloat((totals.in - totals.out).toFixed(2));
-
-  const SIGNIFICANT_BALANCE_THRESHOLD = 0.01;
-  if (Math.abs(netBalance) < SIGNIFICANT_BALANCE_THRESHOLD) {
-    continue;  
-  }
-  const mergedId = generateUUID('pay-merged');
-  const datesSorted = items.map(i => i.date).filter(Boolean).sort();
-  const entityName = entity?.name || items[0]?.entityName || 'Unknown Entity';
-  const entityType = entity?.type || items[0]?.entityType || 'payee';
-  const mergedRecord = ensureRecordIntegrity(_buildMergedBase(mergedId, mergeEpoch, nowISODate, nowTime, {
-    entityId,
-    entityName,
-    entityType,
-    amount: Math.abs(netBalance),
-    type: netBalance > 0 ? 'IN' : 'OUT',
-    description: netBalance > 0
-      ? `Opening balance (receivable) — carried from previous year (${items.length} txns)`
-      : `Opening balance (payable) — carried from previous year (${items.length} txns)`,
-    isPayable: netBalance < 0,   
-    isExpense: false,
-    mergedRecordCount: items.length,
-
-    mergedSummary: {
-      originalIn: totals.in,
-      originalOut: totals.out,
-      netBalance,
-      dateRange: { from: datesSorted[0] || nowISODate, to: datesSorted.slice(-1)[0] || nowISODate },
-      recordCount: items.length,
-
-      hasSupplierMaterials: items.some(i => i.isPayable === true && i.type === 'OUT')
-    }
-  }), false, true);
-  mergedRecords.push(mergedRecord);
-}
-if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-if (firebaseDB && currentUser) {
-  const userRef = firebaseDB.collection('users').doc(currentUser.uid);
-  const commitResult = await _commitMergedBatch(userRef, 'transactions', mergedRecords);
-  if (!commitResult.ok) {
-    console.warn(`mergePaymentData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, commitResult.error);
-    _markRowSyncWarning('pay', commitResult);
-  }
-}
-const existingMergedPay = paymentTransactions.filter(item => item.isMerged === true);
-paymentTransactions = [...existingMergedPay, ...mergedRecords];
-await idb.set('payment_transactions', paymentTransactions);
-emitSyncUpdate({ payment_transactions: paymentTransactions });
-updateCloseYearProgress('Payment Data Merged', 80);
-}
-async function mergeFactoryData(signal) {
-updateCloseYearProgress('Merging Factory Data...', 85);
-if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-if (!Array.isArray(factoryProductionHistory) || factoryProductionHistory.length === 0) return;
-const nonMergedRecords = factoryProductionHistory.filter(item => item.isMerged !== true);
-if (nonMergedRecords.length === 0) {
-  updateCloseYearProgress('Factory Data - No New Records to Merge', 90);
-  return;
-}
-const storeGroups = {};
-nonMergedRecords.forEach(item => {
-  const store = item.store || 'standard';
-  if (!storeGroups[store]) storeGroups[store] = [];
-  storeGroups[store].push(item);
-});
-const nowDate = new Date();
-const nowISODate = nowDate.toISOString().split('T')[0];
-const mergeEpoch = nowDate.getTime();
-const nowTime = nowDate.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true});
-const mergedRecords = [];
-for (const [store, items] of Object.entries(storeGroups)) {
-  if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-  const totals = items.reduce((acc, item) => {
-    acc.units += (item.units || 0);
-    acc.totalCost += (item.totalCost || 0);
-    acc.materialsCost += (item.materialsCost || 0);
-    acc.additionalCost += (item.additionalCost || 0);
-    acc.rawMaterialsUsed += (item.rawMaterialsUsed || 0);
-    return acc;
-  }, { units: 0, totalCost: 0, materialsCost: 0, additionalCost: 0, rawMaterialsUsed: 0 });
-
-
-  const expectedTotalCost = totals.materialsCost + totals.additionalCost;
-  if (Math.abs(expectedTotalCost - totals.totalCost) > 0.01) {
-
-    const originalTotalCost = totals.totalCost;
-    totals.totalCost = expectedTotalCost;
-    console.warn(`Factory data auto-corrected: totalCost adjusted from ${originalTotalCost} to ${expectedTotalCost}`);
-  }
-  const mergedId = generateUUID('factory-merged');
-  const datesSorted = items.map(i => i.date).filter(Boolean).sort();
-  const mergedRecord = ensureRecordIntegrity(_buildMergedBase(mergedId, mergeEpoch, nowISODate, nowTime, {
-    store,
-    units: totals.units,
-    totalCost: totals.totalCost,
-    materialsCost: totals.materialsCost,
-    additionalCost: totals.additionalCost,
-    rawMaterialsUsed: totals.rawMaterialsUsed,
-    notes: `Opening balance (${store}) — carried from previous year (${items.length} records)`,
-    mergedRecordCount: items.length,
-    mergedSummary: {
-      dateRange: { from: datesSorted[0] || nowISODate, to: datesSorted.slice(-1)[0] || nowISODate },
-      recordCount: items.length
-    }
-  }), false, true);
-  mergedRecords.push(mergedRecord);
-}
-if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-if (firebaseDB && currentUser) {
-  const userRef = firebaseDB.collection('users').doc(currentUser.uid);
-  const commitResult = await _commitMergedBatch(userRef, 'factory_history', mergedRecords);
-  if (!commitResult.ok) {
-    console.warn(`mergeFactoryData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, commitResult.error);
-    _markRowSyncWarning('factory', commitResult);
-  }
-}
-const existingMergedFactory = factoryProductionHistory.filter(item => item.isMerged === true);
-factoryProductionHistory = [...existingMergedFactory, ...mergedRecords];
-await idb.set('factory_production_history', factoryProductionHistory);
-emitSyncUpdate({ factory_production_history: factoryProductionHistory });
-updateCloseYearProgress('Factory Data Merged', 90);
-}
-async function mergeRepSalesData(signal) {
-updateCloseYearProgress('Merging Rep Sales Data...', 88);
-if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-if (!Array.isArray(repSales) || repSales.length === 0) return;
-const nowDate    = new Date();
-const nowISODate = nowDate.toISOString().split('T')[0];
-const mergeEpoch = nowDate.getTime();
-const nowTime    = nowDate.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
-const mergedRecords = [];
-const repBuckets = {};
-repSales.forEach(item => {
-  if (item.isMerged === true) return;
-  if (!isRepSale(item)) return;  
-  const name = item.customerName || 'Unknown';
-  const rep  = item.salesRep     || 'NONE';
-  const key  = `${name}::${rep}`;
-  if (!repBuckets[key]) {
-    repBuckets[key] = {
-      customer: name, rep,
-      sales: [], oldDebt: 0, collectionTotal: 0, partialPaymentTotal: 0, partialPaymentsBySale: {},
-      phone: '', supplyStore: ''
-    };
-  }
-  const b = repBuckets[key];
-  b.phone       = b.phone       || item.customerPhone || '';
-  b.supplyStore = b.supplyStore || item.supplyStore   || 'STORE_A';
-  if (item.paymentType === 'PARTIAL_PAYMENT') {
-
-    b.partialPaymentTotal += (item.totalValue || 0);
-    const linkedKey = item.relatedSaleId || item.linkedSaleId;
-    if (linkedKey) {
-
-      
-      b.partialPaymentsBySale[linkedKey] = (b.partialPaymentsBySale[linkedKey] || 0) + (item.totalValue || 0);
-
-      if (!b.partialPaymentCustomers) b.partialPaymentCustomers = {};
-      b.partialPaymentCustomers[linkedKey] = item.customerName || name;
-    }
-    return;
-  }
-  if (item.paymentType === 'COLLECTION') {
-    b.collectionTotal += (item.totalValue || 0);
-    return;
-  }
-  if (item.transactionType === 'OLD_DEBT') {
-    b.oldDebt += Math.max(0, (item.totalValue || 0) - (item.partialPaymentReceived || 0));
-    return;
-  }
-  b.sales.push(item);
-});
-for (const [, b] of Object.entries(repBuckets)) {
-  if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-  const { customer, rep, sales, oldDebt, collectionTotal, phone, supplyStore } = b;
-  let totalQty = 0, totalValue = 0, totalCost = 0, totalProfit = 0;
-  let realizedProfit = 0, unrealizedProfit = 0;
-  let cashValue = 0, unpaidCreditNet = 0;
-  const originalRecordIds = sales.map(s => s.id);
-  for (const item of sales) {
-    totalQty    += (item.quantity   || 0);
-    totalValue  += (item.totalValue || 0);
-    totalCost   += (item.totalCost  || 0);
-    totalProfit += (item.profit     || 0);
-
-
-    if (item.paymentType === 'CREDIT' && !item.creditReceived) {
-      unrealizedProfit += (item.profit || 0);  
-    } else {
-      realizedProfit += (item.profit || 0);    
-    }
-
-    if (item.paymentType === 'CASH' || (item.paymentType === 'CREDIT' && item.creditReceived)) {
-      cashValue += (item.totalValue || 0);
-    } else if (item.paymentType === 'CREDIT' && !item.creditReceived) {
-      unpaidCreditNet += Math.max(0, (item.totalValue || 0) - (item.partialPaymentReceived || 0));
-    }
-  }
-  const grossOutstanding = unpaidCreditNet + oldDebt;
-  const netOutstanding   = Math.max(0, grossOutstanding - collectionTotal);
-  const advanceCredit    = Math.max(0, collectionTotal - grossOutstanding);
-  const isSettled        = netOutstanding <= 0;
-  if (sales.length === 0 && oldDebt <= 0 && collectionTotal <= 0) continue;
-  const allDates  = sales.map(i => i.date).filter(Boolean).sort();
-  const firstItem = sales[0] || {};
-  const recordCount = sales.length + (oldDebt > 0 ? 1 : 0) + (collectionTotal > 0 ? 1 : 0);
-  const mergedId = generateUUID('repsale-merged');
-
-  
-
-  
-
-  
-  // unitPrice: fixed canonical sale price for the supply store from factory
-  // settings — never divide totalValue/quantity (gives averaged/partial price).
-  const _repMergedStore = supplyStore || firstItem.supplyStore || 'STORE_A';
-  const repCanonicalPrice = getSalePriceForStore(_repMergedStore);
-  const lastUnitPrice = repCanonicalPrice > 0
-    ? repCanonicalPrice
-    : (firstItem.unitPrice || (firstItem.quantity > 0 ? firstItem.totalValue / firstItem.quantity : 0) || 0);
-  const grossSaleValue  = parseFloat(totalValue.toFixed(2));
-  const alreadyPaid     = isSettled ? grossSaleValue : parseFloat((grossSaleValue - netOutstanding).toFixed(2));
-  const mergedRecord = ensureRecordIntegrity(_buildMergedBase(mergedId, mergeEpoch, nowISODate, nowTime, {
-    customerName:          customer,
-    customerPhone:         phone,
-    quantity:              totalQty,
-    unitPrice:             lastUnitPrice,
-    totalValue:            grossSaleValue,
-    totalCost:             totalCost,
-    profit:                totalProfit,
-    paymentType:           isSettled ? 'CASH' : 'CREDIT',
-    transactionType:       (oldDebt > 0 && sales.length === 0) ? 'OLD_DEBT' : 'SALE',
-    creditReceived:        isSettled,
-    creditReceivedDate:    isSettled ? nowISODate : null,
-    creditValue:           isSettled ? 0 : netOutstanding,
-    partialPaymentReceived: isSettled ? 0 : alreadyPaid,
-    balancePaid:           alreadyPaid,
-    paid:                  isSettled,
-    salesRep:              rep,
-    supplyStore:           _repMergedStore,
-    isRepModeEntry:        true,
-    notes:                 'Combined year-end balance carried forward from financial year close',
-    mergedRecordCount:     recordCount,
-    mergedSummary: {
-      cashSales:           cashValue,
-      unpaidCredit:        unpaidCreditNet,
-      oldDebt:             oldDebt,
-      collectionsReceived: collectionTotal,
-      partialPayments:     b.partialPaymentTotal || 0,
-      partialPaymentsBySale: b.partialPaymentsBySale || {},
-      advanceCreditHeld:   advanceCredit,
-      realizedProfit:      realizedProfit,
-      unrealizedProfit:    unrealizedProfit,
-      grossOutstanding,
-      netOutstanding,
-      isSettled,
-      dateRange: {
-        from: allDates[0]           || nowISODate,
-        to:   allDates.slice(-1)[0] || nowISODate
-      },
-      recordCount,
-      originalRecordIds:   originalRecordIds  
-    }
-  }), false, true);
-  mergedRecords.push(mergedRecord);
-}
-if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-if (firebaseDB && currentUser) {
-  const userRef = firebaseDB.collection('users').doc(currentUser.uid);
-  const commitResult = await _commitMergedBatch(userRef, 'rep_sales', mergedRecords, d => !d.isMerged);
-  if (!commitResult.ok) {
-    console.warn(`mergeRepSalesData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, commitResult.error);
-    _markRowSyncWarning('repsales', commitResult);
-  }
-}
-const existingMergedRep = repSales.filter(item => item.isMerged === true);
-repSales = [...existingMergedRep, ...mergedRecords];
-await idb.set('rep_sales', repSales);
-emitSyncUpdate({ rep_sales: repSales });
-updateCloseYearProgress('Rep Sales Data Merged', 92);
-}
-async function mergeExpensesData(signal) {
-updateCloseYearProgress('Merging Expenses...', 94);
-if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-if (!Array.isArray(expenseRecords) || expenseRecords.length === 0) {
-  updateCloseYearProgress('Expenses - No Records to Merge', 94);
-  return;
-}
-const nowDate    = new Date();
-const nowISODate = nowDate.toISOString().split('T')[0];
-const mergeEpoch = nowDate.getTime();
-const nowTime    = nowDate.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
-const expenseGroups = {};
-expenseRecords.forEach(exp => {
-  if (exp.isMerged === true) return;
-  const cat  = exp.category || 'operating';
-  const name = (exp.name    || 'Unnamed').trim();
-  const key  = `${cat}||${name}`;
-  if (!expenseGroups[key]) expenseGroups[key] = { category: cat, name, records: [] };
-  expenseGroups[key].records.push(exp);
-});
-if (Object.keys(expenseGroups).length === 0) {
-  updateCloseYearProgress('Expenses - No New Records to Merge', 97);
-  return;
-}
-const mergedRecords = [];
-for (const [, grp] of Object.entries(expenseGroups)) {
-  if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-  const { category, name, records } = grp;
-  const totalAmount = records.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
-  const allDates    = records.map(e => e.date).filter(Boolean).sort();
-  const mergedId = generateUUID('expense-merged');
-  const mergedRecord = ensureRecordIntegrity({
-    ..._buildMergedBase(mergedId, mergeEpoch, nowISODate, nowTime, {}),
-    name,
-    amount:      parseFloat(totalAmount.toFixed(2)),
-    category,
-    description: `Year-end merged total for "${name}" (${records.length} record${records.length !== 1 ? 's' : ''})`,
-    mergedRecordCount: records.length,
-    mergedSummary: {
-      category,
-      expenseName:  name,
-      totalAmount:  parseFloat(totalAmount.toFixed(2)),
-      dateRange: {
-        from: allDates[0]           || nowISODate,
-        to:   allDates.slice(-1)[0] || nowISODate
-      },
-      recordCount: records.length
-    }
-  }, false, true);
-  mergedRecords.push(mergedRecord);
-}
-if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-if (firebaseDB && currentUser) {
-  const userRef = firebaseDB.collection('users').doc(currentUser.uid);
-  const commitResult = await _commitMergedBatch(userRef, 'expenses', mergedRecords, d => !d.isMerged);
-  if (!commitResult.ok) {
-    console.warn(`mergeExpensesData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, commitResult.error);
-    _markRowSyncWarning('exp', commitResult);
-  }
-}
-const existingMerged = expenseRecords.filter(e => e.isMerged === true);
-expenseRecords = [...existingMerged, ...mergedRecords];
-await idb.set('expenses', expenseRecords);
-emitSyncUpdate({ expenses: expenseRecords });
-updateCloseYearProgress('Expenses Merged', 97);
-}
-async function mergeStockReturnsData(signal) {
-updateCloseYearProgress('Merging Stock Returns...', 98);
-if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-if (!Array.isArray(stockReturns) || stockReturns.length === 0) {
-  updateCloseYearProgress('Stock Returns - No Records to Merge', 98);
-  return;
-}
-const nowDate    = new Date();
-const nowISODate = nowDate.toISOString().split('T')[0];
-const mergeEpoch = nowDate.getTime();
-const nowTime    = nowDate.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
-const storeGroups = {};  
-stockReturns.forEach(ret => {
-  if (ret.isMerged === true) return;
-  const store = ret.store || 'UNKNOWN';
-  const date  = ret.date  || nowISODate;
-  const key   = `${store}||${date}`;
-  if (!storeGroups[key]) storeGroups[key] = { store, date, records: [], totalQty: 0 };
-  storeGroups[key].records.push(ret);
-  storeGroups[key].totalQty += (ret.quantity || 0);
-});
-if (Object.keys(storeGroups).length === 0) {
-  updateCloseYearProgress('Stock Returns - No New Records to Merge', 100);
-  return;
-}
-const mergedRecords = [];
-for (const [, grp] of Object.entries(storeGroups)) {
-  if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-  const { store, date, records, totalQty } = grp;
-
-  
-  const sellerBreakdown = {};
-  records.forEach(r => {
-    const seller = r.seller || 'Unknown';
-    if (!sellerBreakdown[seller]) {
-      sellerBreakdown[seller] = { quantity: 0, recordCount: 0 };
-    }
-    sellerBreakdown[seller].quantity += (r.quantity || 0);
-    sellerBreakdown[seller].recordCount++;
-  });
-  const sellers = [...new Set(records.map(r => r.seller).filter(Boolean))];
-  const mergedId = generateUUID('ret-merged');
-
-  
-  const base = _buildMergedBase(mergedId, mergeEpoch, nowISODate, nowTime, {});
-  const mergedRecord = ensureRecordIntegrity({
-    ...base,
-    date,          
-    store,
-    quantity:      parseFloat(totalQty.toFixed(4)),
-    seller:        sellers.join(', ') || 'Multiple',
-    mergedRecordCount: records.length,
-    mergedSummary: {
-      store,
-      date,
-      totalQuantity:       parseFloat(totalQty.toFixed(4)),
-      contributingSellers: sellers,
-      sellerBreakdown:     sellerBreakdown,
-      recordCount:         records.length
-    }
-  }, false, true);
-  mergedRecords.push(mergedRecord);
-}
-if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-if (firebaseDB && currentUser) {
-  const userRef = firebaseDB.collection('users').doc(currentUser.uid);
-  const commitResult = await _commitMergedBatch(userRef, 'returns', mergedRecords, d => !d.isMerged);
-  if (!commitResult.ok) {
-    console.warn(`mergeStockReturnsData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, commitResult.error);
-    _markRowSyncWarning('ret', commitResult);
-  }
-}
-const existingMerged = stockReturns.filter(r => r.isMerged === true);
-stockReturns = [...existingMerged, ...mergedRecords];
-await idb.set('stock_returns', stockReturns);
-emitSyncUpdate({ stock_returns: stockReturns });
-updateCloseYearProgress('Stock Returns Merged', 100);
-}
-async function loadDeviceList() {
-const container = document.getElementById('device-list-container');
-if (!container) return;
-if (!firebaseDB || !currentUser) {
-container.innerHTML = `
-<div class="u-empty-state-sm" >
-Please log in to view devices
-</div>
-`;
-return;
-}
-try {
-const userRef = firebaseDB.collection('users').doc(currentUser.uid);
-const devicesSnap = await userRef.collection('devices').get();
-if (devicesSnap.empty) {
-container.innerHTML = `
-<div class="u-empty-state-sm" >
-No devices registered yet
-</div>
-`;
-return;
-}
-const currentDeviceId = await getDeviceId();
-const now = Date.now();
-let accountEmail = currentUser.email || 'Unknown';
-try {
-const accountInfoSnap = await userRef.collection('account').doc('info').get();
-if (accountInfoSnap.exists) {
-const accountData = accountInfoSnap.data();
-accountEmail = accountData.email || accountEmail;
-}
-} catch (e) {
-console.error('An unexpected error occurred.', e);
-showToast('An unexpected error occurred.', 'error');
-}
-const seenIds = new Set();
-const uniqueDocs = devicesSnap.docs.filter(doc => {
-const id = doc.data().deviceId;
-if (!id || id === 'default_device' || doc.id === 'default_device') return false;
-if (seenIds.has(id)) return false;
-seenIds.add(id);
-return true;
-});
-if (uniqueDocs.length === 0) {
-container.innerHTML = `
-<div class="u-empty-state-sm" >
-No devices registered yet
-</div>
-`;
-return;
-}
-let html = `
-<div style="margin-bottom: 15px; padding: 10px; background: rgba(0, 122, 255, 0.1); border-radius: 8px; border: 1px solid rgba(0, 122, 255, 0.3);">
-<div style="font-size: 0.75rem; color: var(--accent); font-weight: 600;">
-Account: ${accountEmail}
-</div>
-<div class="u-field-hint-xxs" >
-Total Devices: ${uniqueDocs.length} • Online: ${uniqueDocs.filter(d => {
-const ls = d.data().lastSeen?.toMillis() || 0;
-return (now - ls) < 60000;
-}).length}
-</div>
-</div>
-`;
-uniqueDocs.forEach(doc => {
-const device = doc.data();
-const isCurrentDevice = device.deviceId === currentDeviceId;
-const lastSeen = device.lastSeen?.toMillis() || 0;
-const isOnline = (now - lastSeen) < 60000;
-const totalCommands = device.totalCommands || 0;
-const remoteAppliedMode = device.remoteAppliedMode || null;
-const remoteAppliedAt = device.remoteAppliedAt || null;
-const remoteAppliedBy = device.remoteAppliedBy || null;
-const deviceMode = device.currentMode || 'admin';
-const assignedRep = device.assignedRep || null;
-const assignedManager = device.assignedManager || null;
-const assignedUserTabs = Array.isArray(device.assignedUserTabs) ? device.assignedUserTabs : [];
-const modeLabel = deviceMode === 'admin'
-? 'ADMIN'
-: deviceMode === 'userrole'
-? (assignedManager || 'USER ROLE')
-: deviceMode === 'production'
-? (assignedManager || 'PRODUCTION')
-: deviceMode === 'factory'
-? (assignedManager || 'FACTORY')
-: (assignedRep || 'REP');
-const modeColor = deviceMode === 'admin' ? '#007aff'
-: deviceMode === 'userrole' ? '#ffcc02'
-: deviceMode === 'production' ? '#69f0ae'
-: deviceMode === 'factory' ? '#ce93d8'
-: '#ff9f0a';
-const modeIcon = '';
-const devBorder = isCurrentDevice ? 'var(--accent)' : 'var(--glass-border)';
-const onlineColor = isOnline ? '#30d158' : '#ff453a';
-const onlineDot = isOnline ? '● Online' : '○ Offline';
-const shortId = device.deviceId ? device.deviceId.substring(0, 20) + '…' : 'N/A';
-const thisDeviceBadge = isCurrentDevice
-? '<span style="margin-left:6px;font-size:0.6rem;color:var(--accent);font-family:Geist,sans-serif;font-weight:700;">(This Device)</span>'
-: '';
-let cardHtml = '<div style="margin-bottom:12px;padding:14px;background:var(--glass);border-radius:14px;border:2px solid ' + devBorder + ';">';
-cardHtml += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;gap:8px;">';
-cardHtml += '<div style="font-size:0.65rem;font-family:\'Geist Mono\',monospace;color:var(--text-muted);word-break:break-all;flex:1;min-width:0;line-height:1.4;">' + shortId + thisDeviceBadge + '</div>';
-cardHtml += '<div style="text-align:right;flex-shrink:0;">';
-cardHtml += '<div style="font-size:0.8rem;font-weight:800;color:' + modeColor + ';white-space:nowrap;">' + modeLabel + '</div>';
-cardHtml += '<div style="font-size:0.6rem;color:' + onlineColor + ';margin-top:2px;">' + onlineDot + '</div>';
-cardHtml += '</div>';
-cardHtml += '</div>';
-const lastSeenStr = lastSeen ? new Date(lastSeen).toLocaleString() : 'Never';
-cardHtml += '<div style="font-size:0.6rem;color:var(--text-muted);margin-bottom:6px;">Last seen: ' + lastSeenStr + '</div>';
-const lastCmdStr = remoteAppliedAt ? new Date(remoteAppliedAt).toLocaleString() : null;
-const lastCmdMode = remoteAppliedMode ? remoteAppliedMode.toUpperCase() : null;
-const lastCmdBy = remoteAppliedBy || null;
-if (lastCmdMode || totalCommands > 0) {
-cardHtml += '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:11px;padding:7px 10px;background:rgba(255,255,255,0.04);border-radius:8px;border:1px solid var(--glass-border);">';
-cardHtml += '<span style="font-size:0.6rem;color:var(--text-muted);flex-shrink:0;">Commands:</span>';
-if (totalCommands > 0) {
-cardHtml += '<span style="font-size:0.62rem;font-weight:700;color:var(--accent);background:var(--accent-dim);padding:2px 7px;border-radius:99px;">' + totalCommands + ' sent</span>';
-}
-if (lastCmdMode) {
-cardHtml += '<span style="font-size:0.62rem;font-weight:700;color:var(--text-main);">→ ' + lastCmdMode + '</span>';
-}
-if (lastCmdBy) {
-cardHtml += '<span style="font-size:0.6rem;color:var(--text-muted);">by ' + esc(lastCmdBy) + '</span>';
-}
-if (lastCmdStr) {
-cardHtml += '<span style="font-size:0.58rem;color:var(--text-secondary);margin-left:auto;">' + lastCmdStr + '</span>';
-}
-cardHtml += '</div>';
-} else {
-cardHtml += '<div style="margin-bottom:11px;padding:7px 10px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid var(--glass-border);font-size:0.6rem;color:var(--text-secondary);">No commands sent yet</div>';
-}
-if (!isCurrentDevice) {
-const isAdmin = deviceMode === 'admin';
-const adminBg = isAdmin ? 'rgba(0,122,255,0.18)' : 'rgba(0,122,255,0.08)';
-const adminBord = isAdmin ? '2px solid rgba(0,122,255,0.55)' : '1px solid rgba(0,122,255,0.25)';
-const adminFw = isAdmin ? '800' : '600';
-const adminTick = isAdmin ? '✓ ' : '';
-cardHtml += '<button onclick="remoteControlDevice(\'' + device.deviceId + '\', \'admin\')"';
-cardHtml += ' style="width:100%;padding:9px;background:' + adminBg + ';border:' + adminBord + ';border-radius:99px;color:#007aff;cursor:pointer;font-size:0.72rem;font-weight:' + adminFw + ';margin-bottom:10px;">' + adminTick + 'Admin Mode</button>';
-if (salesRepsList.length > 0) {
-cardHtml += '<div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:5px;">Sales Representatives</div>';
-cardHtml += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:5px;margin-bottom:10px;">';
-const repColors = [
-{bg:'48,209,88',hex:'#30d158'},{bg:'255,159,10',hex:'#ff9f0a'},
-{bg:'191,90,242',hex:'#bf5af2'},{bg:'255,69,58',hex:'#ff453a'},{bg:'90,200,250',hex:'#5ac8fa'}
-];
-for (let ri = 0; ri < salesRepsList.length; ri++) {
-const rep = salesRepsList[ri];
-const c = repColors[ri % repColors.length];
-const repLocked = deviceMode === 'rep' && assignedRep === rep;
-const repBg = 'rgba(' + c.bg + ',' + (repLocked ? '0.22' : '0.08') + ')';
-const repBord = (repLocked ? '2' : '1') + 'px solid rgba(' + c.bg + ',' + (repLocked ? '0.65' : '0.28') + ')';
-const repFw = repLocked ? '800' : '600';
-const repTick = repLocked ? '✓ ' : '';
-cardHtml += '<button onclick="remoteControlDevice(\'' + device.deviceId + '\', \'rep\', \'' + rep + '\')"';
-cardHtml += ' style="padding:8px 5px;background:' + repBg + ';border:' + repBord + ';border-radius:99px;color:' + c.hex + ';cursor:pointer;font-size:0.68rem;font-weight:' + repFw + ';text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">';
-cardHtml += repTick + rep + '</button>';
-}
-cardHtml += '</div>';
-}
-if (userRolesList.length > 0) {
-cardHtml += '<div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:5px;">User Roles</div>';
-cardHtml += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:5px;margin-bottom:10px;">';
-for (let ui = 0; ui < userRolesList.length; ui++) {
-const user = userRolesList[ui];
-const userLocked = deviceMode === 'userrole' && device.assignedManager === user.name;
-const userBg = 'rgba(255,204,2,' + (userLocked ? '0.22' : '0.08') + ')';
-const userBord = (userLocked ? '2' : '1') + 'px solid rgba(255,204,2,' + (userLocked ? '0.65' : '0.28') + ')';
-const userFw = userLocked ? '800' : '600';
-const userTick = userLocked ? '✓ ' : '';
-const lookupKey = '_devTabsCache';
-if (!window[lookupKey]) window[lookupKey] = {};
-window[lookupKey][device.deviceId + '_' + ui] = user.tabs || [];
-cardHtml += '<button onclick="remoteControlDevice(\'' + device.deviceId + '\', \'userrole\', \'' + user.name + '\', (window._devTabsCache||{})[\'' + device.deviceId + '_' + ui + '\'])"';
-cardHtml += ' style="padding:8px 5px;background:' + userBg + ';border:' + userBord + ';border-radius:99px;color:#ffcc02;cursor:pointer;font-size:0.68rem;font-weight:' + userFw + ';text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">';
-cardHtml += userTick + user.name + '</button>';
-}
-cardHtml += '</div>';
-}
-cardHtml += '<button onclick="removeDevice(\'' + device.deviceId + '\')"';
-cardHtml += ' style="width:100%;padding:7px;background:rgba(255,69,58,0.07);border:1px solid rgba(255,69,58,0.28);border-radius:99px;color:#ff453a;cursor:pointer;font-size:0.65rem;">Remove Device</button>';
-} else {
-const thisDeviceModeColor = modeColor;
-cardHtml += '<div style="padding:8px 10px;background:rgba(0,122,255,0.05);border:1px solid rgba(0,122,255,0.2);border-radius:8px;color:var(--text-muted);text-align:center;font-size:0.7rem;">This Device — <span style="color:' + thisDeviceModeColor + ';font-weight:700;">' + modeLabel + '</span></div>';
-}
-cardHtml += '</div>';
-html += cardHtml;
-});
-container.innerHTML = html;
-} catch (error) {
-console.error('An unexpected error occurred.', error);
-showToast('An unexpected error occurred.', 'error');
-container.innerHTML = `
-<div style="text-align: center; padding: 20px; color: #ff453a;">
-Error loading devices: ${esc(error.message)}
-</div>
-`;
-}
-}
-async function refreshDeviceList() {
-const container = document.getElementById('device-list-container');
-if (container) {
-container.innerHTML = `
-<div class="u-empty-state-sm" >
-Refreshing...
-</div>
-`;
-}
-await loadDeviceList();
-showToast(' Device list refreshed', 'success', 2000);
-}
-async function remoteControlDevice(deviceId, targetMode, repName = null, userTabs = null) {
-if (!firebaseDB || !currentUser) {
-showToast('Not logged in', 'error', 3000);
-return;
-}
-let _rcTitle, _rcMsg, _rcConfirm;
-if (targetMode === 'admin') {
-_rcTitle = 'Unlock to Admin Mode';
-_rcMsg = 'Unlock this device to full Admin mode?\n\nAll tabs and admin features will become accessible.';
-_rcConfirm = 'Unlock to Admin';
-} else if (targetMode === 'rep' && repName) {
-_rcTitle = 'Lock Device — Sales Rep';
-_rcMsg = `Lock this device to Sales Rep mode for ${repName}?\n\nThe device will only show the Rep Sales tab. All admin features, tabs and controls will be hidden until unlocked remotely.`;
-_rcConfirm = `Lock to ${repName}`;
-} else if (targetMode === 'userrole' && repName) {
-const tabLabels = { prod: 'Production', factory: 'Factory', sales: 'Sales', payments: 'Payments' };
-const tabList = Array.isArray(userTabs) ? userTabs.map(t => tabLabels[t] || t).join(', ') : 'assigned tabs';
-_rcTitle = 'Lock Device — User Role';
-_rcMsg = `Lock this device to User Role for ${repName}?\n\nAssigned tabs: ${tabList}\n\nOnly the assigned sections will be visible. All other tabs, analytics and admin controls will be hidden.`;
-_rcConfirm = `Lock to ${repName}`;
-} else {
-_rcTitle = 'Switch Device Mode';
-_rcMsg = `Switch this device to ${targetMode.toUpperCase()} mode?`;
-_rcConfirm = 'Confirm';
-}
-const confirmed = await showGlassConfirm(_rcMsg, {
-title: _rcTitle,
-confirmText: _rcConfirm,
-cancelText: 'Cancel',
-danger: targetMode !== 'admin'
-});
-if (!confirmed) return;
-try {
-const userRef = firebaseDB.collection('users').doc(currentUser.uid);
-const commandTimestamp = firebase.firestore.FieldValue.serverTimestamp();
-const deviceRef = userRef.collection('devices').doc(deviceId);
-const updateData = {
-targetMode: targetMode,
-targetModeTimestamp: commandTimestamp,
-commandSource: 'remote_admin',
-lastControlled: commandTimestamp,
-controlledBy: currentUser.email || 'Admin',
-currentMode: targetMode,
-assignedRep: targetMode === 'rep' ? (repName || null) : null,
-assignedManager: targetMode === 'userrole' ? (repName || null) : null,
-assignedUserTabs: targetMode === 'userrole' ? (userTabs || []) : null,
-assignedRoleType: targetMode,
-assignedRoleName: repName || null,
-lockedAt: repName ? commandTimestamp : null,
-lockedBy: repName ? (currentUser.email || 'Admin') : null,
-};
-await deviceRef.set(updateData, { merge: true });
-const successMsg = targetMode === 'admin'
-? '✓ Device unlocked to Admin mode'
-: targetMode === 'rep' ? `✓ Device locked to Sales Rep: ${repName}`
-: targetMode === 'userrole' ? `✓ Device locked to User: ${repName}`
-: `✓ Command sent: ${targetMode}`;
-showToast(successMsg, 'success', 3500);
-setTimeout(loadDeviceList, 2000);
-} catch (error) {
-showToast('Failed to control device: ' + error.message, 'error', 4000);
-}
-}
-async function removeDevice(deviceId) {
-if (!firebaseDB || !currentUser) {
-showToast('Not logged in', 'error', 3000);
-return;
-}
-const _rdMsg = `Remove this device from the trusted list?\n\nThe device will no longer be able to sync data or receive remote commands. It will need to be re-approved if the user tries to reconnect.\n\nThis does not delete any data already on the device.`;
-if (!(await showGlassConfirm(_rdMsg, { title: 'Remove Trusted Device', confirmText: 'Remove', danger: true }))) {
-return;
-}
-try {
-const userRef = firebaseDB.collection('users').doc(currentUser.uid);
-const deviceRef = userRef.collection('devices').doc(deviceId);
-await deviceRef.delete();
-showToast('Device removed', 'success', 3000);
-await loadDeviceList();
-} catch (error) {
-showToast('Failed to remove device: ' + error.message, 'error', 3000);
-}
-}
-window.loadDeviceList = loadDeviceList;
-window.refreshDeviceList = refreshDeviceList;
-window.remoteControlDevice = remoteControlDevice;
-window.removeDevice = removeDevice;
-window.getDeviceId = getDeviceId;
-window.getDeviceName = getDeviceName;
-window.registerDevice = registerDevice;
-async function restoreDeviceModeOnLogin(uid) {
-if (!firebaseDB) return;
-try {
-const deviceId = await getDeviceId();
-const userRef = firebaseDB.collection('users').doc(uid);
-const deviceRef = userRef.collection('devices').doc(deviceId);
-const deviceDoc = await deviceRef.get();
-if (!deviceDoc.exists) {
-return;
-}
-const data = deviceDoc.data();
-const cloudMode = data.currentMode || 'admin';
-const cloudTimestamp = data.appMode_timestamp || 0;
-const localTimestamp = (await idb.get('appMode_timestamp')) || 0;
-const _modeIsLocked = cloudMode !== 'admin';
-const _localIsAdmin = appMode === 'admin';
-const shouldRestore = (cloudMode && cloudTimestamp > localTimestamp && cloudMode !== appMode)
-  || (_modeIsLocked && _localIsAdmin);
-if (shouldRestore) {
-const previousMode = appMode;
-appMode = cloudMode;
-const modeBatch = [
-['appMode', appMode],
-['appMode_timestamp', cloudTimestamp]
-];
-if (cloudMode === 'rep' && data.assignedRep) {
-currentRepProfile = data.assignedRep;
-modeBatch.push(['repProfile', currentRepProfile]);
-modeBatch.push(['repProfile_timestamp', data.repProfile_timestamp || cloudTimestamp]);
-} else if (cloudMode === 'userrole' && data.assignedManager) {
-window._assignedManagerName = data.assignedManager;
-window._assignedUserTabs = Array.isArray(data.assignedUserTabs) ? data.assignedUserTabs : [];
-modeBatch.push(['assignedManager', data.assignedManager]);
-modeBatch.push(['assignedUserTabs', window._assignedUserTabs]);
-} else if ((cloudMode === 'production' || cloudMode === 'factory') && data.assignedManager) {
-window._assignedManagerName = data.assignedManager;
-modeBatch.push(['assignedManager', data.assignedManager]);
-}
-await idb.setBatch(modeBatch);
-const modeLabel = appMode === 'rep' ? 'Rep Mode' : appMode === 'userrole' ? 'User Role Mode' : appMode === 'production' ? 'Production Mode' : appMode === 'factory' ? 'Factory Mode' : 'Admin Mode';
-const isRemote = !!data.remoteAppliedMode;
-showToast(isRemote
-? `Restoring remotely assigned ${modeLabel}...`
-: `Switching to ${modeLabel}...`, 'info', 2000);
-setTimeout(() => { window.location.reload(); }, 1500);
-} else {
-}
-} catch (error) {
-console.error('Failed to save data locally.', error);
-showToast('Failed to save data locally.', 'error');
-}
-}
-window.restoreDeviceModeOnLogin = restoreDeviceModeOnLogin;
-async function listenForDeviceCommands() {
-if (!firebaseDB || !currentUser) return;
-try {
-const deviceId = await getDeviceId();
-const userRef = firebaseDB.collection('users').doc(currentUser.uid);
-const deviceRef = userRef.collection('devices').doc(deviceId);
-const unsubscribe = deviceRef.onSnapshot((doc) => {
-if (!doc.exists) return;
-const data = doc.data();
-if (data.targetMode && data.targetModeTimestamp) {
-const targetMode = data.targetMode;
-let resolvedName = null;
-const roleType = data.assignedRoleType || targetMode;
-if (roleType === 'rep') {
-resolvedName = data.assignedRoleName || data.assignedRep || null;
-} else if (roleType === 'userrole' || roleType === 'production' || roleType === 'factory') {
-resolvedName = data.assignedRoleName || data.assignedManager || null;
-}
-const effectiveMode = data.assignedRoleType || targetMode;
-const resolvedUserTabs = Array.isArray(data.assignedUserTabs) ? data.assignedUserTabs : [];
-const commandTimestamp = data.targetModeTimestamp.toMillis
-? data.targetModeTimestamp.toMillis()
-: data.targetModeTimestamp;
-const lastProcessed = window.lastProcessedCommandTimestamp || 0;
-if (commandTimestamp > lastProcessed) {
-applyRemoteModeChange(effectiveMode, data.commandSource || 'remote', resolvedName, resolvedUserTabs);
-window.lastProcessedCommandTimestamp = commandTimestamp;
-}
-}
-}, (error) => {
-console.warn('Device command listener error:', error);
-});
-window.deviceCommandsUnsubscribe = unsubscribe;
-} catch (error) {
-console.error('listenForDeviceCommands failed:', error);
-}
-}
-async function applyRemoteModeChange(targetMode, source, repName = null, userTabs = null) {
-const previousMode = appMode;
-const previousManager = window._assignedManagerName || null;
-const previousTabs = JSON.stringify(window._assignedUserTabs || []);
-if (previousMode === targetMode) {
-if (targetMode === 'admin') return;
-if (targetMode === 'rep' && currentRepProfile === repName) return;
-if (targetMode === 'userrole' && previousManager === repName && previousTabs === JSON.stringify(userTabs || [])) return;
-}
-appMode = targetMode;
-const nowMs = Date.now();
-const batchData = [['appMode', appMode], ['appMode_timestamp', nowMs]];
-if (targetMode === 'rep' && repName) {
-currentRepProfile = repName;
-batchData.push(['repProfile', repName], ['repProfile_timestamp', nowMs]);
-if (!salesRepsList.includes(repName)) {
-salesRepsList.push(repName);
-batchData.push(['sales_reps_list', salesRepsList]);
-if (typeof renderAllRepUI === 'function') renderAllRepUI();
-}
-} else if (targetMode === 'userrole') {
-window._assignedManagerName = repName || null;
-window._assignedUserTabs = Array.isArray(userTabs) ? userTabs : [];
-batchData.push(['assignedManager', repName || null], ['assignedUserTabs', window._assignedUserTabs]);
-} else if (targetMode === 'production' || targetMode === 'factory') {
-window._assignedManagerName = repName || null;
-batchData.push(['assignedManager', repName || null]);
-} else if (targetMode === 'admin') {
-window._assignedManagerName = null;
-window._assignedUserTabs = [];
-batchData.push(['assignedManager', null], ['assignedUserTabs', []]);
-}
-await idb.setBatch(batchData);
-if (firebaseDB && currentUser) {
-try {
-const deviceId = await getDeviceId();
-const deviceRef = firebaseDB.collection('users').doc(currentUser.uid)
-.collection('devices').doc(deviceId);
-const payload = {
-currentMode: targetMode, appMode_timestamp: nowMs,
-remoteAppliedMode: targetMode, remoteAppliedAt: nowMs, remoteAppliedBy: source || 'remote',
-assignedRoleType: targetMode, assignedRoleName: repName || null,
-assignedRep: targetMode === 'rep' ? (repName || null) : null,
-assignedManager: targetMode === 'userrole' ? (repName || null) : null,
-assignedUserTabs: targetMode === 'userrole' ? (window._assignedUserTabs || []) : null,
-};
-if (targetMode === 'rep') payload.repProfile_timestamp = nowMs;
-await deviceRef.set(payload, { merge: true });
-} catch (e) { console.error('Firebase write failed:', e); }
-}
-if (targetMode === 'rep') {
-if (typeof lockToRepMode === 'function') lockToRepMode();
-if (typeof renderRepCustomerTable === 'function') renderRepCustomerTable();
-showToast(repName ? `Locked to Rep: ${repName}` : 'Device locked to Rep Sales mode', 'info', 4000);
-} else if (targetMode === 'userrole') {
-window._userRoleAllowedTabs = window._assignedUserTabs || [];
-if (typeof lockToUserRoleMode === 'function') lockToUserRoleMode();
-showToast(repName ? `Locked to User: ${repName}` : 'Device locked to User Role mode', 'info', 4000);
-} else if (targetMode === 'production') {
-if (typeof lockToProductionMode === 'function') lockToProductionMode();
-showToast(repName ? `Locked to Production: ${repName}` : 'Device locked to Production mode', 'info', 4000);
-} else if (targetMode === 'factory') {
-if (typeof lockToFactoryMode === 'function') lockToFactoryMode();
-showToast(repName ? `Locked to Factory: ${repName}` : 'Device locked to Factory mode', 'info', 4000);
-} else if (targetMode === 'admin') {
-if (typeof unlockToAdminMode === 'function') unlockToAdminMode();
-if (typeof notifyDataChange === 'function') notifyDataChange('all');
-showToast('Device unlocked to Admin mode', 'info', 4000);
-}
-}
-window.listenForDeviceCommands = listenForDeviceCommands;
-function listenForTeamChanges() {
-if (window._teamUnsubscribe) {
-try { window._teamUnsubscribe(); } catch(e) {}
-window._teamUnsubscribe = null;
-}
-}
-window.listenForTeamChanges = listenForTeamChanges;
-window.applyRemoteModeChange = applyRemoteModeChange;
-async function verifyTimestampConsistency() {
-const report = {
-collections: {},
-settings: {},
-issues: [],
-summary: {
-totalRecords: 0,
-recordsWithTimestamps: 0,
-recordsWithoutTimestamps: 0,
-recordsWithInconsistentTimestamps: 0
-}
-};
-const checkTimestamps = (item, collectionName) => {
-const timestamps = {
-timestamp: item.timestamp,
-createdAt: item.createdAt,
-updatedAt: item.updatedAt
-};
-const hasAnyTimestamp = timestamps.timestamp || timestamps.createdAt || timestamps.updatedAt;
-if (!hasAnyTimestamp) {
-report.issues.push({
-type: 'MISSING_TIMESTAMPS',
-collection: collectionName,
-id: item.id,
-message: 'Record has no timestamps at all'
-});
-report.summary.recordsWithoutTimestamps++;
-} else {
-report.summary.recordsWithTimestamps++;
-const times = Object.values(timestamps).filter(t => t).map(t => {
-return typeof t === 'number' ? t : new Date(t).getTime();
-});
-if (times.length > 1) {
-const minTime = Math.min(...times);
-const maxTime = Math.max(...times);
-const diff = maxTime - minTime;
-if (diff > 86400000) {
-report.issues.push({
-type: 'INCONSISTENT_TIMESTAMPS',
-collection: collectionName,
-id: item.id,
-timestamps: timestamps,
-difference: `${Math.round(diff / 1000 / 60 / 60)} hours`,
-message: 'Timestamps differ by more than 1 day'
-});
-report.summary.recordsWithInconsistentTimestamps++;
-}
-}
-}
-return timestamps;
-};
-const collections = [
-{ name: 'mfg_pro_pkr', label: 'Production' },
-{ name: 'noman_history', label: 'Calculator History' },
-{ name: 'customer_sales', label: 'Customer Sales' },
-{ name: 'rep_sales', label: 'Rep Sales' },
-{ name: 'rep_customers', label: 'Rep Customers' },
-{ name: 'factory_inventory_data', label: 'Factory Inventory' },
-{ name: 'factory_production_history', label: 'Factory History' },
-{ name: 'stock_returns', label: 'Stock Returns' },
-{ name: 'payment_transactions', label: 'Payment Transactions' },
-{ name: 'payment_entities', label: 'Payment Entities' },
-{ name: 'expenses', label: 'Expenses' }
-];
-for (const collection of collections) {
-const data = await idb.get(collection.name, []);
-report.collections[collection.name] = {
-label: collection.label,
-count: data.length,
-withTimestamps: 0,
-withoutTimestamps: 0
-};
-report.summary.totalRecords += data.length;
-data.forEach(item => {
-const timestamps = checkTimestamps(item, collection.name);
-if (timestamps.timestamp || timestamps.createdAt || timestamps.updatedAt) {
-report.collections[collection.name].withTimestamps++;
-} else {
-report.collections[collection.name].withoutTimestamps++;
-}
-});
-}
-const settingsKeys = [
-'factory_default_formulas',
-'factory_additional_costs',
-'factory_cost_adjustment_factor',
-'factory_sale_prices',
-'factory_unit_tracking',
-'naswar_default_settings'
-];
-for (const key of settingsKeys) {
-const timestamp = await idb.get(`${key}_timestamp`);
-report.settings[key] = {
-hasTimestamp: !!timestamp,
-timestamp: timestamp,
-date: timestamp ? new Date(timestamp).toLocaleString() : 'N/A'
-};
-if (!timestamp) {
-report.issues.push({
-type: 'MISSING_SETTING_TIMESTAMP',
-setting: key,
-message: 'Setting does not have a timestamp'
-});
-}
-}
-Object.entries(report.collections).forEach(([name, data]) => {
-});
-Object.entries(report.settings).forEach(([name, data]) => {
-});
-if (report.issues.length > 0) {
-report.issues.forEach((issue, index) => {
-});
-showToast(`⚠ Timestamp check: ${report.issues.length} issue${report.issues.length !== 1 ? 's' : ''} found.`, 'warning', 4000);
-} else {
-showToast('Timestamp consistency check passed — all records healthy.', 'success', 3000);
-}
-return report;
-}
-async function deduplicateAllData() {
-const _ddMsg = `Run a full deduplication scan?\n\nThis will:\n • Scan all records across every collection\n • Remove exact duplicate entries (keeping the newest version)\n • Sync cleaned data to the cloud\n\n\u26a0 This operation may take 30–60 seconds depending on data volume. Do not close the app while it runs.\n\nThis cannot be undone — but your data will only be improved, not deleted.`;
-if (!(await showGlassConfirm(_ddMsg, { title: 'Deduplicate All Data', confirmText: 'Run Cleanup', cancelText: 'Cancel', danger: true }))) {
-return;
-}
-showToast('Scanning for duplicates and old IDs...', 'info');
-const results = {
-collections: {},
-totalDuplicates: 0,
-totalRecordsBefore: 0,
-totalRecordsAfter: 0
-};
-const getTimestampValue = (record) => {
-if (!record) return 0;
-let ts = record.updatedAt || record.timestamp || record.createdAt || 0;
-if (typeof ts === 'number') {
-return ts;
-}
-if (ts && typeof ts.toMillis === 'function') {
-return ts.toMillis();
-}
-if (ts && typeof ts === 'object') {
-if (typeof ts.seconds === 'number') {
-return ts.seconds * 1000;
-}
-if (typeof ts._seconds === 'number') {
-return ts._seconds * 1000;
-}
-}
-if (ts instanceof Date) {
-return ts.getTime();
-}
-if (typeof ts === 'string') {
-try {
-const dateStr = ts.replace('Z', '+00:00');
-const date = new Date(dateStr);
-const time = date.getTime();
-if (!isNaN(time)) {
-return time;
-}
-} catch (e) {
-}
-}
-return 0;
-};
-const deduplicateArray = (array) => {
-if (!Array.isArray(array) || array.length === 0) {
-return { cleaned: array, duplicates: 0 };
-}
-const seen = new Map();
-let duplicatesRemoved = 0;
-array.forEach(item => {
-if (!item || !item.id) return;
-if (!validateUUID(item.id)) item.id = generateUUID();
-if (seen.has(item.id)) {
-duplicatesRemoved++;
-const existing = seen.get(item.id);
-const existingTime = getTimestampValue(existing);
-const itemTime = getTimestampValue(item);
-if (itemTime > existingTime) {
-seen.set(item.id, item);
-}
-} else {
-seen.set(item.id, item);
-}
-});
-return {
-cleaned: Array.from(seen.values()),
-duplicates: duplicatesRemoved
-};
-};
-const collections = [
-{ key: 'mfg_pro_pkr', label: 'Production', variable: 'db' },
-{ key: 'noman_history', label: 'Calculator History', variable: null },
-{ key: 'customer_sales', label: 'Customer Sales', variable: 'customerSales' },
-{ key: 'rep_sales', label: 'Rep Sales', variable: 'repSales' },
-{ key: 'rep_customers', label: 'Rep Customers', variable: 'repCustomers' },
-{ key: 'factory_inventory_data', label: 'Factory Inventory', variable: 'factoryInventoryData' },
-{ key: 'factory_production_history', label: 'Factory History', variable: 'factoryProductionHistory' },
-{ key: 'stock_returns', label: 'Stock Returns', variable: 'stockReturns' },
-{ key: 'payment_transactions', label: 'Payment Transactions', variable: 'paymentTransactions' },
-{ key: 'payment_entities', label: 'Payment Entities', variable: 'paymentEntities' },
-{ key: 'expenses', label: 'Expenses', variable: 'expenseRecords' }
-];
-for (const collection of collections) {
-const data = await idb.get(collection.key, []);
-const before = data.length;
-results.totalRecordsBefore += before;
-const { cleaned, duplicates } = deduplicateArray(data);
-const after = cleaned.length;
-results.totalRecordsAfter += after;
-results.collections[collection.key] = {
-label: collection.label,
-before: before,
-after: after,
-duplicates: duplicates
-};
-results.totalDuplicates += duplicates;
-if (duplicates > 0) {
-await idb.set(collection.key, cleaned);
-if (collection.variable === 'db') db = cleaned;
-else if (collection.variable === 'customerSales') customerSales = cleaned;
-else if (collection.variable === 'repSales') repSales = cleaned;
-else if (collection.variable === 'repCustomers') repCustomers = cleaned;
-else if (collection.variable === 'factoryInventoryData') factoryInventoryData = cleaned;
-else if (collection.variable === 'factoryProductionHistory') factoryProductionHistory = cleaned;
-else if (collection.variable === 'stockReturns') stockReturns = cleaned;
-else if (collection.variable === 'paymentTransactions') paymentTransactions = cleaned;
-else if (collection.variable === 'paymentEntities') paymentEntities = cleaned;
-else if (collection.variable === 'expenseRecords') expenseRecords = cleaned;
-}
-}
-if (results.totalDuplicates > 0) {
-showToast(` Removed ${results.totalDuplicates} duplicates!`, 'success');
-await refreshAllDisplays();
-if (firebaseDB && currentUser) {
-showToast('Syncing cleaned data to cloud...', 'info');
-await performOneClickSync(true);
-}
-showToast(` Done! ${results.totalDuplicates} duplicates removed. Data synced to cloud.`, 'success', 5000);
-} else {
-showToast(' No duplicates found! Data is clean.', 'success');
-}
-return results;
-}
-window.showDeltaSyncDetails = showDeltaSyncDetails;
-window.verifyTimestampConsistency = verifyTimestampConsistency;
-window.deduplicateAllData = deduplicateAllData;
-async function verifyCompleteTimestampConsistency() {
-const report = {
-tabs: {},
-indexedDB: {},
-deltaSync: {},
-compatibility: {},
-issues: [],
-summary: {
-totalRecords: 0,
-recordsWithValidTimestamps: 0,
-recordsWithIssues: 0,
-deltaSyncCompatible: true,
-firestoreCompatible: true
-}
-};
-const tabs = [
-{ name: 'Production', idbKey: 'mfg_pro_pkr', variable: 'db', tab: 'prod' },
-{ name: 'Sales', idbKey: 'customer_sales', variable: 'customerSales', tab: 'sales' },
-{ name: 'Calculator', idbKey: 'noman_history', variable: null, tab: 'calc' },
-{ name: 'Factory', idbKeys: ['factory_inventory_data', 'factory_production_history'], tab: 'factory' },
-{ name: 'Payments', idbKeys: ['payment_transactions', 'payment_entities'], tab: 'payments' },
-{ name: 'Rep Sales', idbKey: 'rep_sales', variable: 'repSales', tab: 'rep' }
-];
-for (const tab of tabs) {
-const tabReport = {
-name: tab.name,
-collections: {},
-totalRecords: 0,
-validTimestamps: 0,
-issues: 0
-};
-const keys = tab.idbKeys || [tab.idbKey];
-for (const key of keys) {
-const data = await idb.get(key, []);
-tabReport.totalRecords += data.length;
-let valid = 0;
-let invalid = 0;
-for (const record of data) {
-if (!record) continue;
-const ts = record.updatedAt || record.timestamp || record.createdAt;
-if (ts) {
-const extracted = extractTimestampValue(record);
-if (extracted > 0) {
-valid++;
-} else {
-invalid++;
-report.issues.push({
-type: 'INVALID_TIMESTAMP',
-tab: tab.name,
-collection: key,
-id: record.id,
-timestamp: ts
-});
-}
-} else {
-invalid++;
-}
-}
-tabReport.collections[key] = {
-total: data.length,
-valid: valid,
-invalid: invalid
-};
-tabReport.validTimestamps += valid;
-tabReport.issues += invalid;
-}
-report.tabs[tab.name] = tabReport;
-report.summary.totalRecords += tabReport.totalRecords;
-report.summary.recordsWithValidTimestamps += tabReport.validTimestamps;
-report.summary.recordsWithIssues += tabReport.issues;
-}
-const idbCollections = [
-'mfg_pro_pkr', 'noman_history', 'customer_sales', 'rep_sales', 'rep_customers',
-'factory_inventory_data', 'factory_production_history', 'stock_returns',
-'payment_transactions', 'payment_entities', 'expenses'
-];
-for (const collectionName of idbCollections) {
-const data = await idb.get(collectionName, []);
-if (data.length === 0) {
-report.indexedDB[collectionName] = { status: 'empty', count: 0 };
-continue;
-}
-const formats = {
-number: 0,
-string: 0,
-date: 0,
-firestore: 0,
-dict: 0,
-missing: 0,
-invalid: 0
-};
-for (const record of data) {
-const ts = record.updatedAt || record.timestamp || record.createdAt;
-if (!ts) {
-formats.missing++;
-} else if (typeof ts === 'number') {
-formats.number++;
-} else if (typeof ts === 'string') {
-formats.string++;
-} else if (ts instanceof Date) {
-formats.date++;
-} else if (ts && typeof ts.toMillis === 'function') {
-formats.firestore++;
-} else if (ts && typeof ts === 'object' && (ts.seconds || ts._seconds)) {
-formats.dict++;
-} else {
-formats.invalid++;
-}
-}
-report.indexedDB[collectionName] = {
-status: 'ok',
-count: data.length,
-formats: formats
-};
-const validCount = formats.number + formats.string + formats.date + formats.firestore + formats.dict;
-}
-const deltaSyncCollections = [
-{ name: 'production', idbKey: 'mfg_pro_pkr' },
-{ name: 'sales', idbKey: 'customer_sales' },
-{ name: 'calculator_history', idbKey: 'noman_history' },
-{ name: 'rep_sales', idbKey: 'rep_sales' },
-{ name: 'rep_customers', idbKey: 'rep_customers' },
-{ name: 'transactions', idbKey: 'payment_transactions' },
-{ name: 'entities', idbKey: 'payment_entities' },
-{ name: 'inventory', idbKey: 'factory_inventory_data' },
-{ name: 'factory_history', idbKey: 'factory_production_history' },
-{ name: 'returns', idbKey: 'stock_returns' },
-{ name: 'expenses', idbKey: 'expenses' }
-];
-for (const collection of deltaSyncCollections) {
-const data = await idb.get(collection.idbKey, []);
-if (data.length === 0) {
-report.deltaSync[collection.name] = { status: 'empty', compatible: true };
-continue;
-}
-let deltaSyncWorking = 0;
-let deltaSyncFailing = 0;
-for (const record of data) {
-const itemTime = record.updatedAt || record.timestamp || record.createdAt || 0;
-const itemTimestamp = typeof itemTime === 'number' ? itemTime :
-typeof itemTime === 'string' ? new Date(itemTime).getTime() :
-itemTime?.toMillis ? itemTime.toMillis() : 0;
-if (itemTimestamp > 0) {
-deltaSyncWorking++;
-} else {
-deltaSyncFailing++;
-}
-}
-const compatible = deltaSyncFailing === 0;
-report.deltaSync[collection.name] = {
-status: compatible ? 'compatible' : 'issues',
-compatible: compatible,
-total: data.length,
-working: deltaSyncWorking,
-failing: deltaSyncFailing
-};
-if (!compatible) {
-report.summary.deltaSyncCompatible = false;
-}
-const statusIcon = compatible ? '' : '';
-}
-for (const collectionName of idbCollections) {
-const data = await idb.get(collectionName, []);
-if (data.length === 0) {
-report.compatibility[collectionName] = { firestore: 'empty' };
-continue;
-}
-let canSerialize = 0;
-let cannotSerialize = 0;
-for (const record of data.slice(0, 10)) {
-try {
-const ts = record.updatedAt || record.timestamp || record.createdAt;
-if (typeof ts === 'number' || typeof ts === 'string' || ts instanceof Date) {
-canSerialize++;
-} else if (ts && typeof ts === 'object') {
-canSerialize++;
-} else {
-cannotSerialize++;
-}
-} catch (e) {
-cannotSerialize++;
-}
-}
-const compatible = cannotSerialize === 0;
-report.compatibility[collectionName] = {
-firestore: compatible ? 'compatible' : 'issues',
-sampled: Math.min(10, data.length),
-compatible: canSerialize,
-incompatible: cannotSerialize
-};
-if (!compatible) {
-report.summary.firestoreCompatible = false;
-}
-}
-const testRecords = [
-{ id: 'test-1', updatedAt: Date.now(), name: 'Number timestamp' },
-{ id: 'test-2', timestamp: new Date().toISOString(), name: 'ISO string' },
-{ id: 'test-3', createdAt: new Date(), name: 'Date object' },
-{ id: 'test-4', updatedAt: { seconds: Math.floor(Date.now()/1000) }, name: 'Dict timestamp' }
-];
-let extractionWorks = true;
-for (const record of testRecords) {
-const extracted = extractTimestampValue(record);
-if (extracted === 0) {
-extractionWorks = false;
-}
-}
-if (extractionWorks) {
-}
-const testDuplicates = [
-{ id: 'dup-1', timestamp: 1000, value: 'old' },
-{ id: 'dup-1', timestamp: 2000, value: 'new' }
-];
-if (report.issues.length > 0) {
-report.issues.slice(0, 5).forEach((issue, i) => {
-});
-if (report.issues.length > 5) {
-}
-} else {
-}
-if (report.issues.length > 0) {
-showToast(`⚠ Full verification: ${report.issues.length} issue${report.issues.length !== 1 ? 's' : ''} detected.`, 'warning', 4500);
-} else {
-showToast('Full system verification passed — all data is consistent.', 'success', 3500);
-}
-return report;
-}
-function extractTimestampValue(record) {
-if (!record) return 0;
-let ts = record.updatedAt || record.timestamp || record.createdAt || 0;
-if (typeof ts === 'number') return ts;
-if (ts && typeof ts.toMillis === 'function') return ts.toMillis();
-if (ts && typeof ts === 'object') {
-if (typeof ts.seconds === 'number') return ts.seconds * 1000;
-if (typeof ts._seconds === 'number') return ts._seconds * 1000;
-}
-if (ts instanceof Date) return ts.getTime();
-if (typeof ts === 'string') {
-try {
-const date = new Date(ts.replace('Z', '+00:00'));
-const time = date.getTime();
-if (!isNaN(time)) return time;
-} catch (e) {}
-}
-return 0;
-}
-window.verifyCompleteTimestampConsistency = verifyCompleteTimestampConsistency;
-async function runUnifiedCleanup() {
-const _ucMsg = `Run a comprehensive cleanup and verification pass?\n\nThis will:\n • Remove duplicate records across all collections\n • Verify and fix corrupted timestamps\n • Check record integrity and flag anomalies\n • Sync the cleaned dataset to cloud\n\n\u23f1 Estimated time: 2–3 minutes. Do not close the app during this process.\n\nYour data will only be improved — no valid records are deleted.`;
-if (!(await showGlassConfirm(_ucMsg, { title: 'Unified Cleanup & Verification', confirmText: 'Run Full Cleanup', cancelText: 'Cancel', danger: true }))) {
-return;
-}
-showToast(' Starting cleanup...', 'info', 3000);
-try {
-showToast(' Cleaning ...', 'info', 3000);
-const dedupResults = {
-collections: {},
-totalDuplicates: 0,
-totalRecordsBefore: 0,
-totalRecordsAfter: 0
-};
-const getTimestampValue = (record) => {
-if (!record) return 0;
-let ts = record.updatedAt || record.timestamp || record.createdAt || 0;
-if (typeof ts === 'number') return ts;
-if (ts && typeof ts.toMillis === 'function') return ts.toMillis();
-if (ts && typeof ts === 'object') {
-if (typeof ts.seconds === 'number') return ts.seconds * 1000;
-if (typeof ts._seconds === 'number') return ts._seconds * 1000;
-}
-if (ts instanceof Date) return ts.getTime();
-if (typeof ts === 'string') {
-try {
-const date = new Date(ts.replace('Z', '+00:00'));
-const time = date.getTime();
-if (!isNaN(time)) return time;
-} catch (e) {}
-}
-return 0;
-};
-const deduplicateArray = (array) => {
-if (!Array.isArray(array) || array.length === 0) {
-return { cleaned: array, duplicates: 0 };
-}
-const seen = new Map();
-let duplicatesRemoved = 0;
-array.forEach(item => {
-if (!item || !item.id) return;
-if (!validateUUID(item.id)) item.id = generateUUID();
-if (seen.has(item.id)) {
-duplicatesRemoved++;
-const existing = seen.get(item.id);
-const existingTime = getTimestampValue(existing);
-const itemTime = getTimestampValue(item);
-if (itemTime > existingTime) {
-seen.set(item.id, item);
-}
-} else {
-seen.set(item.id, item);
-}
-});
-return {
-cleaned: Array.from(seen.values()),
-duplicates: duplicatesRemoved
-};
-};
-const collections = [
-{ key: 'mfg_pro_pkr', label: 'Production', variable: 'db' },
-{ key: 'noman_history', label: 'Calculator History', variable: null },
-{ key: 'customer_sales', label: 'Customer Sales', variable: 'customerSales' },
-{ key: 'rep_sales', label: 'Rep Sales', variable: 'repSales' },
-{ key: 'rep_customers', label: 'Rep Customers', variable: 'repCustomers' },
-{ key: 'factory_inventory_data', label: 'Factory Inventory', variable: 'factoryInventoryData' },
-{ key: 'factory_production_history', label: 'Factory History', variable: 'factoryProductionHistory' },
-{ key: 'stock_returns', label: 'Stock Returns', variable: 'stockReturns' },
-{ key: 'payment_transactions', label: 'Payment Transactions', variable: 'paymentTransactions' },
-{ key: 'payment_entities', label: 'Payment Entities', variable: 'paymentEntities' },
-{ key: 'expenses', label: 'Expenses', variable: 'expenseRecords' }
-];
-for (const collection of collections) {
-const data = await idb.get(collection.key, []);
-const before = data.length;
-dedupResults.totalRecordsBefore += before;
-const { cleaned, duplicates } = deduplicateArray(data);
-const after = cleaned.length;
-dedupResults.totalRecordsAfter += after;
-dedupResults.collections[collection.key] = {
-label: collection.label,
-before: before,
-after: after,
-duplicates: duplicates
-};
-dedupResults.totalDuplicates += duplicates;
-if (duplicates > 0) {
-await idb.set(collection.key, cleaned);
-if (collection.variable === 'db') db = cleaned;
-else if (collection.variable === 'customerSales') customerSales = cleaned;
-else if (collection.variable === 'repSales') repSales = cleaned;
-else if (collection.variable === 'repCustomers') repCustomers = cleaned;
-else if (collection.variable === 'factoryInventoryData') factoryInventoryData = cleaned;
-else if (collection.variable === 'factoryProductionHistory') factoryProductionHistory = cleaned;
-else if (collection.variable === 'stockReturns') stockReturns = cleaned;
-else if (collection.variable === 'paymentTransactions') paymentTransactions = cleaned;
-else if (collection.variable === 'paymentEntities') paymentEntities = cleaned;
-else if (collection.variable === 'expenseRecords') expenseRecords = cleaned;
-}
-}
-showToast(' Verifying ...', 'info', 3000);
-await verifyTimestampConsistency();
-showToast('Full system scan...', 'info', 3000);
-const verificationReport = await verifyCompleteTimestampConsistency();
-showToast('Syncing to cloud...', 'info', 3000);
-if (firebaseDB && currentUser) {
-try {
-await refreshAllDisplays();
-await performOneClickSync(true);
-} catch (syncError) {
-console.error('Sync failed. Check your connection.', syncError);
-showToast('Sync failed. Check your connection.', 'error');
-}
-} else {
-}
-const summary = ` Unified Cleanup Complete!
-Duplicates Removed: ${dedupResults.totalDuplicates}
-Total Records: ${verificationReport.summary.totalRecords}
-Issues Found: ${verificationReport.summary.recordsWithIssues}
-Delta Sync: ${verificationReport.summary.deltaSyncCompatible ? '' : ''}
-Firestore: ${verificationReport.summary.firestoreCompatible ? '' : ''}
-${firebaseDB && currentUser ? ' Synced to cloud' : ' Cloud sync skipped'}
-Check console (F12) for detailed report.`;
-showToast(' cleanup complete!', 'success', 3000);
-} catch (error) {
-showToast(' Cleanup failed: ' + error.message, 'error', 5000);
-showToast(' Unified cleanup error: ' + error.message, 'error', 5000);
-}
-}
-window.runUnifiedCleanup = runUnifiedCleanup;
 async function loadSalesRepsList() {
 const stored = await idb.get('sales_reps_list', null);
 if (Array.isArray(stored) && stored.length > 0) {
@@ -20654,7 +13550,7 @@ showToast('Saved locally — cloud sync will retry when online.', 'warning', 350
 }
 renderAllRepUI();
 } catch(e) {
-console.error('saveSalesRepsList error:', e);
+console.error('saveSalesRepsList error:', _safeErr(e));
 showToast('Failed to save team list. Please try again.', 'error');
 }
 }
@@ -20683,7 +13579,7 @@ showToast('Saved locally — cloud sync will retry when online.', 'warning', 350
 }
 }
 } catch(e) {
-console.error('saveUserRolesList error:', e);
+console.error('saveUserRolesList error:', _safeErr(e));
 showToast('Failed to save user roles. Please try again.', 'error');
 }
 }
@@ -20864,12 +13760,7 @@ modal.classList.remove('open');
 document.body.style.overflow = '';
 document.documentElement.style.overflow = '';
 }
-// ─── Overlay Stack Manager ────────────────────────────────────────────────────
-// Tracks which overlays are open and in what order, so backdrop clicks and
-// Escape key close exactly ONE layer per action (the topmost one).
 const _overlayStack = (() => {
-  // Registry: id → { isOpen, closeFn, contentSelector }
-  // contentSelector: CSS selector for the inner card/box — clicks inside it are ignored
   const _registry = {
     'factorySettingsOverlay':      { closeFn: () => closeFactorySettings(),          contentSel: '.factory-overlay-card' },
     'factoryInventoryOverlay':     { closeFn: () => closeFactoryInventoryModal(),     contentSel: '.factory-overlay-card' },
@@ -20881,12 +13772,10 @@ const _overlayStack = (() => {
     'repCustomerManagementOverlay':{ closeFn: () => closeRepCustomerManagement(),     contentSel: '.factory-overlay-card' },
     'repCustomerEditOverlay':      { closeFn: () => closeRepCustomerEditModal(),      contentSel: '.factory-overlay-card' },
     'dataMenuOverlay':             { closeFn: () => closeDataMenu(),                  contentSel: '.factory-overlay-card' },
+    'recycleBinOverlay':           { closeFn: () => closeRecycleBin(),                contentSel: '.factory-overlay-card' },
     'entityTransactionsOverlay':   { closeFn: () => closeEntityTransactions(),        contentSel: '.factory-overlay-card' },
     'manage-reps-modal':           { closeFn: () => closeManageRepsModal(),           contentSel: '#manage-reps-card'     },
   };
-
-  // Returns a list of currently-open overlay entries ordered by DOM position
-  // (later in DOM = higher stacking order = topmost visually).
   function _openLayers() {
     const open = [];
     for (const [id, cfg] of Object.entries(_registry)) {
@@ -20896,15 +13785,12 @@ const _overlayStack = (() => {
                      (el.style.display && el.style.display !== 'none' && el.style.display !== '');
       if (isOpen) open.push({ id, el, ...cfg });
     }
-    // Sort by DOM order so the last one in the document is treated as topmost
     open.sort((a, b) => {
       const pos = a.el.compareDocumentPosition(b.el);
       return (pos & Node.DOCUMENT_POSITION_FOLLOWING) ? -1 : 1;
     });
     return open;
   }
-
-  // Close only the topmost open overlay. Returns true if something was closed.
   function closeTop() {
     const layers = _openLayers();
     if (layers.length === 0) return false;
@@ -20912,17 +13798,13 @@ const _overlayStack = (() => {
     top.closeFn();
     return true;
   }
-
-  // Backdrop click handler — close top layer only when clicking outside its card
   document.addEventListener('click', function(e) {
+    if (document.querySelector('.glass-confirm-backdrop') || window._glassConfirmClosing) return;
     const layers = _openLayers();
     if (layers.length === 0) return;
     const top = layers[layers.length - 1];
-    // If click is inside the card/content area of the topmost overlay, do nothing
     const contentEl = top.el.querySelector(top.contentSel);
     if (contentEl && contentEl.contains(e.target)) return;
-    // Also ignore clicks that are directly on a child overlay's card
-    // (e.g. customerEditOverlay sitting on top of customerManagementOverlay)
     if (layers.length > 1) {
       const secondTop = layers[layers.length - 2];
       const secondContent = secondTop.el.querySelector(secondTop.contentSel);
@@ -20930,18 +13812,13 @@ const _overlayStack = (() => {
     }
     top.closeFn();
   }, true);
-
-  // Escape key — close top layer only
   document.addEventListener('keydown', function(e) {
     if (e.key !== 'Escape') return;
-    // glass-confirm dialogs handle Escape themselves — skip if one is open
-    if (document.querySelector('.glass-confirm-backdrop')) return;
+    if (document.querySelector('.glass-confirm-backdrop') || window._glassConfirmClosing) return;
     if (closeTop()) e.preventDefault();
   });
-
   return { closeTop, openLayers: _openLayers };
 })();
-
 window.loadSalesRepsList = loadSalesRepsList;
 window.saveSalesRepsList = saveSalesRepsList;
 window.renderAllRepUI = renderAllRepUI;
@@ -21108,7 +13985,504 @@ modal.addEventListener('click', (ev) => {
 if (ev.target === modal) modal.remove();
 });
 } catch (error) {
-console.error('analyzeBackupFile error:', error);
+console.error('analyzeBackupFile error:', _safeErr(error));
 showToast('Could not parse backup file: ' + error.message, 'error');
 }
 };
+(function() {
+  let _adminLoaded = false;
+  let _adminLoading = null;
+  function _loadAdminModule() {
+    if (_adminLoaded) return Promise.resolve();
+    if (_adminLoading) return _adminLoading;
+    _adminLoading = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'admin-data.js';
+      script.onload = () => { _adminLoaded = true; resolve(); };
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+    return _adminLoading;
+  }
+  window.showDeltaSyncDetails = async function() {
+    await _loadAdminModule();
+    if (typeof window._showDeltaSyncDetails === 'function') {
+      return window._showDeltaSyncDetails();
+    }
+  };
+  window.showCloseFinancialYearDialog = async function() {
+    await _loadAdminModule();
+    if (typeof window._showCloseFinancialYearDialog === 'function') {
+      return window._showCloseFinancialYearDialog();
+    }
+  };
+})();
+async function loadDeviceList() {
+const container = document.getElementById('device-list-container');
+if (!container) return;
+if (!firebaseDB || !currentUser) {
+container.innerHTML = `
+<div class="u-empty-state-sm" >
+Please log in to view devices
+</div>
+`;
+return;
+}
+try {
+const userRef = firebaseDB.collection('users').doc(currentUser.uid);
+const devicesSnap = await userRef.collection('devices').get();
+if (devicesSnap.empty) {
+container.innerHTML = `
+<div class="u-empty-state-sm" >
+No devices registered yet
+</div>
+`;
+return;
+}
+const currentDeviceId = await getDeviceId();
+const now = Date.now();
+let accountEmail = currentUser.email || 'Unknown';
+try {
+const accountInfoSnap = await userRef.collection('account').doc('info').get();
+if (accountInfoSnap.exists) {
+const accountData = accountInfoSnap.data();
+accountEmail = accountData.email || accountEmail;
+}
+} catch (e) {
+console.error('An unexpected error occurred.', _safeErr(e));
+showToast('An unexpected error occurred.', 'error');
+}
+const seenIds = new Set();
+const uniqueDocs = devicesSnap.docs.filter(doc => {
+const id = doc.data().deviceId;
+if (!id || id === 'default_device' || doc.id === 'default_device') return false;
+if (seenIds.has(id)) return false;
+seenIds.add(id);
+return true;
+});
+if (uniqueDocs.length === 0) {
+container.innerHTML = `
+<div class="u-empty-state-sm" >
+No devices registered yet
+</div>
+`;
+return;
+}
+let html = `
+<div style="margin-bottom: 15px; padding: 10px; background: rgba(0, 122, 255, 0.1); border-radius: 8px; border: 1px solid rgba(0, 122, 255, 0.3);">
+<div style="font-size: 0.75rem; color: var(--accent); font-weight: 600;">
+Account: ${accountEmail}
+</div>
+<div class="u-field-hint-xxs" >
+Total Devices: ${uniqueDocs.length} • Online: ${uniqueDocs.filter(d => {
+const ls = d.data().lastSeen?.toMillis() || 0;
+return (now - ls) < 60000;
+}).length}
+</div>
+</div>
+`;
+uniqueDocs.forEach(doc => {
+const device = doc.data();
+const isCurrentDevice = device.deviceId === currentDeviceId;
+const lastSeen = device.lastSeen?.toMillis() || 0;
+const isOnline = (now - lastSeen) < 60000;
+const totalCommands = device.totalCommands || 0;
+const remoteAppliedMode = device.remoteAppliedMode || null;
+const remoteAppliedAt = device.remoteAppliedAt || null;
+const remoteAppliedBy = device.remoteAppliedBy || null;
+const deviceMode = device.currentMode || 'admin';
+const assignedRep = device.assignedRep || null;
+const assignedManager = device.assignedManager || null;
+const assignedUserTabs = Array.isArray(device.assignedUserTabs) ? device.assignedUserTabs : [];
+const modeLabel = deviceMode === 'admin'
+? 'ADMIN'
+: deviceMode === 'userrole'
+? (assignedManager || 'USER ROLE')
+: deviceMode === 'production'
+? (assignedManager || 'PRODUCTION')
+: deviceMode === 'factory'
+? (assignedManager || 'FACTORY')
+: (assignedRep || 'REP');
+const modeColor = deviceMode === 'admin' ? '#007aff'
+: deviceMode === 'userrole' ? '#ffcc02'
+: deviceMode === 'production' ? '#69f0ae'
+: deviceMode === 'factory' ? '#ce93d8'
+: '#ff9f0a';
+const modeIcon = '';
+const devBorder = isCurrentDevice ? 'var(--accent)' : 'var(--glass-border)';
+const onlineColor = isOnline ? '#30d158' : '#ff453a';
+const onlineDot = isOnline ? '● Online' : '○ Offline';
+const shortId = device.deviceId ? device.deviceId.substring(0, 20) + '…' : 'N/A';
+const thisDeviceBadge = isCurrentDevice
+? '<span style="margin-left:6px;font-size:0.6rem;color:var(--accent);font-family:Geist,sans-serif;font-weight:700;">(This Device)</span>'
+: '';
+let cardHtml = '<div style="margin-bottom:12px;padding:14px;background:var(--glass);border-radius:14px;border:2px solid ' + devBorder + ';">';
+cardHtml += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;gap:8px;">';
+cardHtml += '<div style="font-size:0.65rem;font-family:\'Geist Mono\',monospace;color:var(--text-muted);word-break:break-all;flex:1;min-width:0;line-height:1.4;">' + shortId + thisDeviceBadge + '</div>';
+cardHtml += '<div style="text-align:right;flex-shrink:0;">';
+cardHtml += '<div style="font-size:0.8rem;font-weight:800;color:' + modeColor + ';white-space:nowrap;">' + modeLabel + '</div>';
+cardHtml += '<div style="font-size:0.6rem;color:' + onlineColor + ';margin-top:2px;">' + onlineDot + '</div>';
+cardHtml += '</div>';
+cardHtml += '</div>';
+const lastSeenStr = lastSeen ? new Date(lastSeen).toLocaleString() : 'Never';
+cardHtml += '<div style="font-size:0.6rem;color:var(--text-muted);margin-bottom:6px;">Last seen: ' + lastSeenStr + '</div>';
+const lastCmdStr = remoteAppliedAt ? new Date(remoteAppliedAt).toLocaleString() : null;
+const lastCmdMode = remoteAppliedMode ? remoteAppliedMode.toUpperCase() : null;
+const lastCmdBy = remoteAppliedBy || null;
+if (lastCmdMode || totalCommands > 0) {
+cardHtml += '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:11px;padding:7px 10px;background:rgba(255,255,255,0.04);border-radius:8px;border:1px solid var(--glass-border);">';
+cardHtml += '<span style="font-size:0.6rem;color:var(--text-muted);flex-shrink:0;">Commands:</span>';
+if (totalCommands > 0) {
+cardHtml += '<span style="font-size:0.62rem;font-weight:700;color:var(--accent);background:var(--accent-dim);padding:2px 7px;border-radius:99px;">' + totalCommands + ' sent</span>';
+}
+if (lastCmdMode) {
+cardHtml += '<span style="font-size:0.62rem;font-weight:700;color:var(--text-main);">→ ' + lastCmdMode + '</span>';
+}
+if (lastCmdBy) {
+cardHtml += '<span style="font-size:0.6rem;color:var(--text-muted);">by ' + esc(lastCmdBy) + '</span>';
+}
+if (lastCmdStr) {
+cardHtml += '<span style="font-size:0.58rem;color:var(--text-secondary);margin-left:auto;">' + lastCmdStr + '</span>';
+}
+cardHtml += '</div>';
+} else {
+cardHtml += '<div style="margin-bottom:11px;padding:7px 10px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid var(--glass-border);font-size:0.6rem;color:var(--text-secondary);">No commands sent yet</div>';
+}
+if (!isCurrentDevice) {
+const isAdmin = deviceMode === 'admin';
+const adminBg = isAdmin ? 'rgba(0,122,255,0.18)' : 'rgba(0,122,255,0.08)';
+const adminBord = isAdmin ? '2px solid rgba(0,122,255,0.55)' : '1px solid rgba(0,122,255,0.25)';
+const adminFw = isAdmin ? '800' : '600';
+const adminTick = isAdmin ? '✓ ' : '';
+cardHtml += '<button onclick="remoteControlDevice(\'' + device.deviceId + '\', \'admin\')"';
+cardHtml += ' style="width:100%;padding:9px;background:' + adminBg + ';border:' + adminBord + ';border-radius:99px;color:#007aff;cursor:pointer;font-size:0.72rem;font-weight:' + adminFw + ';margin-bottom:10px;">' + adminTick + 'Admin Mode</button>';
+if (salesRepsList.length > 0) {
+cardHtml += '<div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:5px;">Sales Representatives</div>';
+cardHtml += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:5px;margin-bottom:10px;">';
+const repColors = [
+{bg:'48,209,88',hex:'#30d158'},{bg:'255,159,10',hex:'#ff9f0a'},
+{bg:'191,90,242',hex:'#bf5af2'},{bg:'255,69,58',hex:'#ff453a'},{bg:'90,200,250',hex:'#5ac8fa'}
+];
+for (let ri = 0; ri < salesRepsList.length; ri++) {
+const rep = salesRepsList[ri];
+const c = repColors[ri % repColors.length];
+const repLocked = deviceMode === 'rep' && assignedRep === rep;
+const repBg = 'rgba(' + c.bg + ',' + (repLocked ? '0.22' : '0.08') + ')';
+const repBord = (repLocked ? '2' : '1') + 'px solid rgba(' + c.bg + ',' + (repLocked ? '0.65' : '0.28') + ')';
+const repFw = repLocked ? '800' : '600';
+const repTick = repLocked ? '✓ ' : '';
+cardHtml += '<button onclick="remoteControlDevice(\'' + device.deviceId + '\', \'rep\', \'' + rep + '\')"';
+cardHtml += ' style="padding:8px 5px;background:' + repBg + ';border:' + repBord + ';border-radius:99px;color:' + c.hex + ';cursor:pointer;font-size:0.68rem;font-weight:' + repFw + ';text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">';
+cardHtml += repTick + rep + '</button>';
+}
+cardHtml += '</div>';
+}
+if (userRolesList.length > 0) {
+cardHtml += '<div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:5px;">User Roles</div>';
+cardHtml += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:5px;margin-bottom:10px;">';
+for (let ui = 0; ui < userRolesList.length; ui++) {
+const user = userRolesList[ui];
+const userLocked = deviceMode === 'userrole' && device.assignedManager === user.name;
+const userBg = 'rgba(255,204,2,' + (userLocked ? '0.22' : '0.08') + ')';
+const userBord = (userLocked ? '2' : '1') + 'px solid rgba(255,204,2,' + (userLocked ? '0.65' : '0.28') + ')';
+const userFw = userLocked ? '800' : '600';
+const userTick = userLocked ? '✓ ' : '';
+const lookupKey = '_devTabsCache';
+if (!window[lookupKey]) window[lookupKey] = {};
+window[lookupKey][device.deviceId + '_' + ui] = user.tabs || [];
+cardHtml += '<button onclick="remoteControlDevice(\'' + device.deviceId + '\', \'userrole\', \'' + user.name + '\', (window._devTabsCache||{})[\'' + device.deviceId + '_' + ui + '\'])"';
+cardHtml += ' style="padding:8px 5px;background:' + userBg + ';border:' + userBord + ';border-radius:99px;color:#ffcc02;cursor:pointer;font-size:0.68rem;font-weight:' + userFw + ';text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">';
+cardHtml += userTick + user.name + '</button>';
+}
+cardHtml += '</div>';
+}
+cardHtml += '<button onclick="removeDevice(\'' + device.deviceId + '\')"';
+cardHtml += ' style="width:100%;padding:7px;background:rgba(255,69,58,0.07);border:1px solid rgba(255,69,58,0.28);border-radius:99px;color:#ff453a;cursor:pointer;font-size:0.65rem;">Remove Device</button>';
+} else {
+const thisDeviceModeColor = modeColor;
+cardHtml += '<div style="padding:8px 10px;background:rgba(0,122,255,0.05);border:1px solid rgba(0,122,255,0.2);border-radius:8px;color:var(--text-muted);text-align:center;font-size:0.7rem;">This Device — <span style="color:' + thisDeviceModeColor + ';font-weight:700;">' + modeLabel + '</span></div>';
+}
+cardHtml += '</div>';
+html += cardHtml;
+});
+container.innerHTML = html;
+} catch (error) {
+console.error('An unexpected error occurred.', _safeErr(error));
+showToast('An unexpected error occurred.', 'error');
+container.innerHTML = `
+<div style="text-align: center; padding: 20px; color: #ff453a;">
+Error loading devices: ${esc(error.message)}
+</div>
+`;
+}
+}
+async function refreshDeviceList() {
+const container = document.getElementById('device-list-container');
+if (container) {
+container.innerHTML = `
+<div class="u-empty-state-sm" >
+Refreshing...
+</div>
+`;
+}
+await loadDeviceList();
+showToast(' Device list refreshed', 'success', 2000);
+}
+async function remoteControlDevice(deviceId, targetMode, repName = null, userTabs = null) {
+if (!firebaseDB || !currentUser) {
+showToast('Not logged in', 'error', 3000);
+return;
+}
+let _rcTitle, _rcMsg, _rcConfirm;
+if (targetMode === 'admin') {
+_rcTitle = 'Unlock to Admin Mode';
+_rcMsg = 'Unlock this device to full Admin mode?\n\nAll tabs and admin features will become accessible.';
+_rcConfirm = 'Unlock to Admin';
+} else if (targetMode === 'rep' && repName) {
+_rcTitle = 'Lock Device — Sales Rep';
+_rcMsg = `Lock this device to Sales Rep mode for ${repName}?\n\nThe device will only show the Rep Sales tab. All admin features, tabs and controls will be hidden until unlocked remotely.`;
+_rcConfirm = `Lock to ${repName}`;
+} else if (targetMode === 'userrole' && repName) {
+const tabLabels = { prod: 'Production', factory: 'Factory', sales: 'Sales', payments: 'Payments' };
+const tabList = Array.isArray(userTabs) ? userTabs.map(t => tabLabels[t] || t).join(', ') : 'assigned tabs';
+_rcTitle = 'Lock Device — User Role';
+_rcMsg = `Lock this device to User Role for ${repName}?\n\nAssigned tabs: ${tabList}\n\nOnly the assigned sections will be visible. All other tabs, analytics and admin controls will be hidden.`;
+_rcConfirm = `Lock to ${repName}`;
+} else {
+_rcTitle = 'Switch Device Mode';
+_rcMsg = `Switch this device to ${targetMode.toUpperCase()} mode?`;
+_rcConfirm = 'Confirm';
+}
+const confirmed = await showGlassConfirm(_rcMsg, {
+title: _rcTitle,
+confirmText: _rcConfirm,
+cancelText: 'Cancel',
+danger: targetMode !== 'admin'
+});
+if (!confirmed) return;
+try {
+const userRef = firebaseDB.collection('users').doc(currentUser.uid);
+const commandTimestamp = firebase.firestore.FieldValue.serverTimestamp();
+const deviceRef = userRef.collection('devices').doc(deviceId);
+const updateData = {
+targetMode: targetMode,
+targetModeTimestamp: commandTimestamp,
+commandSource: 'remote_admin',
+lastControlled: commandTimestamp,
+controlledBy: currentUser.email || 'Admin',
+currentMode: targetMode,
+assignedRep: targetMode === 'rep' ? (repName || null) : null,
+assignedManager: targetMode === 'userrole' ? (repName || null) : null,
+assignedUserTabs: targetMode === 'userrole' ? (userTabs || []) : null,
+assignedRoleType: targetMode,
+assignedRoleName: repName || null,
+lockedAt: repName ? commandTimestamp : null,
+lockedBy: repName ? (currentUser.email || 'Admin') : null,
+};
+await deviceRef.set(updateData, { merge: true });
+const successMsg = targetMode === 'admin'
+? '✓ Device unlocked to Admin mode'
+: targetMode === 'rep' ? `✓ Device locked to Sales Rep: ${repName}`
+: targetMode === 'userrole' ? `✓ Device locked to User: ${repName}`
+: `✓ Command sent: ${targetMode}`;
+showToast(successMsg, 'success', 3500);
+setTimeout(loadDeviceList, 2000);
+} catch (error) {
+showToast('Failed to control device: ' + error.message, 'error', 4000);
+}
+}
+async function removeDevice(deviceId) {
+if (!firebaseDB || !currentUser) {
+showToast('Not logged in', 'error', 3000);
+return;
+}
+const _rdMsg = `Remove this device from the trusted list?\n\nThe device will no longer be able to sync data or receive remote commands. It will need to be re-approved if the user tries to reconnect.\n\nThis does not delete any data already on the device.`;
+if (!(await showGlassConfirm(_rdMsg, { title: 'Remove Trusted Device', confirmText: 'Remove', danger: true }))) {
+return;
+}
+try {
+const userRef = firebaseDB.collection('users').doc(currentUser.uid);
+const deviceRef = userRef.collection('devices').doc(deviceId);
+await deviceRef.delete();
+showToast('Device removed', 'success', 3000);
+await loadDeviceList();
+} catch (error) {
+showToast('Failed to remove device: ' + error.message, 'error', 3000);
+}
+}
+window.loadDeviceList = loadDeviceList;
+window.refreshDeviceList = refreshDeviceList;
+window.remoteControlDevice = remoteControlDevice;
+window.removeDevice = removeDevice;
+window.getDeviceId = getDeviceId;
+window.getDeviceName = getDeviceName;
+window.registerDevice = registerDevice;
+async function restoreDeviceModeOnLogin(uid) {
+if (!firebaseDB) return;
+try {
+const deviceId = await getDeviceId();
+const userRef = firebaseDB.collection('users').doc(uid);
+const deviceRef = userRef.collection('devices').doc(deviceId);
+const deviceDoc = await deviceRef.get();
+if (!deviceDoc.exists) {
+return;
+}
+const data = deviceDoc.data();
+const cloudMode = data.currentMode || 'admin';
+const cloudTimestamp = data.appMode_timestamp || 0;
+const localTimestamp = (await idb.get('appMode_timestamp')) || 0;
+const _modeIsLocked = cloudMode !== 'admin';
+const _localIsAdmin = appMode === 'admin';
+const shouldRestore = (cloudMode && cloudTimestamp > localTimestamp && cloudMode !== appMode)
+  || (_modeIsLocked && _localIsAdmin);
+if (shouldRestore) {
+const previousMode = appMode;
+appMode = cloudMode;
+const modeBatch = [
+['appMode', appMode],
+['appMode_timestamp', cloudTimestamp]
+];
+if (cloudMode === 'rep' && data.assignedRep) {
+currentRepProfile = data.assignedRep;
+modeBatch.push(['repProfile', currentRepProfile]);
+modeBatch.push(['repProfile_timestamp', data.repProfile_timestamp || cloudTimestamp]);
+} else if (cloudMode === 'userrole' && data.assignedManager) {
+window._assignedManagerName = data.assignedManager;
+window._assignedUserTabs = Array.isArray(data.assignedUserTabs) ? data.assignedUserTabs : [];
+modeBatch.push(['assignedManager', data.assignedManager]);
+modeBatch.push(['assignedUserTabs', window._assignedUserTabs]);
+} else if ((cloudMode === 'production' || cloudMode === 'factory') && data.assignedManager) {
+window._assignedManagerName = data.assignedManager;
+modeBatch.push(['assignedManager', data.assignedManager]);
+}
+await idb.setBatch(modeBatch);
+const modeLabel = appMode === 'rep' ? 'Rep Mode' : appMode === 'userrole' ? 'User Role Mode' : appMode === 'production' ? 'Production Mode' : appMode === 'factory' ? 'Factory Mode' : 'Admin Mode';
+const isRemote = !!data.remoteAppliedMode;
+showToast(isRemote
+? `Restoring remotely assigned ${modeLabel}...`
+: `Switching to ${modeLabel}...`, 'info', 2000);
+setTimeout(() => { window.location.reload(); }, 1500);
+} else {
+}
+} catch (error) {
+console.error('Failed to save data locally.', _safeErr(error));
+showToast('Failed to save data locally.', 'error');
+}
+}
+window.restoreDeviceModeOnLogin = restoreDeviceModeOnLogin;
+async function listenForDeviceCommands() {
+if (!firebaseDB || !currentUser) return;
+try {
+const deviceId = await getDeviceId();
+const userRef = firebaseDB.collection('users').doc(currentUser.uid);
+const deviceRef = userRef.collection('devices').doc(deviceId);
+const unsubscribe = deviceRef.onSnapshot((doc) => {
+if (!doc.exists) return;
+const data = doc.data();
+if (data.targetMode && data.targetModeTimestamp) {
+const targetMode = data.targetMode;
+let resolvedName = null;
+const roleType = data.assignedRoleType || targetMode;
+if (roleType === 'rep') {
+resolvedName = data.assignedRoleName || data.assignedRep || null;
+} else if (roleType === 'userrole' || roleType === 'production' || roleType === 'factory') {
+resolvedName = data.assignedRoleName || data.assignedManager || null;
+}
+const effectiveMode = data.assignedRoleType || targetMode;
+const resolvedUserTabs = Array.isArray(data.assignedUserTabs) ? data.assignedUserTabs : [];
+const commandTimestamp = data.targetModeTimestamp.toMillis
+? data.targetModeTimestamp.toMillis()
+: data.targetModeTimestamp;
+const lastProcessed = window.lastProcessedCommandTimestamp || 0;
+if (commandTimestamp > lastProcessed) {
+applyRemoteModeChange(effectiveMode, data.commandSource || 'remote', resolvedName, resolvedUserTabs);
+window.lastProcessedCommandTimestamp = commandTimestamp;
+}
+}
+}, (error) => {
+console.warn('Device command listener error:', error);
+});
+window.deviceCommandsUnsubscribe = unsubscribe;
+} catch (error) {
+console.error('listenForDeviceCommands failed:', _safeErr(error));
+}
+}
+async function applyRemoteModeChange(targetMode, source, repName = null, userTabs = null) {
+const previousMode = appMode;
+const previousManager = window._assignedManagerName || null;
+const previousTabs = JSON.stringify(window._assignedUserTabs || []);
+if (previousMode === targetMode) {
+if (targetMode === 'admin') return;
+if (targetMode === 'rep' && currentRepProfile === repName) return;
+if (targetMode === 'userrole' && previousManager === repName && previousTabs === JSON.stringify(userTabs || [])) return;
+}
+appMode = targetMode;
+const nowMs = Date.now();
+const batchData = [['appMode', appMode], ['appMode_timestamp', nowMs]];
+if (targetMode === 'rep' && repName) {
+currentRepProfile = repName;
+batchData.push(['repProfile', repName], ['repProfile_timestamp', nowMs]);
+if (!salesRepsList.includes(repName)) {
+salesRepsList.push(repName);
+batchData.push(['sales_reps_list', salesRepsList]);
+if (typeof renderAllRepUI === 'function') renderAllRepUI();
+}
+} else if (targetMode === 'userrole') {
+window._assignedManagerName = repName || null;
+window._assignedUserTabs = Array.isArray(userTabs) ? userTabs : [];
+batchData.push(['assignedManager', repName || null], ['assignedUserTabs', window._assignedUserTabs]);
+} else if (targetMode === 'production' || targetMode === 'factory') {
+window._assignedManagerName = repName || null;
+batchData.push(['assignedManager', repName || null]);
+} else if (targetMode === 'admin') {
+window._assignedManagerName = null;
+window._assignedUserTabs = [];
+batchData.push(['assignedManager', null], ['assignedUserTabs', []]);
+}
+await idb.setBatch(batchData);
+if (firebaseDB && currentUser) {
+try {
+const deviceId = await getDeviceId();
+const deviceRef = firebaseDB.collection('users').doc(currentUser.uid)
+.collection('devices').doc(deviceId);
+const payload = {
+currentMode: targetMode, appMode_timestamp: nowMs,
+remoteAppliedMode: targetMode, remoteAppliedAt: nowMs, remoteAppliedBy: source || 'remote',
+assignedRoleType: targetMode, assignedRoleName: repName || null,
+assignedRep: targetMode === 'rep' ? (repName || null) : null,
+assignedManager: targetMode === 'userrole' ? (repName || null) : null,
+assignedUserTabs: targetMode === 'userrole' ? (window._assignedUserTabs || []) : null,
+};
+if (targetMode === 'rep') payload.repProfile_timestamp = nowMs;
+await deviceRef.set(payload, { merge: true });
+} catch (e) { console.error('Firebase write failed:', _safeErr(e)); }
+}
+if (targetMode === 'rep') {
+if (typeof lockToRepMode === 'function') lockToRepMode();
+if (typeof renderRepCustomerTable === 'function') renderRepCustomerTable();
+showToast(repName ? `Locked to Rep: ${repName}` : 'Device locked to Rep Sales mode', 'info', 4000);
+} else if (targetMode === 'userrole') {
+window._userRoleAllowedTabs = window._assignedUserTabs || [];
+if (typeof lockToUserRoleMode === 'function') lockToUserRoleMode();
+showToast(repName ? `Locked to User: ${repName}` : 'Device locked to User Role mode', 'info', 4000);
+} else if (targetMode === 'production') {
+if (typeof lockToProductionMode === 'function') lockToProductionMode();
+showToast(repName ? `Locked to Production: ${repName}` : 'Device locked to Production mode', 'info', 4000);
+} else if (targetMode === 'factory') {
+if (typeof lockToFactoryMode === 'function') lockToFactoryMode();
+showToast(repName ? `Locked to Factory: ${repName}` : 'Device locked to Factory mode', 'info', 4000);
+} else if (targetMode === 'admin') {
+if (typeof unlockToAdminMode === 'function') unlockToAdminMode();
+if (typeof notifyDataChange === 'function') notifyDataChange('all');
+showToast('Device unlocked to Admin mode', 'info', 4000);
+}
+}
+window.listenForDeviceCommands = listenForDeviceCommands;
+function listenForTeamChanges() {
+if (window._teamUnsubscribe) {
+try { window._teamUnsubscribe(); } catch(e) {}
+window._teamUnsubscribe = null;
+}
+}
+window.listenForTeamChanges = listenForTeamChanges;
+window.applyRemoteModeChange = applyRemoteModeChange;
