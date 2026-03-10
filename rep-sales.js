@@ -182,9 +182,9 @@ restoreBtn();
 return;
 }
 const totalValue = qty * salePrice;
-let saleId = generateUUID('rep_sale');
+let saleId = generateUUID('sale');
 if (!validateUUID(saleId)) {
-saleId = generateUUID('rep_sale');
+saleId = generateUUID('sale');
 }
 transactionRecord = {
 id: saleId,
@@ -217,9 +217,9 @@ showToast("Enter Amount", "warning");
 restoreBtn();
 return;
 }
-let collId = generateUUID('rep_coll');
+let collId = generateUUID('sale');
 if (!validateUUID(collId)) {
-collId = generateUUID('rep_coll');
+collId = generateUUID('sale');
 }
 transactionRecord = {
 id: collId,
@@ -254,7 +254,7 @@ const _rcPhone = transactionRecord.customerPhone || '';
 if (_rcName && _rcName.trim()) {
 const existsInRepRegistry = Array.isArray(repCustomers) && repCustomers.some(c => c && c.name && c.name.toLowerCase() === _rcName.toLowerCase());
 if (!existsInRepRegistry) {
-const _rcContact = { id: generateUUID(), name: _rcName, phone: _rcPhone, address: '', oldDebit: 0, createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
+const _rcContact = { id: generateUUID('rep_cust'), name: _rcName, phone: _rcPhone, address: '', oldDebit: 0, createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
 if (!Array.isArray(repCustomers)) repCustomers = [];
 repCustomers.push(_rcContact);
 await saveWithTracking('rep_customers', repCustomers);
@@ -336,6 +336,7 @@ const coordsString = `GPS: ${safeNumber(currentGps.lat, 0).toFixed(2)}, ${safeNu
 const isNewLocation = contact.address !== coordsString;
 repCustomers[contactIndex].address = coordsString;
 repCustomers[contactIndex].updatedAt = getTimestamp();
+ensureRecordIntegrity(repCustomers[contactIndex], true);
 await idb.set('rep_customers', repCustomers);
 notifyDataChange('rep');
 if (typeof showToast === 'function' && isNewLocation) {
@@ -960,10 +961,12 @@ if (!contact) contact = repCustomers.find(c => c && c.name && c.name.toLowerCase
 if (!contact) contact = repCustomers.find(c => c && c.name && c.name.toLowerCase() === name.toLowerCase() && !c.salesRep);
 const previousOldDebit = contact?.oldDebit || 0;
 if (contact) {
+if (!validateUUID(String(contact.id || ''))) { contact.id = generateUUID('rep_cust'); }
 contact.name = name; contact.phone = phone; contact.address = address; contact.oldDebit = oldDebit;
 contact.salesRep = currentRepProfile; contact.updatedAt = getTimestamp();
+ensureRecordIntegrity(contact, true);
 } else {
-contact = { id: generateUUID(), name, phone, address, oldDebit, salesRep: currentRepProfile,
+contact = { id: generateUUID('rep_cust'), name, phone, address, oldDebit, salesRep: currentRepProfile,
 createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
 repCustomers.push(contact);
 }
@@ -991,14 +994,16 @@ let oldDebtModified = false, oldDebtRecord = null, deletedOldDebtId = null;
 if (oldDebit > 0) {
 if (oldDebtIdx !== -1) {
 const tx = salesArray[oldDebtIdx];
+if (!validateUUID(String(tx.id || ''))) { tx.id = generateUUID('old_debt'); }
 const amountChanged = tx.totalValue !== oldDebit;
 tx.totalValue = oldDebit; tx.customerPhone = phone; tx.timestamp = getTimestamp();
 tx.updatedAt = getTimestamp();
 if (amountChanged) { tx.creditReceived = false; tx.partialPaymentReceived = 0; }
 if (!tx.time) tx.time = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+ensureRecordIntegrity(tx, true);
 oldDebtModified = true; oldDebtRecord = tx;
 } else {
-const tx = { id: generateUUID(), date: new Date().toISOString().split('T')[0],
+const tx = { id: generateUUID('old_debt'), date: new Date().toISOString().split('T')[0],
 customerName: name, customerPhone: phone, salesRep: currentRepProfile, quantity: 0,
 supplyStore: 'N/A', paymentType: 'CREDIT', transactionType: 'OLD_DEBT',
 totalValue: oldDebit, creditReceived: false, partialPaymentReceived: 0,

@@ -47,6 +47,10 @@ return false;
 if (!record || !record.id) {
 return false;
 }
+if (!validateUUID(String(record.id))) {
+console.warn('[saveRecordToFirestore] Blocked upload: invalid UUID', record.id);
+return false;
+}
 const collectionName = getFirestoreCollection(idbKey);
 if (!collectionName) {
 return false;
@@ -1210,6 +1214,11 @@ const userRef = firebaseDB.collection('users').doc(currentUser.uid);
 try {
 const updateArray = (array, docData, collectionName) => {
 if (docData._placeholder || docData.id === '_placeholder_') return array;
+// UUID integrity: validate and repair incoming document before it enters memory
+if (!docData.id || !validateUUID(String(docData.id))) {
+docData = ensureRecordIntegrity(docData, false, true);
+}
+docData = ensureRecordIntegrity(docData, false, true);
 const sid = String(docData.id);
 if (collectionName && DeltaSync.wasDownloaded(collectionName, sid)) return array;
 const _getMs = (rec) => {
@@ -2945,6 +2954,10 @@ for (let i = 0; i < changedItems.length; i++) {
 const item = changedItems[i];
 if (item && item.id) {
 if (DeltaSync.wasUploaded(deltaName, item.id)) continue;
+if (!validateUUID(String(item.id))) {
+console.warn('[performOneClickSync] Skipping upload: invalid UUID', item.id);
+continue;
+}
 try {
 const docId = String(item.id);
 const currentBatch = getCurrentBatch();
@@ -3290,6 +3303,11 @@ continue;
 }
 for (const item of itemsToUpload) {
 if (item && item.id) {
+if (DeltaSync.wasUploaded(deltaName, item.id)) continue;
+if (!validateUUID(String(item.id))) {
+console.warn('[pushDataToCloud] Skipping upload: invalid UUID', item.id);
+continue;
+}
 try {
 const batch = getCurrentBatch();
 let docId = String(item.id);
@@ -3308,12 +3326,13 @@ sanitizedItem.id = String(sanitizedItem.id);
 batch.set(docRef, sanitizedItem, { merge: true });
 operationCount++;
 trackFirestoreWrite(1);
+DeltaSync.markUploaded(deltaName, item.id);
 } catch (itemError) {
 console.warn('Failed to write batch item to Firestore', itemError);
 }
 }
 }
-DeltaSync.clearDirty(deltaName);
+// NOTE: clearDirty is now called AFTER successful batch.commit() below
 }
 }
 const deletionRecords = await idb.get('deletion_records', []);
@@ -3487,6 +3506,7 @@ await new Promise(r => setTimeout(r, 0));
 await idb.set('last_synced', now);
 for (const _col of Object.keys(collections)) {
 await DeltaSync.setLastSyncTimestamp(_col);
+DeltaSync.clearDirty(_col);
 }
 } catch (batchError) {
 console.error('Failed to save data locally.', _safeErr(batchError));

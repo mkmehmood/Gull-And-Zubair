@@ -1557,12 +1557,17 @@ console.warn('_writeCookie failed:', e);
 }
 }
 function _generateUUID() {
+  // Produces a standard UUID v4 with 'dev' prefix so it:
+  // 1. Passes validateUUID() checks throughout the app
+  // 2. Works as a valid Firestore document ID (no slashes)
+  // 3. Can be reliably stored and re-read from all storage layers
   const buf = new Uint8Array(16);
   if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
     crypto.getRandomValues(buf);
   } else {
+    // Fallback PRNG using xorshift — only used when WebCrypto unavailable
     let s0 = (Date.now() ^ 0xdeadbeef) >>> 0;
-    let s1 = (Date.now() ^ 0xcafebabe) >>> 0;
+    let s1 = ((Date.now() / 1000) ^ 0xcafebabe) >>> 0;
     for (let i = 0; i < 16; i++) {
       let t = s1 ^ (s1 << 17);
       s1 = s0;
@@ -1570,11 +1575,11 @@ function _generateUUID() {
       buf[i] = s0 & 0xff;
     }
   }
-  buf[6] = (buf[6] & 0x0f) | 0x40; 
-  buf[8] = (buf[8] & 0x3f) | 0x80; 
+  buf[6] = (buf[6] & 0x0f) | 0x40; // version 4
+  buf[8] = (buf[8] & 0x3f) | 0x80; // variant bits
   const hex = Array.from(buf).map(b => b.toString(16).padStart(2, '0')).join('');
   const core = `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20,32)}`;
-  return 'inst_' + core.replace(/-/g, '');
+  return 'dev-' + core; // 'dev' prefix keeps dashes → passes validateUUID prefixedRegex
 }
 async function _readCacheAnchor() {
 try {
@@ -1818,6 +1823,8 @@ idbBatch.push(['assignedManager', persistedManager]);
 }
 await idb.setBatch(idbBatch);
 }
+// Only set registeredAt on first registration (not on subsequent heartbeat calls)
+const isFirstRegistration = !existingDoc.exists;
 await deviceRef.set({
 deviceId: deviceId,
 deviceName: deviceName,
@@ -1841,7 +1848,7 @@ stableHash: fp.stableHash
 online: true,
 lastSeen: firebase.firestore.FieldValue.serverTimestamp(),
 lastActivity: firebase.firestore.FieldValue.serverTimestamp(),
-registeredAt: firebase.firestore.FieldValue.serverTimestamp(),
+...(isFirstRegistration ? { registeredAt: firebase.firestore.FieldValue.serverTimestamp() } : {}),
 currentMode: persistedMode,
 assignedRoleType: persistedRoleType,
 assignedRoleName: persistedRoleName,
@@ -2164,7 +2171,8 @@ function generateUUID(prefix = '', retryCount = 0, tsMs = null, modeOverride = n
 function validateUUID(uuid) {
   if (!uuid || typeof uuid !== 'string') return false;
   const standardRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  const prefixedRegex = /^[a-z0-9_]+-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  // Prefix may contain hyphens (e.g. 'pay-partial', 'rep-partial') — must start with alphanumeric
+  const prefixedRegex = /^[a-z0-9][a-z0-9_-]*-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   return standardRegex.test(uuid) || prefixedRegex.test(uuid);
 }
 function extractUUIDMeta(uuid) {
@@ -2178,16 +2186,24 @@ function extractUUIDMeta(uuid) {
     const tsHi = parseInt(cp1, 16);
     const tsLo = parseInt(cp2, 16);
     const tsMs = tsHi * 0x10000 + tsLo;         
-    const seq = (parseInt(cp3[1], 16) << 4) | parseInt(cp3[2], 16);
-    const deviceShard = node.slice(0, 4);
-    return {
-      deviceShard,
-      timestamp: new Date(tsMs),
-      appMode: appModeNew,
-      sequence: seq,
-      isEnriched: true,
-      version: 2,
-    };
+    // Guard: only accept as v2 if the embedded timestamp is in a realistic app range
+    // (2020-01-01 to 2099-12-31). Random UUIDv4s with a matching mode nibble would
+    // produce timestamps far outside this range (~0.28% false-positive rate without this guard).
+    const _V2_TS_MIN = 1577836800000; // 2020-01-01
+    const _V2_TS_MAX = 4102358400000; // 2099-12-31
+    if (tsMs >= _V2_TS_MIN && tsMs <= _V2_TS_MAX) {
+      const seq = (parseInt(cp3[1], 16) << 4) | parseInt(cp3[2], 16);
+      const deviceShard = node.slice(0, 4);
+      return {
+        deviceShard,
+        timestamp: new Date(tsMs),
+        appMode: appModeNew,
+        sequence: seq,
+        isEnriched: true,
+        version: 2,
+      };
+    }
+    // Timestamp out of range — fall through to legacy detection
   }
   const legacyModeTag   = node.slice(10, 12);
   const appModeLegacy   = _MODE_LABELS_HEX[legacyModeTag] || null;
@@ -2452,7 +2468,7 @@ if (isTrackingObject) {
 return record;
 }
 if (!record.id) {
-record.id = generateUUID();
+record.id = generateUUID('repair');
 if (!isMigration) {
 const hasUserData = Object.keys(record).some(key =>
 !['id', 'createdAt', 'updatedAt', 'timestamp', 'deletedAt', 'tombstoned_at'].includes(key)
@@ -2462,7 +2478,7 @@ if (hasUserData) {
 }
 } else if (!validateUUID(record.id)) {
 const oldId = record.id;
-record.id = generateUUID();
+record.id = generateUUID('repair');
 if (!isMigration) {
 }
 }

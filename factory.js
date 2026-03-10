@@ -619,7 +619,8 @@ try {
 const quantityInKg = qty * conversionFactor;
 const costPerKg = conversionFactor > 0 ? cost / conversionFactor : cost;
 const totalValue = qty * cost;
-const materialId = editingFactoryInventoryId || generateUUID('mat');
+let materialId = editingFactoryInventoryId || generateUUID('mat');
+if (!validateUUID(materialId)) materialId = generateUUID('mat');
 let existingMaterial = null;
 if(editingFactoryInventoryId) {
 const idx = factoryInventoryData.findIndex(i => i.id === editingFactoryInventoryId);
@@ -633,7 +634,7 @@ const isSupplierChanging = (supplierType === 'none' && oldSupplierId) ||
 if (isSupplierChanging) {
 await unlinkSupplierFromMaterial(existingMaterial);
 }
-factoryInventoryData[idx] = {
+factoryInventoryData[idx] = ensureRecordIntegrity({
 ...factoryInventoryData[idx],
 name,
 quantity: quantityInKg,
@@ -643,11 +644,13 @@ totalValue,
 purchaseQuantity: qty,
 purchaseCost: cost,
 conversionFactor: conversionFactor,
-purchaseUnitName: unitName
-};
+purchaseUnitName: unitName,
+updatedAt: getTimestamp()
+}, true);
 }
 } else {
-factoryInventoryData.push({
+const _matNow = getTimestamp();
+let _newMaterial = {
 id: materialId,
 name,
 quantity: quantityInKg,
@@ -659,8 +662,13 @@ syncedAt: new Date().toISOString(),
 purchaseQuantity: qty,
 purchaseCost: cost,
 conversionFactor: conversionFactor,
-purchaseUnitName: unitName
-});
+purchaseUnitName: unitName,
+createdAt: _matNow,
+updatedAt: _matNow,
+timestamp: _matNow
+};
+_newMaterial = ensureRecordIntegrity(_newMaterial, false);
+factoryInventoryData.push(_newMaterial);
 }
 if (supplierType === 'none') {
 const material = factoryInventoryData.find(m => m.id === materialId);
@@ -744,6 +752,8 @@ delete material.supplierType;
 material.paymentStatus = 'pending';
 delete material.totalPayable;
 delete material.paidDate;
+material.updatedAt = getTimestamp();
+ensureRecordIntegrity(material, true);
 await unifiedSave('factory_inventory_data', factoryInventoryData, material);
 notifyDataChange('all');
 triggerAutoSync();
@@ -1043,6 +1053,8 @@ material.supplierContact = supplier.phone || '';
 material.supplierType = 'payee';
 material.paymentStatus = 'pending';
 material.totalPayable = totalCost;
+material.updatedAt = getTimestamp();
+ensureRecordIntegrity(material, true);
 await unifiedSave('factory_inventory_data', factoryInventoryData, material);
 notifyDataChange('all');
 triggerAutoSync();
@@ -1162,9 +1174,9 @@ throw new Error(`Insufficient ${inventoryItem.name} in inventory! Available: ${i
 }
 });
 }
-let factProdId = generateUUID('fact_prod');
+let factProdId = generateUUID('fprod');
 if (!validateUUID(factProdId)) {
-factProdId = generateUUID('fact_prod');
+factProdId = generateUUID('fprod');
 }
 const factProdCreatedAt = getTimestamp();
 const productionRecord = {
@@ -1350,6 +1362,7 @@ try {
 if (entry) {
 entry.deletedAt = getTimestamp();
 entry.updatedAt = getTimestamp();
+ensureRecordIntegrity(entry, true);
 }
 let restoredMaterials = [];
 const formula = factoryDefaultFormulas[entry.store];
@@ -1362,6 +1375,7 @@ if (inventoryItem) {
 inventoryItem.quantity += materialToRestore;
 inventoryItem.totalValue = inventoryItem.quantity * inventoryItem.cost;
 inventoryItem.updatedAt = getTimestamp();
+ensureRecordIntegrity(inventoryItem, true);
 inventoryUpdated = true;
 restoredMaterials.push({
 name: inventoryItem.name || 'Unknown',
@@ -1614,6 +1628,7 @@ const record = db.find(item => item.id === id);
 if (record) {
 record.deletedAt = getTimestamp();
 record.updatedAt = getTimestamp();
+ensureRecordIntegrity(record, true);
 }
 db = db.filter(item => item.id !== id);
 await unifiedDelete('mfg_pro_pkr', db, id, { strict: true });

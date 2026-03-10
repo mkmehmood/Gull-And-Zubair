@@ -597,7 +597,7 @@ const _bfSalesMap = new Map((Array.isArray(salesCustomers) ? salesCustomers : []
 if (!isDirectSale(s)) return;
 const _bfName = s && s.customerName;
 if (_bfName && _bfName.trim() && !_bfSalesMap.has(_bfName.toLowerCase())) {
-const _bfC = { id: generateUUID(), name: _bfName, phone: s.customerPhone || '', address: '', oldDebit: 0, createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
+const _bfC = { id: generateUUID('cust'), name: _bfName, phone: s.customerPhone || '', address: '', oldDebit: 0, createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
 _bfSalesMap.set(_bfName.toLowerCase(), _bfC);
 if (!Array.isArray(salesCustomers)) salesCustomers = [];
 salesCustomers.push(_bfC);
@@ -619,7 +619,7 @@ const _bfRRep = s && s.salesRep;
 if (_bfRName && _bfRName.trim() && _bfRRep && _bfRRep.trim()) {
 const _bfKey = `${_bfRRep.toLowerCase()}::${_bfRName.toLowerCase()}`;
 if (!_bfRepMap.has(_bfKey)) {
-const _bfRC = { id: generateUUID(), name: _bfRName, salesRep: _bfRRep, phone: s.customerPhone || '', address: '', oldDebit: 0, createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
+const _bfRC = { id: generateUUID('rep_cust'), name: _bfRName, salesRep: _bfRRep, phone: s.customerPhone || '', address: '', oldDebit: 0, createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
 _bfRepMap.set(_bfKey, _bfRC);
 if (!Array.isArray(repCustomers)) repCustomers = [];
 repCustomers.push(_bfRC);
@@ -1804,9 +1804,9 @@ try {
 const now = new Date();
 const dateStr = now.toISOString().split('T')[0];
 const timeString = now.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-let txnId = generateUUID('qtxn');
+let txnId = generateUUID('pay');
 if (!validateUUID(txnId)) {
-txnId = generateUUID('qtxn');
+txnId = generateUUID('pay');
 }
 let transaction = {
 id: txnId,
@@ -1852,6 +1852,7 @@ mat.totalPayable = parseFloat((mat.totalPayable - remaining).toFixed(2));
 remaining = 0;
 mat.updatedAt = getTimestamp();
 }
+ensureRecordIntegrity(mat, true);
 materialsToSave.push(mat);
 if (!firstMaterialId) firstMaterialId = mat.id;
 }
@@ -1931,6 +1932,10 @@ showToast('Failed to delete transaction. Please try again.', 'error');
 }
 async function deleteCurrentEntity() {
 if(!currentEntityId) return;
+if (!validateUUID(String(currentEntityId))) {
+showToast('Invalid entity ID', 'error');
+return;
+}
 const _entityToDel = paymentEntities.find(e => String(e.id) === String(currentEntityId));
 const _entityName = _entityToDel ? _entityToDel.name : 'this entity';
 if (_entityToDel?.isArchived) {
@@ -1956,6 +1961,7 @@ if (entityIdx !== -1) {
 paymentEntities[entityIdx].isArchived = true;
 paymentEntities[entityIdx].archivedAt = getTimestamp();
 paymentEntities[entityIdx].updatedAt = getTimestamp();
+paymentEntities[entityIdx] = ensureRecordIntegrity(paymentEntities[entityIdx], true);
 await saveWithTracking('payment_entities', paymentEntities);
 await saveRecordToFirestore('payment_entities', paymentEntities[entityIdx]);
 }
@@ -1965,6 +1971,7 @@ trans.isSettled = true;
 trans.settledAt = getTimestamp();
 trans.settledBy = 'entity_archived';
 trans.updatedAt = getTimestamp();
+ensureRecordIntegrity(trans, true);
 }
 }
 if (_entityTxs.length > 0) {
@@ -3064,6 +3071,7 @@ mat.totalPayable = parseFloat((mat.totalPayable - remaining).toFixed(2));
 remaining = 0;
 mat.updatedAt = getTimestamp();
 }
+ensureRecordIntegrity(mat, true);
 materialsToSave.push(mat);
 if (!materialId) materialId = mat.id;
 }
@@ -3577,7 +3585,7 @@ const ampm = hours >= 12 ? 'PM' : 'AM';
 hours = hours % 12;
 hours = hours ? hours : 12;
 const timeString = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')} ${ampm}`;
-const recordId = generateUUID();
+const recordId = generateUUID('sale');
 const recordTimestamp = getTimestamp();
 if (!validateUUID(recordId)) {
 showToast(' Error generating transaction ID. Please try again.', 'error');
@@ -3616,7 +3624,7 @@ const _scPhone = validatedRecord.customerPhone || '';
 if (_scName && _scName.trim()) {
 const _scIdx = Array.isArray(salesCustomers) ? salesCustomers.findIndex(c => c && c.name && c.name.toLowerCase() === _scName.toLowerCase()) : -1;
 if (_scIdx === -1) {
-const _scContact = { id: generateUUID(), name: _scName, phone: _scPhone, address: '', oldDebit: 0, customSalePrice: 0, createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
+const _scContact = { id: generateUUID('cust'), name: _scName, phone: _scPhone, address: '', oldDebit: 0, customSalePrice: 0, createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
 if (!Array.isArray(salesCustomers)) salesCustomers = [];
 salesCustomers.push(_scContact);
 await saveWithTracking('sales_customers', salesCustomers);
@@ -4721,6 +4729,7 @@ sale.creditReceived = true;
 sale.creditReceivedDate = new Date().toISOString().split('T')[0];
 sale.creditReceivedTime = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
 sale.updatedAt = getTimestamp();
+ensureRecordIntegrity(sale, true);
 linkedIds.push(sale.id);
 remainingQty -= sale.quantity;
 } else {
@@ -4751,6 +4760,7 @@ async function markRepSalesEntriesAsUsed(seller, date, calcId) {
     ) {
       sale.usedInCalcId = calcId;
       sale.updatedAt = getTimestamp();
+      ensureRecordIntegrity(sale, true);
       linkedRepIds.push(sale.id);
     }
   });
@@ -4771,6 +4781,7 @@ async function revertRepSalesEntries(repSaleIds) {
     if (saleIndex !== -1) {
       delete repSales[saleIndex].usedInCalcId;
       repSales[saleIndex].updatedAt = getTimestamp();
+      ensureRecordIntegrity(repSales[saleIndex], true);
       revertedCount++;
     }
   });
@@ -5531,18 +5542,23 @@ const existingEntity = paymentEntities.find(e =>
 (material.supplierId && String(e.id) === String(material.supplierId))
 );
 if (!existingEntity) {
-const entityId = material.supplierId || generateUUID('supp');
-paymentEntities.push({
-id: entityId,
+let _sseId = material.supplierId || generateUUID('supp');
+if (!validateUUID(_sseId)) _sseId = generateUUID('supp');
+const _sseNow = Date.now();
+let _sseEntity = {
+id: _sseId,
 name: material.supplierName,
 type: 'payee',
 phone: material.supplierContact || '',
 wallet: '',
-createdAt: Date.now(),
-updatedAt: Date.now(),
+createdAt: _sseNow,
+updatedAt: _sseNow,
+timestamp: _sseNow,
 isSupplier: true,
 supplierCategory: 'raw_materials'
-});
+};
+_sseEntity = ensureRecordIntegrity(_sseEntity, false);
+paymentEntities.push(_sseEntity);
 } else if (material.supplierId && existingEntity.id !== material.supplierId) {
 material.supplierId = existingEntity.id;
 }
@@ -5657,6 +5673,7 @@ factorySalePrices: factorySalePrices,
 factoryUnitTracking: factoryUnitTracking,
 paymentEntities: paymentEntities,
 paymentTransactions: paymentTransactions,
+expenses: expenseRecords,
 stockReturns: stockReturns,
 settings: await idb.get('naswar_default_settings', defaultSettings),
 deleted_records: Array.from(deletedRecordIds),
@@ -5938,7 +5955,7 @@ const seen = new Map();
 let duplicatesFound = 0;
 array.forEach(item => {
   if (!item || !item.id) return;
-  if (!validateUUID(item.id)) item.id = generateUUID();
+  if (!validateUUID(item.id)) item.id = generateUUID('repair');
   if (seen.has(item.id)) {
     duplicatesFound++;
     const _cmpDup = (typeof compareRecordVersions === 'function')
@@ -6052,7 +6069,12 @@ localArray.forEach(item => {
     DeltaSync.markDownloaded(firestoreCollection, sid);
   }
 });
-mergedData[key] = merged;
+// Ensure every merged record has UUID integrity before writing to IDB
+mergedData[key] = merged.map(item => {
+  if (!item) return item;
+  if (!item.id || !validateUUID(String(item.id))) return ensureRecordIntegrity(item, false, true);
+  return item;
+});
 }
 await Promise.all([
 idb.set('mfg_pro_pkr',                mergedData.mfg_pro_pkr),
@@ -7837,6 +7859,7 @@ if (customerSales[saleIndex].creditReceived) {
 customerSales[saleIndex].paymentType = 'CASH';
 }
 customerSales[saleIndex].updatedAt = getTimestamp();
+customerSales[saleIndex] = ensureRecordIntegrity(customerSales[saleIndex], true);
 await unifiedSave('customer_sales', customerSales, customerSales[saleIndex]);
 refreshCustomerSales();
 updateCustomerCharts();
@@ -8279,8 +8302,10 @@ const totalCost = quantity * costPerKg;
 const totalSale = quantity * salePrice;
 const profit = totalSale - totalCost;
 const retCreatedAt = Date.now();
-const returnEntry = {
-id: generateUUID('ret'),
+let _retId = generateUUID('ret');
+if (!validateUUID(_retId)) _retId = generateUUID('ret');
+let returnEntry = {
+id: _retId,
 date: date,
 time: timeString,
 store: storeKey,
@@ -8302,10 +8327,13 @@ returnedBy: seller,
 returnNote: `Returned by ${seller}`,
 syncedAt: new Date().toISOString()
 };
+returnEntry = ensureRecordIntegrity(returnEntry, false);
 db.push(returnEntry);
 await unifiedSave('mfg_pro_pkr', db, returnEntry);
-const returnLogEntry = {
-id: generateUUID('retlog'),
+let _retLogId = generateUUID('retlog');
+if (!validateUUID(_retLogId)) _retLogId = generateUUID('retlog');
+let returnLogEntry = {
+id: _retLogId,
 date: date,
 time: timeString,
 store: storeKey,
@@ -8316,6 +8344,7 @@ updatedAt: retCreatedAt,
 timestamp: retCreatedAt,
 syncedAt: new Date().toISOString()
 };
+returnLogEntry = ensureRecordIntegrity(returnLogEntry, false);
 stockReturns.push(returnLogEntry);
 await unifiedSave('stock_returns', stockReturns, returnLogEntry);
 }
@@ -8525,7 +8554,7 @@ document.addEventListener('DOMContentLoaded', async function _appBootstrap() {
   setTimeout(() => {
     if (typeof generateUUID === 'function') {
       const saleIdEl = document.getElementById('new-sale-id-display');
-      if (saleIdEl) { const id = generateUUID(); saleIdEl.textContent = 'ID: ' + id.split('-').slice(0,2).join('-') + '\u2026'; saleIdEl.title = id; }
+      if (saleIdEl) { const id = generateUUID('sale'); saleIdEl.textContent = 'ID: ' + id.split('-').slice(0,2).join('-') + '\u2026'; saleIdEl.title = id; }
       const expIdEl = document.getElementById('expense-id-display');
       if (expIdEl) { const id2 = generateUUID('exp'); expIdEl.textContent = 'ID: ' + id2.split('-').slice(0,2).join('-') + '\u2026'; expIdEl.title = id2; }
     }
@@ -8672,6 +8701,10 @@ updateAllStoresOverview(mode);
 refreshUI();
 }
 async function deleteSalesEntry(id) {
+if (!id || !validateUUID(id)) {
+showToast('Invalid sales entry ID', 'error');
+return;
+}
 try {
 let history; history = await idb.get('noman_history', []);
 const entryToDelete = history.find(h => h.id === id);
@@ -8751,6 +8784,8 @@ sale.creditReceived = false;
 sale.paymentType = 'CREDIT';
 delete sale.creditReceivedDate;
 delete sale.creditReceivedTime;
+sale.updatedAt = getTimestamp();
+ensureRecordIntegrity(sale, true);
 revertedCount++;
 }
 });
@@ -8920,14 +8955,14 @@ try {
 if (editingEntityId) {
 const index = paymentEntities.findIndex(e => e.id === editingEntityId);
 if (index !== -1) {
-paymentEntities[index] = {
+paymentEntities[index] = ensureRecordIntegrity({
 ...paymentEntities[index],
 name,
 type,
 phone,
 wallet,
 updatedAt: getTimestamp()
-};
+}, true);
 showToast("Entity updated successfully", "success");
 }
 } else {
@@ -9237,6 +9272,10 @@ default: return 'Metric';
 }
 async function deleteFactoryInventoryItem() {
 if (editingFactoryInventoryId) {
+if (!validateUUID(String(editingFactoryInventoryId))) {
+showToast('Invalid inventory item ID', 'error');
+return;
+}
 const _diMat = factoryInventoryData.find(i => i.id === editingFactoryInventoryId);
 const _diName = _diMat?.name || 'this item';
 const _diQty = (_diMat?.quantity || 0).toFixed(2);
@@ -9574,9 +9613,9 @@ let entitiesSnapshot = [...paymentEntities];
 let transactionsSnapshot = [...paymentTransactions];
 try {
 if (category === 'operating') {
-let expenseId = generateUUID('expense');
+let expenseId = generateUUID('exp');
 if (!validateUUID(expenseId)) {
-expenseId = generateUUID('expense');
+expenseId = generateUUID('exp');
 }
 let expense = {
 id: expenseId,
@@ -9606,7 +9645,8 @@ await createExpenseTransaction(expense);
 showToast(`Operating expense recorded: ${name}`, "success");
 } else {
 const transactionType = category;
-let payExpenseId = generateUUID('expense');
+let payExpenseId = generateUUID('exp');
+if (!validateUUID(payExpenseId)) payExpenseId = generateUUID('exp');
 let payExpenseRecord = {
 id: payExpenseId,
 name: name,
@@ -9627,8 +9667,10 @@ e.name && e.name.toLowerCase() === name.toLowerCase() &&
 !e.isExpenseEntity
 );
 if (!entity) {
+let _seEntityId = generateUUID('ent');
+if (!validateUUID(_seEntityId)) _seEntityId = generateUUID('ent');
 let newEntity = {
-id: generateUUID('entity'),
+id: _seEntityId,
 name: name,
 type: transactionType === 'OUT' ? 'payee' : 'payor',
 isSupplier: false,
@@ -9641,8 +9683,10 @@ newEntity = ensureRecordIntegrity(newEntity, false);
 paymentEntities.push(newEntity);
 entity = newEntity;
 }
+let _seTxId = generateUUID('pay');
+if (!validateUUID(_seTxId)) _seTxId = generateUUID('pay');
 let transaction = {
-id: generateUUID('payment'),
+id: _seTxId,
 entityId: entity.id,
 entityName: entity.name,
 amount: amount,
@@ -9681,6 +9725,7 @@ mat.totalPayable = parseFloat((mat.totalPayable - remaining).toFixed(2));
 remaining = 0;
 mat.updatedAt = getTimestamp();
 }
+ensureRecordIntegrity(mat, true);
 materialsToSave.push(mat);
 }
 if (materialsToSave.length > 0) {
@@ -9782,8 +9827,10 @@ e.name && e.name.toLowerCase() === expense.name.toLowerCase() &&
 e.isExpenseEntity === true
 );
 if (!entity) {
+let _etEntityId = generateUUID('ent');
+if (!validateUUID(_etEntityId)) _etEntityId = generateUUID('ent');
 let newEntity = {
-id: generateUUID('entity'),
+id: _etEntityId,
 name: expense.name,
 type: 'payee',
 isSupplier: false,
@@ -9798,8 +9845,10 @@ paymentEntities.push(newEntity);
 entity = newEntity;
 await unifiedSave('payment_entities', paymentEntities, newEntity);
 }
+let _etTxId = generateUUID('pay');
+if (!validateUUID(_etTxId)) _etTxId = generateUUID('pay');
 let transaction = {
-id: generateUUID('payment'),
+id: _etTxId,
 entityId: entity.id,
 entityName: entity.name,
 amount: expense.amount,
@@ -11112,6 +11161,10 @@ showToast('Failed to export PDF: ' + error.message, 'error');
 }
 }
 async function deleteExpense(expenseId) {
+if (!expenseId || !validateUUID(expenseId)) {
+showToast('Invalid expense ID', 'error');
+return;
+}
 const expense = expenseRecords.find(e => e.id === expenseId);
 if (!expense) {
 const orphans = paymentTransactions.filter(t => t.expenseId === expenseId);
@@ -11167,6 +11220,7 @@ mat.totalPayable = originalAmount;
 mat.paymentStatus = 'pending';
 delete mat.paidDate;
 mat.updatedAt = getTimestamp();
+ensureRecordIntegrity(mat, true);
 });
 const remainingPayments = paymentTransactions
 .filter(t =>
@@ -11190,10 +11244,13 @@ remaining -= mat.totalPayable;
 mat.totalPayable = 0;
 mat.paymentStatus = 'paid';
 mat.paidDate = payment.date;
+mat.updatedAt = getTimestamp();
 } else {
 mat.totalPayable = parseFloat((mat.totalPayable - remaining).toFixed(2));
 remaining = 0;
+mat.updatedAt = getTimestamp();
 }
+ensureRecordIntegrity(mat, true);
 }
 });
 for (const mat of supplierMaterials) {
@@ -11419,7 +11476,7 @@ async function recoverRecord(deletedId, collectionName) {
       cleanRecord.syncedAt    = new Date().toISOString();
     }
     const newId = (typeof generateUUID === 'function')
-      ? generateUUID()
+      ? generateUUID('recovered')
       : String(deletedId);
     const oldId = String(deletedId);
     if (cleanRecord) {
@@ -12647,6 +12704,7 @@ if (relatedSale) {
 relatedSale.partialPaymentReceived = Math.max(0, (relatedSale.partialPaymentReceived || 0) - paymentAmount);
 if (relatedSale.partialPaymentReceived === 0) { relatedSale.creditReceived = false; delete relatedSale.creditReceivedDate; }
 relatedSale.updatedAt = getTimestamp();
+ensureRecordIntegrity(relatedSale, true);
 }
 }
 repSales = repSales.filter(t => t.id !== id);
@@ -14294,6 +14352,10 @@ showToast('Failed to control device: ' + error.message, 'error', 4000);
 async function removeDevice(deviceId) {
 if (!firebaseDB || !currentUser) {
 showToast('Not logged in', 'error', 3000);
+return;
+}
+if (!deviceId || !validateUUID(String(deviceId))) {
+showToast('Invalid device ID', 'error', 3000);
 return;
 }
 const _rdMsg = `Remove this device from the trusted list?\n\nThe device will no longer be able to sync data or receive remote commands. It will need to be re-approved if the user tries to reconnect.\n\nThis does not delete any data already on the device.`;

@@ -1621,7 +1621,7 @@ for (const [, grp] of Object.entries(sellerReturnGroups)) {
   const canonicalSpRet = getSalePriceForStore(store);
   const avgSp = canonicalSpRet > 0 ? canonicalSpRet : (items[0]?.sp || 0);
   const allDates = items.map(i => i.date).filter(Boolean).sort();
-  const mergedId = generateUUID('prod-ret-merged');
+  const mergedId = generateUUID('ret-merged');
   const returnsByStoreForThisSeller = sellerReturnTotals[seller]?.returnsByStore || {};
   const mergedReturn = ensureRecordIntegrity(_buildMergedBase(mergedId, mergeEpoch, nowISODate, nowTime, {
     store,
@@ -2023,7 +2023,7 @@ for (const [store, items] of Object.entries(storeGroups)) {
     totals.totalCost = expectedTotalCost;
     console.warn(`Factory data auto-corrected: totalCost adjusted from ${originalTotalCost} to ${expectedTotalCost}`);
   }
-  const mergedId = generateUUID('factory-merged');
+  const mergedId = generateUUID('fprod-merged');
   const datesSorted = items.map(i => i.date).filter(Boolean).sort();
   const mergedRecord = ensureRecordIntegrity(_buildMergedBase(mergedId, mergeEpoch, nowISODate, nowTime, {
     store,
@@ -2133,7 +2133,7 @@ for (const [, b] of Object.entries(repBuckets)) {
   const allDates  = sales.map(i => i.date).filter(Boolean).sort();
   const firstItem = sales[0] || {};
   const recordCount = sales.length + (oldDebt > 0 ? 1 : 0) + (collectionTotal > 0 ? 1 : 0);
-  const mergedId = generateUUID('repsale-merged');
+  const mergedId = generateUUID('sale-merged');
   const _repMergedStore = supplyStore || firstItem.supplyStore || 'STORE_A';
   const repCanonicalPrice = getSalePriceForStore(_repMergedStore);
   const lastUnitPrice = repCanonicalPrice > 0
@@ -2230,7 +2230,7 @@ for (const [, grp] of Object.entries(expenseGroups)) {
   const { category, name, records } = grp;
   const totalAmount = records.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
   const allDates    = records.map(e => e.date).filter(Boolean).sort();
-  const mergedId = generateUUID('expense-merged');
+  const mergedId = generateUUID('exp-merged');
   const mergedRecord = ensureRecordIntegrity({
     ..._buildMergedBase(mergedId, mergeEpoch, nowISODate, nowTime, {}),
     name,
@@ -2526,7 +2526,7 @@ const seen = new Map();
 let duplicatesRemoved = 0;
 array.forEach(item => {
 if (!item || !item.id) return;
-if (!validateUUID(item.id)) item.id = generateUUID();
+if (!validateUUID(item.id)) item.id = generateUUID('repair');
 if (seen.has(item.id)) {
 duplicatesRemoved++;
 const existing = seen.get(item.id);
@@ -2901,7 +2901,7 @@ try {
 
     for (const rec of records) {
       if (!rec || !rec.id) continue;
-      if (!validateUUID(rec.id)) rec.id = generateUUID();
+      if (!validateUUID(rec.id)) rec.id = generateUUID('repair');
 
       if (seen.has(rec.id)) {
         dupsInCol++;

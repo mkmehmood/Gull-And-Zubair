@@ -520,6 +520,7 @@ const idx = customerSales.findIndex(s => s.id === id);
 if (idx !== -1) {
 customerSales[idx].creditReceived = !customerSales[idx].creditReceived;
 customerSales[idx].updatedAt = getTimestamp();
+customerSales[idx] = ensureRecordIntegrity(customerSales[idx], true);
 await unifiedSave('customer_sales', customerSales, customerSales[idx]);
 notifyDataChange('sales');
 triggerAutoSync();
@@ -544,6 +545,7 @@ const idx = repSales.findIndex(s => s.id === id);
 if (idx !== -1) {
 repSales[idx].creditReceived = !repSales[idx].creditReceived;
 repSales[idx].updatedAt = getTimestamp();
+repSales[idx] = ensureRecordIntegrity(repSales[idx], true);
 await unifiedSave('rep_sales', repSales, repSales[idx]);
 notifyDataChange('rep');
 triggerAutoSync();
@@ -556,6 +558,10 @@ showToast('Failed to update transaction status. Please try again.', 'error');
 }
 }
 async function deleteTransactionFromOverlay(id) {
+if (!id || !validateUUID(id)) {
+showToast('Invalid transaction ID', 'error');
+return;
+}
 const _txItem = customerSales.find(s => s.id === id);
 if (_txItem?.isMerged) {
 showToast('Merged opening balance records cannot be deleted', 'warning');
@@ -619,6 +625,7 @@ if (rel) {
 rel.partialPaymentReceived = Math.max(0, (rel.partialPaymentReceived || 0) - paymentAmount);
 if (rel.partialPaymentReceived === 0) { rel.creditReceived = false; delete rel.creditReceivedDate; }
 rel.updatedAt = getTimestamp();
+ensureRecordIntegrity(rel, true);
 }
 }
 customerSales = customerSales.filter(s => s.id !== id);
@@ -634,6 +641,10 @@ showToast('Failed to delete transaction. Please try again.', 'error');
 }
 }
 async function deleteRepTransactionFromOverlay(id) {
+if (!id || !validateUUID(id)) {
+showToast('Invalid transaction ID', 'error');
+return;
+}
 const _rItem = repSales.find(s => s.id === id);
 if (_rItem?.isMerged) {
 showToast('Merged opening balance records cannot be deleted', 'warning');
@@ -695,6 +706,7 @@ if (rel) {
 rel.partialPaymentReceived = Math.max(0, (rel.partialPaymentReceived || 0) - paymentAmount);
 if (rel.partialPaymentReceived === 0) { rel.creditReceived = false; delete rel.creditReceivedDate; }
 rel.updatedAt = getTimestamp();
+ensureRecordIntegrity(rel, true);
 }
 }
 repSales = repSales.filter(s => s.id !== id);
@@ -735,12 +747,14 @@ sale.creditReceivedDate = nowISODate;
 if (!sale.isMerged) sale.partialPaymentReceived = sale.totalValue;
 sale.updatedAt = nowEpoch;
 remaining -= amountDue; updatedCount++;
+        if (!sale.isMerged) ensureRecordIntegrity(sale, true);
 } else {
 if (!sale.isMerged) {
 sale.partialPaymentReceived = (sale.partialPaymentReceived || 0) + remaining;
 sale.creditReceived = false; sale.updatedAt = nowEpoch;
 }
-const partialId = generateUUID('pay-partial');
+        if (!sale.isMerged) ensureRecordIntegrity(sale, true);
+const partialId = generateUUID('sale');
 customerSales.push(ensureRecordIntegrity({
 id: partialId, timestamp: nowEpoch, createdAt: nowEpoch, updatedAt: nowEpoch,
 date: nowISODate, time: nowTime,
@@ -754,7 +768,7 @@ partialPaymentMade = true; remaining = 0; updatedCount++; break;
 }
 if (remaining > 0 && updatedCount > 0) {
 const ls = pending[pending.length - 1];
-const collId = generateUUID('pay-coll');
+const collId = generateUUID('sale');
 customerSales.push(ensureRecordIntegrity({
 id: collId, timestamp: nowEpoch, createdAt: nowEpoch, updatedAt: nowEpoch,
 date: nowISODate, time: nowTime,
@@ -819,12 +833,14 @@ sale.creditReceivedDate = nowISODate;
 if (!sale.isMerged) sale.partialPaymentReceived = sale.totalValue;
 sale.updatedAt = nowEpoch;
 remaining -= amountDue; updatedCount++;
+        if (!sale.isMerged) ensureRecordIntegrity(sale, true);
 } else {
 if (!sale.isMerged) {
 sale.partialPaymentReceived = (sale.partialPaymentReceived || 0) + remaining;
 sale.creditReceived = false; sale.updatedAt = nowEpoch;
 }
-const partialId = generateUUID('rep-partial');
+        if (!sale.isMerged) ensureRecordIntegrity(sale, true);
+const partialId = generateUUID('sale');
 repSales.push(ensureRecordIntegrity({
 id: partialId, timestamp: nowEpoch, createdAt: nowEpoch, updatedAt: nowEpoch,
 date: nowISODate, time: nowTime,
@@ -838,7 +854,7 @@ partialPaymentMade = true; remaining = 0; updatedCount++; break;
 }
 if (remaining > 0 && updatedCount > 0) {
 const ls = pending[pending.length - 1];
-const collId = generateUUID('rep-coll');
+const collId = generateUUID('sale');
 repSales.push(ensureRecordIntegrity({
 id: collId, timestamp: nowEpoch, createdAt: nowEpoch, updatedAt: nowEpoch,
 date: nowISODate, time: nowTime,
@@ -1067,9 +1083,11 @@ let contact = salesCustomers.find(c => c && c.name && c.name.toLowerCase() === o
 if (!contact) contact = salesCustomers.find(c => c && c.name && c.name.toLowerCase() === name.toLowerCase());
 const previousOldDebit = contact?.oldDebit || 0;
 if (contact) {
+if (!validateUUID(String(contact.id || ''))) { contact.id = generateUUID('cust'); }
 contact.name = name; contact.phone = phone; contact.address = address; contact.oldDebit = oldDebit; contact.customSalePrice = customSalePrice; contact.updatedAt = getTimestamp();
+ensureRecordIntegrity(contact, true);
 } else {
-contact = { id: generateUUID(), name, phone, address, oldDebit, customSalePrice,
+contact = { id: generateUUID('cust'), name, phone, address, oldDebit, customSalePrice,
 createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
 salesCustomers.push(contact);
 }
@@ -1101,14 +1119,16 @@ let oldDebtModified = false, oldDebtRecord = null, deletedOldDebtId = null;
 if (oldDebit > 0) {
 if (oldDebtIdx !== -1) {
 const tx = salesArray[oldDebtIdx];
+if (!validateUUID(String(tx.id || ''))) { tx.id = generateUUID('old_debt'); }
 const amountChanged = tx.totalValue !== oldDebit;
 tx.totalValue = oldDebit; tx.customerPhone = phone; tx.timestamp = getTimestamp();
 tx.updatedAt = getTimestamp();
 if (amountChanged) { tx.creditReceived = false; tx.partialPaymentReceived = 0; }
 if (!tx.time) tx.time = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+ensureRecordIntegrity(tx, true);
 oldDebtModified = true; oldDebtRecord = tx;
 } else {
-const tx = { id: generateUUID(), date: new Date().toISOString().split('T')[0],
+const tx = { id: generateUUID('old_debt'), date: new Date().toISOString().split('T')[0],
 customerName: name, customerPhone: phone, salesRep: 'ADMIN', quantity: 0,
 supplyStore: 'N/A', paymentType: 'CREDIT', transactionType: 'OLD_DEBT',
 totalValue: oldDebit, creditReceived: false, partialPaymentReceived: 0,
