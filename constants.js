@@ -13,4 +13,3 @@ const APP_CONFIG = Object.freeze({
   OFFLINE_RETRY_DELAY_MS:    2000,
   OFFLINE_MAX_BACKOFF_MS:    30000,
 });
-

@@ -296,7 +296,7 @@ req.onupgradeneeded = e => {
 e.target.result.createObjectStore(this.STORE);
 };
 req.onsuccess = e => res(e.target.result);
-req.onerror = e => rej(e.target.error);
+req.onerror = e => rej(e.target.error || new Error('OfflineAuth: IDB open failed'));
 });
 },
 async saveCredentials(email, password) {
@@ -306,7 +306,7 @@ return new Promise((res, rej) => {
 const tx = db.transaction(this.STORE, 'readwrite');
 tx.objectStore(this.STORE).put({ hash, email, savedAt: Date.now() }, 'active');
 tx.oncomplete = () => res(true);
-tx.onerror = e => rej(e.target.error);
+tx.onerror = e => rej(e.target.error || new Error('OfflineAuth: saveCredentials failed'));
 });
 },
 async verifyCredentials(email, password) {
@@ -315,7 +315,7 @@ const record = await new Promise((res, rej) => {
 const tx = db.transaction(this.STORE, 'readonly');
 const req = tx.objectStore(this.STORE).get('active');
 req.onsuccess = e => res(e.target.result);
-req.onerror = e => rej(e.target.error);
+req.onerror = e => rej(e.target.error || new Error('OfflineAuth: verifyCredentials read failed'));
 });
 if (!record) return false;
 if (record.email.toLowerCase().trim() !== email.toLowerCase().trim()) return false;
@@ -342,7 +342,7 @@ return new Promise((res, rej) => {
 const tx = db.transaction(this.STORE, 'readwrite');
 tx.objectStore(this.STORE).delete('active');
 tx.oncomplete = () => res(true);
-tx.onerror = e => rej(e.target.error);
+tx.onerror = e => rej(e.target.error || new Error('OfflineAuth: clearCredentials failed'));
 });
 }
 };
@@ -1035,11 +1035,16 @@ showToast('An unexpected error occurred.', 'error');
 request.onsuccess = (e) => {
 this.db = e.target.result;
 this.db.onerror = (event) => {
+const err = event.target.error;
+if (err) console.error('IDB: Uncaught database error:', err.name, err.message);
 };
 this.db.onversionchange = () => {
 this.db.close();
 this.db = null;
 this._initPromise = null;
+if (typeof showToast === 'function') {
+  showToast('App updated in another tab — please reload to continue.', 'warning', 0);
+}
 };
 resolve(this.db);
 };
@@ -1048,6 +1053,10 @@ this._initPromise = null;
 reject(e.target.error || new Error("IDB open failed"));
 };
 request.onblocked = () => {
+  console.warn('IDB: open blocked by another tab holding the DB connection. Reload required.');
+  if (typeof showToast === 'function') {
+    showToast('App update pending — please close other tabs and reload.', 'warning', 8000);
+  }
 };
 });
 return this._initPromise;
@@ -1134,7 +1143,9 @@ try { resolve(JSON.parse(rawData)); } catch(e) { resolve(rawData); }
 }
 }
 };
-request.onerror = () => reject(request.error || new Error("IDB request failed"));
+request.onerror = () => reject(request.error || new Error("IDB get request failed for key: " + key));
+transaction.onerror = () => reject(transaction.error || new Error("IDB get transaction failed for key: " + key));
+transaction.onabort = () => resolve(defaultValue);
 });
 },
 _handleWriteError(err, context) {
@@ -1181,10 +1192,13 @@ request.onsuccess = () => {
 resolve();
 };
 request.onerror = () => {
-reject(request.error || new Error("IDB request failed"));
+reject(request.error || new Error("IDB set request failed for key: " + key));
 };
 transaction.onerror = () => {
-reject(transaction.error);
+reject(transaction.error || request.error || new Error("IDB set transaction failed for key: " + key));
+};
+transaction.onabort = () => {
+reject(transaction.error || request.error || new Error("IDB set transaction aborted for key: " + key));
 };
 });
 } catch (err) {
@@ -1231,13 +1245,14 @@ batch.forEach(([key, value, encryptedData]) => {
 const wrapped = this._wrapValue(key, value);
 wrapped.data = encryptedData;
 wrapped.metadata.encrypted = IDBCrypto.isReady();
-store.put(wrapped, this._k(key));
+const putReq = store.put(wrapped, this._k(key));
+putReq.onerror = () => reject(putReq.error || new Error("IDB setBatch put failed for key: " + key));
 });
 transaction.oncomplete = () => {
 resolve();
 };
-transaction.onerror = () => reject(transaction.error);
-transaction.onabort = () => reject(transaction.error || new DOMException('Transaction aborted', 'AbortError'));
+transaction.onerror = () => reject(transaction.error || new Error("IDB setBatch transaction failed"));
+transaction.onabort = () => reject(transaction.error || new Error("IDB setBatch transaction aborted"));
 });
 }
 } catch (err) {
@@ -1263,6 +1278,14 @@ if (++completed === keys.length) resolve();
 };
 request.onerror = () => { rawMap.set(key, null); if (++completed === keys.length) resolve(); };
 });
+transaction.onerror = () => {
+keys.forEach(k => { if (!rawMap.has(k)) rawMap.set(k, null); });
+resolve();
+};
+transaction.onabort = () => {
+keys.forEach(k => { if (!rawMap.has(k)) rawMap.set(k, null); });
+resolve();
+};
 });
 await Promise.all(keys.map(async key => {
 const rawData = rawMap.get(key);
@@ -1303,7 +1326,9 @@ const transaction = this.db.transaction(IDB_CONFIG.store, 'readwrite');
 const store = transaction.objectStore(IDB_CONFIG.store);
 const request = store.delete(this._k(key));
 request.onsuccess = () => resolve();
-request.onerror = () => reject(request.error || new Error("IDB request failed"));
+request.onerror = () => reject(request.error || new Error("IDB remove request failed for key: " + key));
+transaction.onerror = () => reject(transaction.error || request.error || new Error("IDB remove transaction failed for key: " + key));
+transaction.onabort = () => reject(transaction.error || new Error("IDB remove transaction aborted for key: " + key));
 });
 },
 async queryByType(type, options = {}) {
@@ -2344,12 +2369,6 @@ record.timestamp = record.createdAt || now;
 if (record.updatedAt < record.createdAt) {
 record.updatedAt = record.createdAt;
 }
-}
-if (record.isRepModeEntry === true) {
-  if (!record.salesRep || record.salesRep === 'NONE' || record.salesRep === 'ADMIN') {
-    record.isRepModeEntry = false;
-    console.warn('[schema] Corrected: isRepModeEntry=true but salesRep is NONE → direct sale.', record.id);
-  }
 }
 return record;
 }

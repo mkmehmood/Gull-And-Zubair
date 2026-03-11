@@ -205,7 +205,6 @@ creditReceived: (payType === 'CASH'),
 createdAt: getTimestamp(),
 updatedAt: getTimestamp(),
 timestamp: getTimestamp(),
-isRepModeEntry: true,
 affectsInventory: false,
 syncedAt: new Date().toISOString()
 };
@@ -240,7 +239,6 @@ isCollection: true,
 createdAt: getTimestamp(),
 updatedAt: getTimestamp(),
 timestamp: getTimestamp(),
-isRepModeEntry: true,
 affectsInventory: false,
 syncedAt: new Date().toISOString()
 };
@@ -537,10 +535,10 @@ return;
 try {
 const freshRepSales = await idb.get('rep_sales', []);
 if (Array.isArray(freshRepSales)) {
-const recordMap = new Map(freshRepSales.filter(s => s && s.isRepModeEntry === true).map(s => [s.id, s]));
+const recordMap = new Map(freshRepSales.filter(s => s && s.id).map(s => [s.id, s]));
 if (Array.isArray(repSales)) {
 repSales.forEach(s => {
-if (s && s.isRepModeEntry === true && !recordMap.has(s.id)) {
+if (s && s.id && !recordMap.has(s.id)) {
 recordMap.set(s.id, s);
 }
 });
@@ -768,12 +766,12 @@ let transactions = [];
 try {
 const dbSales = await idb.get('rep_sales', []);
 if (Array.isArray(dbSales)) {
-const recordMap = new Map(dbSales.filter(s => s && s.isRepModeEntry === true).map(s => [s.id, s]));
-if (Array.isArray(repSales)) repSales.forEach(s => { if (s && s.isRepModeEntry === true && !recordMap.has(s.id)) recordMap.set(s.id, s); });
+const recordMap = new Map(dbSales.filter(s => s && s.id).map(s => [s.id, s]));
+if (Array.isArray(repSales)) repSales.forEach(s => { if (s && s.id && !recordMap.has(s.id)) recordMap.set(s.id, s); });
 repSales = Array.from(recordMap.values());
 transactions = repSales.filter(s => s.customerName === name && s.salesRep === currentRepProfile);
 } else {
-transactions = repSales.filter(s => s.customerName === name && s.salesRep === currentRepProfile && s.isRepModeEntry === true);
+transactions = repSales.filter(s => s.customerName === name && s.salesRep === currentRepProfile);
 }
 } catch (e) {
 console.error('Rep sales operation failed.', _safeErr(e));
@@ -1009,7 +1007,7 @@ supplyStore: 'N/A', paymentType: 'CREDIT', transactionType: 'OLD_DEBT',
 totalValue: oldDebit, creditReceived: false, partialPaymentReceived: 0,
 time: new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}),
 timestamp: getTimestamp(), createdAt: getTimestamp(), updatedAt: getTimestamp(),
-notes: 'Previous balance brought forward', isRepModeEntry: true };
+notes: 'Previous balance brought forward' };
 salesArray.push(tx); oldDebtModified = true; oldDebtRecord = tx;
 }
 } else if (oldDebit === 0 && oldDebtIdx !== -1) {
@@ -1472,4 +1470,3 @@ setTimeout(updateRepLiveMap, 200);
 }
 }
 }
-

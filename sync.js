@@ -426,7 +426,7 @@ try {
   localStorage.removeItem('_gznd_session_active');
   sessionStorage.removeItem('_gznd_session_active');
 } catch (e) {
-console.error('Failed to clear persistent login:', e);
+console.error('Failed to clear persistent login:', _safeErr(e));
 }
 updateSyncButton();
 }
@@ -1160,7 +1160,6 @@ function _ensureLocalTombstone(recordId, collectionName) {
 
 function _updateArray(array, docData, collectionName) {
   if (docData._placeholder || docData.id === '_placeholder_') return array;
-  if (collectionName === 'rep_sales' && docData.isRepModeEntry !== true) return array;
   if (!docData.id || !validateUUID(String(docData.id))) {
     docData = ensureRecordIntegrity(docData, false, true);
   }
@@ -1281,7 +1280,7 @@ try {
           const data = await idb.get(collectionName);
           switch (collectionName) {
             case 'mfg_pro_pkr':                db                      = data || []; break;
-            case 'customer_sales':             customerSales           = (data || []).filter(r => !r || r.isRepModeEntry !== true); break;
+            case 'customer_sales':             customerSales           = data || []; break;
             case 'rep_sales':                  repSales                = data || []; break;
             case 'rep_customers':              repCustomers            = data || []; break;
             case 'sales_customers':            salesCustomers          = data || []; break;
@@ -1423,7 +1422,7 @@ async function subscribeToRealtime() {
       const userRef = firebaseDB.collection('users').doc(currentUser.uid);
       const yearCloseCollections = [
         { name: 'production',         data: db,                      filter: d => !d.isMerged },
-        { name: 'sales',              data: customerSales.filter(d => d.isRepModeEntry !== true), filter: d => !d.isMerged },
+        { name: 'sales',              data: customerSales,                   filter: d => !d.isMerged },
         { name: 'rep_sales',          data: repSales,                filter: d => !d.isMerged },
         { name: 'calculator_history', data: salesHistory,            filter: d => !d.isMerged },
         { name: 'transactions',       data: paymentTransactions,     filter: d => !d.isMerged },
@@ -1450,7 +1449,7 @@ async function subscribeToRealtime() {
   updateSignalUI('connecting');
   realtimeRefs.forEach(unsub => {
     try { if (typeof unsub === 'function') unsub(); }
-    catch (e) { console.error('Firebase operation failed.', e); }
+    catch (e) { console.error('Firebase operation failed.', _safeErr(e)); }
   });
   realtimeRefs = [];
 
@@ -1862,7 +1861,6 @@ function mergeDatasets(localArray, cloudArray) {
       const cloudIsCorrupt = (cloudItem.totalSold === undefined || cloudItem.totalSold === null || cloudItem.revenue === null);
       if (localHasData && cloudIsCorrupt) { mergedMap.set(localItem.id, localItem); return; }
     }
-    if (localItem.isRepModeEntry === true && !cloudItem.isRepModeEntry) { mergedMap.set(localItem.id, localItem); return; }
     if (localItem.isReturn === true && !cloudItem.isReturn) { mergedMap.set(localItem.id, localItem); return; }
     if ((localItem.formulaUnits > 0 && !cloudItem.formulaUnits) || (localItem.formulaCost > 0 && !cloudItem.formulaCost)) { mergedMap.set(localItem.id, localItem); return; }
     if (localItem.supplierId && !cloudItem.supplierId) { mergedMap.set(localItem.id, localItem); return; }
@@ -2175,9 +2173,9 @@ async function _mergeAndPersist(cloudData) {
 
   const { data } = cloudData;
   db                      = mergeArrays(db || [], data.mfg_pro_pkr || [],               'production');
-  customerSales           = mergeArrays(customerSales || [], (data.customer_sales || []).filter(r => !r || r.isRepModeEntry !== true),  'sales');
+  customerSales           = mergeArrays(customerSales || [], data.customer_sales || [],  'sales');
   salesHistory            = mergeArrays(salesHistory || [], data.noman_history || [],    'calculator_history');
-  repSales                = mergeArrays(repSales || [], (data.rep_sales || []).filter(r => r && r.isRepModeEntry === true), 'rep_sales');
+  repSales                = mergeArrays(repSales || [], data.rep_sales || [], 'rep_sales');
   repCustomers            = mergeArrays(repCustomers || [], data.rep_customers || [],    'rep_customers');
   salesCustomers          = mergeArrays(salesCustomers || [], data.sales_customers || [],'sales_customers');
   paymentTransactions     = mergeArrays(paymentTransactions || [], data.payment_transactions || [], 'transactions');
@@ -2294,8 +2292,8 @@ async function _uploadChanges(userRef) {
   const isRealRecord = item => item && item.id && !item._placeholder && item.id !== '_placeholder_';
   const collections = {
     production:          db.filter(isRealRecord),
-    sales:               customerSales.filter(item => isRealRecord(item) && item.isRepModeEntry !== true),
-    rep_sales:           repSales.filter(item => isRealRecord(item) && item.isRepModeEntry === true),
+    sales:               customerSales.filter(isRealRecord),
+    rep_sales:           repSales.filter(isRealRecord),
     rep_customers:       repCustomers.filter(isRealRecord),
     sales_customers:     salesCustomers.filter(isRealRecord),
     calculator_history:  salesHistory.filter(isRealRecord),
@@ -3246,4 +3244,3 @@ syncBtn.style.color = '#fff';
 }
 
 }
-

@@ -1087,7 +1087,6 @@ return getSalePriceForStore(store);
 }
 function getSaleTransactionValue(t) {
 if (!t) return 0;
-if (t.isRepModeEntry === true) return parseFloat(t.totalValue) || 0;
 if (t.isMerged) return parseFloat(t.totalValue) || 0;
 const pt = t.paymentType || 'CASH';
 if (pt === 'COLLECTION' || pt === 'PARTIAL_PAYMENT') return parseFloat(t.totalValue) || 0;
@@ -1234,7 +1233,7 @@ await idb.setBatch([
 ['factory_production_history', factoryProductionHistory]
 ]);
 } catch (rollbackError) {
-console.error('Failed to save data locally.', rollbackError);
+console.error('Failed to save data locally.', _safeErr(rollbackError));
 showToast('Failed to save data locally.', 'error');
 }
 showToast(error.message || 'Failed to save production data. Please try again.', 'error', 4000);
@@ -1647,4 +1646,3 @@ showToast(" Failed to delete entry. Please try again.", "error");
 }
 }
 }
-

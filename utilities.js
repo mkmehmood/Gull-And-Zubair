@@ -1,11 +1,3 @@
-function isRepSale(item) {
-  if (!item) return false;
-  if (item.isRepModeEntry === true) return true;
-  return false;
-}
-function isDirectSale(item) {
-  return !isRepSale(item);
-}
 async function toggleDarkMode() {
 const html = document.documentElement;
 const themeToggle = document.getElementById('themeToggle');
@@ -548,8 +540,8 @@ const keys = [
 const results = await idb.getBatch(keys);
 db = ensureArray(results.get('mfg_pro_pkr'));
 salesHistory = ensureArray(results.get('noman_history'));
-customerSales = ensureArray(results.get('customer_sales')).filter(r => !r || r.isRepModeEntry !== true);
-repSales = ensureArray(results.get('rep_sales')).filter(r => r && r.isRepModeEntry === true);
+customerSales = ensureArray(results.get('customer_sales'));
+repSales = ensureArray(results.get('rep_sales'));
 repCustomers = ensureArray(results.get('rep_customers'));
 salesCustomers = ensureArray(results.get('sales_customers'));
 stockReturns = ensureArray(results.get('stock_returns'));
@@ -599,7 +591,7 @@ try {
 let _bfSalesChanged = false;
 const _bfSalesMap = new Map((Array.isArray(salesCustomers) ? salesCustomers : []).map(c => [c.name.toLowerCase(), c]));
 (Array.isArray(customerSales) ? customerSales : []).forEach(s => {
-if (!isDirectSale(s)) return;
+if (s && (s.salesRep !== 'NONE')) return;
 const _bfName = s && s.customerName;
 if (_bfName && _bfName.trim() && !_bfSalesMap.has(_bfName.toLowerCase())) {
 const _bfC = { id: generateUUID('cust'), name: _bfName, phone: s.customerPhone || '', address: '', oldDebit: 0, createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
@@ -995,7 +987,6 @@ const freshRepSales = dataMap.get('rep_sales');
 if (Array.isArray(freshRepSales)) {
 let fixed = 0;
 const validated = freshRepSales
-  .filter(record => record && record.isRepModeEntry === true)
   .map(record => {
 try {
 if (!record.id || !validateUUID(record.id) ||
@@ -1013,7 +1004,7 @@ await idb.set('rep_sales', validated);
 validated.sort((a, b) => compareTimestamps(getRecordTimestamp(b), getRecordTimestamp(a)));
 const map = new Map((repSales || []).filter(r => r && r.id).map(r => [r.id, r]));
 validated.forEach(r => { if (!map.has(r.id)) map.set(r.id, r); });
-repSales = Array.from(map.values()).filter(r => !deletedRecordIds.has(r.id) && r.isRepModeEntry === true);
+repSales = Array.from(map.values()).filter(r => !deletedRecordIds.has(r.id));
 }
 const freshRepCustomers = dataMap.get('rep_customers');
 if (Array.isArray(freshRepCustomers)) {
@@ -2429,8 +2420,7 @@ await new Promise(r => setTimeout(r, 200));
 if (!window.jspdf || !window.jspdf.jsPDF) throw new Error("Failed to load PDF library. Please refresh and try again.");
 let transactions = customerSales.filter(s =>
 s &&
-s.customerName === customerName &&
-isDirectSale(s)
+s.customerName === customerName
 );
 const now = new Date();
 const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -2801,8 +2791,6 @@ totalProductionValue: 0,
 totalProductionQuantity: 0,
 salesCash: 0,
 salesCredits: 0,
-repSalesCash: 0,
-repSalesCredits: 0,
 calculatorCash: 0,
 calculatorCredits: 0,
 calculatorRecovered: 0,
@@ -2821,22 +2809,30 @@ rawData.totalProductionQuantity += item.net || 0;
 customerSales.forEach(sale => {
 const saleDate = new Date(sale.date);
 if (saleDate >= startDate && saleDate <= endDate) {
-if (!isDirectSale(sale)) return;
+const isRepLinked = sale.salesRep && sale.salesRep !== 'NONE';
 if (sale.isMerged && sale.mergedSummary) {
 const ms = sale.mergedSummary;
 rawData.salesCash    += (ms.cashSales    || 0);
 rawData.salesCredits += (ms.unpaidCredit || 0);
-} else if (sale.paymentType === 'CASH' || sale.creditReceived) {
-rawData.salesCash += sale.totalValue || 0;
 } else if (sale.paymentType === 'CREDIT' && !sale.creditReceived) {
+// All unpaid credit sales (both direct and rep-linked) count as outstanding credits
 const partialPaid = sale.partialPaymentReceived || 0;
 rawData.salesCredits += Math.max(0, (sale.totalValue || 0) - partialPaid);
+} else if (isRepLinked) {
+// Rep-linked CASH or creditReceived=true: goods went out via rep → owed to calculator,
+// counts as outstanding credits (not direct salesTabCash — handled via calculator received)
+rawData.salesCredits += sale.totalValue || 0;
+} else {
+// Direct sales only (salesRep === 'NONE')
+if (sale.paymentType === 'CASH' || sale.creditReceived) {
+rawData.salesCash += sale.totalValue || 0;
 } else if (sale.paymentType === 'COLLECTION') {
 rawData.salesCash += sale.totalValue || 0;
 rawData.salesCredits -= sale.totalValue || 0;
 } else if (sale.paymentType === 'PARTIAL_PAYMENT') {
 rawData.salesCash += sale.totalValue || 0;
 rawData.salesCredits -= sale.totalValue || 0;
+}
 }
 }
 });
@@ -2873,8 +2869,8 @@ rawData.expenses += (parseFloat(exp.amount) || 0);
 }
 });
 }
-const netSalesCash = rawData.salesCash - rawData.repSalesCash;
-const netSalesCredits = rawData.salesCredits - rawData.repSalesCredits;
+const netSalesCash = rawData.salesCash;
+const netSalesCredits = rawData.salesCredits;
 const netCalculatorDebt = rawData.calculatorCredits - rawData.calculatorRecovered;
 const finalTotals = {
 productionValue: rawData.totalProductionValue,
@@ -3200,8 +3196,6 @@ totalProductionValue: 0,
 totalProductionQuantity: 0,
 salesCash: 0,
 salesCredits: 0,
-repSalesCash: 0,
-repSalesCredits: 0,
 calculatorCash: 0,
 calculatorTotalIssued: 0,
 calculatorTotalRecovered: 0,
@@ -3214,22 +3208,30 @@ rawData.totalProductionValue += item.totalSale || 0;
 rawData.totalProductionQuantity += item.net || 0;
 });
 customerSales.forEach(sale => {
-if (!isDirectSale(sale)) return;
+const isRepLinked = sale.salesRep && sale.salesRep !== 'NONE';
 if (sale.isMerged && sale.mergedSummary) {
 const ms = sale.mergedSummary;
 rawData.salesCash    += (ms.cashSales    || 0);
 rawData.salesCredits += (ms.unpaidCredit || 0);
-} else if (sale.paymentType === 'CASH' || sale.creditReceived) {
-rawData.salesCash += sale.totalValue || 0;
 } else if (sale.paymentType === 'CREDIT' && !sale.creditReceived) {
+// All unpaid credit sales (both direct and rep-linked) count as outstanding credits
 const partialPaid = sale.partialPaymentReceived || 0;
 rawData.salesCredits += Math.max(0, (sale.totalValue || 0) - partialPaid);
+} else if (isRepLinked) {
+// Rep-linked CASH or creditReceived=true: goods went out via rep → owed to calculator,
+// counts as outstanding credits (not direct salesTabCash — handled via calculator received)
+rawData.salesCredits += sale.totalValue || 0;
+} else {
+// Direct sales only (salesRep === 'NONE')
+if (sale.paymentType === 'CASH' || sale.creditReceived) {
+rawData.salesCash += sale.totalValue || 0;
 } else if (sale.paymentType === 'COLLECTION') {
 rawData.salesCash += sale.totalValue || 0;
 rawData.salesCredits -= sale.totalValue || 0;
 } else if (sale.paymentType === 'PARTIAL_PAYMENT') {
 rawData.salesCash += sale.totalValue || 0;
 rawData.salesCredits -= sale.totalValue || 0;
+}
 }
 });
 salesHistory.forEach(item => {
@@ -3258,8 +3260,8 @@ totalExpenses += (parseFloat(exp.amount) || 0);
 }
 });
 }
-const netSalesCash = rawData.salesCash - rawData.repSalesCash;
-const netSalesCredits = rawData.salesCredits - rawData.repSalesCredits;
+const netSalesCash = rawData.salesCash;
+const netSalesCredits = rawData.salesCredits;
 const combinedMarketDebt = rawData.calculatorTotalIssued - rawData.calculatorTotalRecovered;
 const cashInHand = rawData.totalProductionValue +
 netSalesCash + rawData.calculatorCash +
@@ -3519,7 +3521,6 @@ storeSpecificProduction += production.net || 0;
 });
 let storeSpecificSales = 0;
 customerSales.forEach(sale => {
-if (!isDirectSale(sale)) return;
 if (sale.date === date && sale.supplyStore === store) {
 storeSpecificSales += sale.quantity || 0;
 }
@@ -3617,7 +3618,6 @@ profit: profit,
 unitPrice: _effectiveSalePrice,
 creditReceived: paymentType === 'CASH' ? true : false,
 syncedAt: new Date().toISOString(),
-isSellerEntry: salesRep !== 'NONE'
 };
 const validatedRecord = ensureRecordIntegrity(saleRecord);
 const salesSnapshot = [...customerSales];
@@ -3628,7 +3628,7 @@ await saveRecordToFirestore('customer_sales', validatedRecord);
 try {
 const _scName = validatedRecord.customerName;
 const _scPhone = validatedRecord.customerPhone || '';
-if (_scName && _scName.trim()) {
+if (_scName && _scName.trim() && !(validatedRecord.salesRep !== 'NONE')) {
 const _scIdx = Array.isArray(salesCustomers) ? salesCustomers.findIndex(c => c && c.name && c.name.toLowerCase() === _scName.toLowerCase()) : -1;
 if (_scIdx === -1) {
 const _scContact = { id: generateUUID('cust'), name: _scName, phone: _scPhone, address: '', oldDebit: 0, customSalePrice: 0, createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
@@ -3636,7 +3636,6 @@ if (!Array.isArray(salesCustomers)) salesCustomers = [];
 salesCustomers.push(_scContact);
 await saveWithTracking('sales_customers', salesCustomers, _scContact);
 await saveRecordToFirestore('sales_customers', _scContact);
-} else {
 }
 }
 } catch (_scErr) { console.warn('Auto-register sales customer failed:', _scErr); }
@@ -3658,7 +3657,6 @@ renderCustomersTable();
 if (typeof refreshCustomerSales === 'function') {
 refreshCustomerSales();
 }
-refreshEntityList();
 showToast(` Sale recorded successfully! ${name} - ${safeNumber(quantity, 0).toFixed(2)} kg`, "success");
 } catch (error) {
 customerSales.length = 0;
@@ -3666,7 +3664,7 @@ customerSales.push(...salesSnapshot);
 try {
 await saveWithTracking('customer_sales', customerSales);
 } catch (rollbackError) {
-console.error('UI refresh failed.', rollbackError);
+console.error('UI refresh failed.', _safeErr(rollbackError));
 showToast('UI refresh failed.', 'error');
 }
 showToast(' Failed to save sale. Please try again.', 'error');
@@ -3739,7 +3737,6 @@ storeReturns += returnEntry.quantity || 0;
 });
 let storeSales = 0;
 customerSales.forEach(sale => {
-if (!isDirectSale(sale)) return;
 if (sale.date === date && sale.supplyStore === store) {
 storeSales += sale.quantity || 0;
 }
@@ -4672,7 +4669,15 @@ linkedRepSalesIds: [],
 syncedAt: new Date().toISOString()
 };
 entry = ensureRecordIntegrity(entry, false);
-const linkedIds = await markSalesEntriesAsReceived(seller, sold);
+
+const reconciledCustomerIds = new Set();
+if (Array.isArray(salesHistory)) {
+  salesHistory.forEach(h => { if (Array.isArray(h.linkedSalesIds)) h.linkedSalesIds.forEach(id => reconciledCustomerIds.add(id)); });
+}
+const pendingCreditQty = (Array.isArray(customerSales) ? customerSales : [])
+  .filter(s => s.salesRep === seller && s.paymentType === 'CREDIT' && !s.creditReceived && !reconciledCustomerIds.has(s.id) && s.transactionType !== 'OLD_DEBT')
+  .reduce((sum, s) => sum + (s.quantity || 0), 0);
+const linkedIds = await markSalesEntriesAsReceived(seller, pendingCreditQty);
 entry.linkedSalesIds = linkedIds;
 const linkedRepIds = await markRepSalesEntriesAsUsed(seller, date, calcId);
 entry.linkedRepSalesIds = linkedRepIds;
@@ -4686,7 +4691,6 @@ emitSyncUpdate({ noman_history: history });
 if (Array.isArray(salesHistory)) {
 salesHistory.push(entry);
 }
-if (typeof renderCustomersTable === 'function') renderCustomersTable();
 document.getElementById('totalSold').value = '';
 document.getElementById('returnedQuantity').value = '';
 document.getElementById('expiredQuantity').value = '';
@@ -4725,7 +4729,6 @@ const salesData = type === 'rep' ? repSales : customerSales;
 let hasMergedEntries = false;
 salesData.forEach(sale => {
 if (type === 'rep' && (sale.salesRep !== currentRepProfile)) return;
-if (type === 'admin' && !isDirectSale(sale)) return;
 const name = sale.customerName;
 if (!name) return;
 if (!customerMap.has(name)) customerMap.set(name, initCust(name));
@@ -4902,7 +4905,6 @@ let remainingQty = quantityToMark;
 const pendingSales = customerSales
 .filter(sale =>
 sale.salesRep === seller &&
-isDirectSale(sale) &&
 sale.paymentType === 'CREDIT' &&
 !sale.creditReceived
 )
@@ -5878,7 +5880,7 @@ const timestamp = new Date().toISOString().split('T')[0];
 _triggerFileDownload(encryptedBlob, `NaswarDealers_SecureBackup_${timestamp}.gznd`);
 showToast('🔐 Encrypted backup created! File requires your credentials to restore.', 'success', 5000);
 } catch(encErr) {
-console.error('Encryption failed:', encErr);
+console.error('Encryption failed:', _safeErr(encErr));
 showToast('Encryption failed: ' + encErr.message, 'error');
 }
 }
@@ -6026,6 +6028,15 @@ function normaliseBackupFields(data) {
   if (data.mfg_pro_pkr && !data.mfg)    data.mfg           = data.mfg_pro_pkr;
   if (data.sales && !data.noman_history) data.noman_history = data.sales;
   if (data.noman_history && !data.sales) data.sales         = data.noman_history;
+  const _migrateRecord = (record) => {
+    if (!record || typeof record !== 'object') return record;
+    return record;
+  };
+  const _migrateArray = (arr) => Array.isArray(arr) ? arr.map(_migrateRecord) : arr;
+  data.customerSales  = _migrateArray(data.customerSales);
+  data.repSales       = _migrateArray(data.repSales);
+  data.salesCustomers = _migrateArray(data.salesCustomers);
+  data.repCustomers   = _migrateArray(data.repCustomers);
   return data;
 }
 async function _doRestoreMerge(data) {
@@ -6107,27 +6118,15 @@ const _localUUIDSets = {};
 for (const [key, arr] of Object.entries(currentLocalData)) {
 _localUUIDSets[key] = new Set(arr.filter(i => i && i.id).map(i => String(i.id)));
 }
-const _rawCustomerSales = ensureArray(data.customerSales).filter(isAlive);
-const _rawRepSales      = ensureArray(data.repSales).filter(isAlive);
-const _misplacedRepInCS = _rawCustomerSales.filter(s => s && s.isRepModeEntry === true);
-const _cleanCustomerSales = _rawCustomerSales.filter(s => !s || s.isRepModeEntry !== true);
-if (_misplacedRepInCS.length > 0) {
-  console.warn('[Restore] Found', _misplacedRepInCS.length, 'rep-mode record(s) in customerSales — moving to rep_sales.');
-  showToast('Correcting ' + _misplacedRepInCS.length + ' misplaced rep record(s) → rep sales.', 'warning', 4000);
-}
-const _repSalesMap = new Map(_rawRepSales.map(r => [r.id, r]));
-_misplacedRepInCS.forEach(r => {
-  if (!_repSalesMap.has(r.id) || getTimestampValue(r) > getTimestampValue(_repSalesMap.get(r.id))) {
-    _repSalesMap.set(r.id, r);
-  }
-});
+const _repNameSet = new Set((Array.isArray(salesRepsList) ? salesRepsList : []).map(r => r.toLowerCase()));
+const _isNotRepName = (c) => !c || !c.name || !_repNameSet.has(c.name.toLowerCase());
 const cleanBackupData = {
 mfg_pro_pkr:                ensureArray(data.mfg || data.mfg_pro_pkr).filter(isAlive),
 noman_history:              ensureArray(data.sales || data.noman_history).filter(isAlive),
-customer_sales:             _cleanCustomerSales,
-rep_sales:                  Array.from(_repSalesMap.values()),
+customer_sales:             ensureArray(data.customerSales).filter(isAlive),
+rep_sales:                  ensureArray(data.repSales).filter(isAlive),
 rep_customers:              mergeDatasets(ensureArray(data.repCustomers).filter(isAlive), ensureArray(currentLocalData.rep_customers || []).filter(isAlive)),
-sales_customers:            mergeDatasets(ensureArray(data.salesCustomers).filter(isAlive), ensureArray(currentLocalData.sales_customers || []).filter(isAlive)),
+sales_customers:            mergeDatasets(ensureArray(data.salesCustomers).filter(isAlive).filter(_isNotRepName), ensureArray(currentLocalData.sales_customers || []).filter(isAlive).filter(_isNotRepName)),
 factory_inventory_data:     ensureArray(data.factoryInventoryData).filter(isAlive),
 factory_production_history: ensureArray(data.factoryProductionHistory).filter(isAlive),
 stock_returns:              ensureArray(data.stockReturns).filter(isAlive),
@@ -6154,7 +6153,6 @@ const firestoreCollection = _idbToFirestore[key];
 const merged = mergeArrays(localArray, backupArray);
 backupArray.forEach(backupItem => {
   if (!backupItem || !backupItem.id) return;
-  if (firestoreCollection === 'sales' && backupItem.isRepModeEntry === true) return;
   const sid = String(backupItem.id);
   if (!localIds.has(sid)) {
     totalAdded++;
@@ -6190,26 +6188,6 @@ mergedData[key] = merged.map(item => {
   if (!item.id || !validateUUID(String(item.id))) return ensureRecordIntegrity(item, false, true);
   return item;
 });
-if (key === 'customer_sales') {
-  const _leaked = mergedData[key].filter(r => r && r.isRepModeEntry === true);
-  if (_leaked.length > 0) {
-    console.warn('[Restore] Stripping', _leaked.length, 'rep-mode record(s) leaked from local IDB customer_sales');
-    mergedData[key] = mergedData[key].filter(r => !r || r.isRepModeEntry !== true);
-    if (!mergedData._leakedRepRecords) mergedData._leakedRepRecords = [];
-    mergedData._leakedRepRecords.push(..._leaked);
-  }
-}
-}
-if (mergedData._leakedRepRecords && mergedData._leakedRepRecords.length > 0) {
-  const _repMap = new Map((mergedData.rep_sales || []).filter(r => r && r.id).map(r => [r.id, r]));
-  mergedData._leakedRepRecords.forEach(r => {
-    if (!_repMap.has(r.id) || getTimestampValue(r) > getTimestampValue(_repMap.get(r.id))) {
-      _repMap.set(r.id, r);
-      DeltaSync.trackId('rep_sales', r.id);
-    }
-  });
-  mergedData.rep_sales = Array.from(_repMap.values());
-  delete mergedData._leakedRepRecords;
 }
 await Promise.all([
 idb.set('mfg_pro_pkr',                mergedData.mfg_pro_pkr),
@@ -6289,7 +6267,7 @@ try {
   const userRef = firebaseDB.collection('users').doc(currentUser.uid);
   const collectionMapping = {
     'production':         { data: ensureArray(mergedData.mfg_pro_pkr),                deltaName: 'production' },
-    'sales':              { data: ensureArray(mergedData.customer_sales).filter(s => s && s.isRepModeEntry !== true), deltaName: 'sales' },
+    'sales':              { data: ensureArray(mergedData.customer_sales), deltaName: 'sales' },
     'calculator_history': { data: ensureArray(mergedData.noman_history),              deltaName: 'calculator_history' },
     'rep_sales':          { data: ensureArray(mergedData.rep_sales),                  deltaName: 'rep_sales' },
     'rep_customers':      { data: ensureArray(mergedData.rep_customers),              deltaName: 'rep_customers' },
@@ -6365,7 +6343,7 @@ try {
       { merge: true }
     );
     operationCount++;
-  } catch (factorySettingsError) { console.error('Factory settings cloud error', factorySettingsError); }
+  } catch (factorySettingsError) { console.error('Factory settings cloud error', _safeErr(factorySettingsError)); }
   if (operationCount > 0) {
     for (let _bi = 0; _bi < batches.length; _bi++) {
       await batches[_bi].commit();
@@ -6408,13 +6386,15 @@ async function _doYearCloseRestore(data, honourPostCloseDeletions = true) {
   const isAlive = honourPostCloseDeletions
     ? (item) => item && item.id && !deletedRecordIds.has(item.id)
     : (item) => item && item.id;
-  const replaceData = {
+  const _ycRepNameSet = new Set((Array.isArray(salesRepsList) ? salesRepsList : []).map(r => r.toLowerCase()));
+const _ycNotRepName = (c) => !c || !c.name || !_ycRepNameSet.has(c.name.toLowerCase());
+const replaceData = {
     mfg_pro_pkr:                ensureArray(data.mfg || data.mfg_pro_pkr).filter(isAlive),
     noman_history:              ensureArray(data.sales || data.noman_history).filter(isAlive),
     customer_sales:             ensureArray(data.customerSales).filter(isAlive),
     rep_sales:                  ensureArray(data.repSales).filter(isAlive),
     rep_customers:              mergeDatasets(ensureArray(data.repCustomers).filter(isAlive), ensureArray(repCustomers || []).filter(isAlive)),
-    sales_customers:            mergeDatasets(ensureArray(data.salesCustomers).filter(isAlive), ensureArray(salesCustomers || []).filter(isAlive)),
+    sales_customers:            mergeDatasets(ensureArray(data.salesCustomers).filter(isAlive).filter(_ycNotRepName), ensureArray(salesCustomers || []).filter(isAlive).filter(_ycNotRepName)),
     factory_inventory_data:     ensureArray(data.factoryInventoryData).filter(isAlive),
     factory_production_history: ensureArray(data.factoryProductionHistory).filter(isAlive),
     stock_returns:              ensureArray(data.stockReturns).filter(isAlive),
@@ -7376,7 +7356,6 @@ storeData.profit += (item.profit || 0);
 });
 let soldQty = 0;
 customerSales.forEach(sale => {
-if (!isDirectSale(sale)) return;
 const saleDate = new Date(sale.date);
 const saleYear = saleDate.getFullYear();
 const saleMonth = saleDate.getMonth();
@@ -7547,16 +7526,21 @@ const dateStr = d.toISOString().split('T')[0];
 labels.push(d.toLocaleDateString('en-US', {weekday:'short'}));
 let dayCash = 0, dayCredit = 0;
 customerSales.forEach(item => {
-if (isRepSale(item)) return;
 if(item.date === dateStr) {
+const isRepLinked = item.salesRep && item.salesRep !== 'NONE';
 if (item.isMerged && item.mergedSummary) {
 const ms = item.mergedSummary;
 dayCash   += (ms.cashSales    || 0);
 dayCredit += (ms.unpaidCredit || 0);
-} else if(item.paymentType === 'CASH' || item.creditReceived) {
-dayCash += item.totalValue;
 } else if(item.paymentType === 'CREDIT' && !item.creditReceived) {
+// Unpaid credit (direct or rep-linked) → outstanding credit
 dayCredit += item.totalValue;
+} else if(isRepLinked) {
+// Rep-linked CASH/received → owed to calculator, counted as credit (not direct cash)
+dayCredit += item.totalValue;
+} else if(item.paymentType === 'CASH' || item.creditReceived) {
+// Direct cash or paid direct credit → cash
+dayCash += item.totalValue;
 }
 }
 });
@@ -7569,17 +7553,20 @@ labels = Array.from({length: daysInMonth}, (_, i) => i + 1);
 cashData = new Array(daysInMonth).fill(0);
 creditData = new Array(daysInMonth).fill(0);
 customerSales.forEach(item => {
-if (isRepSale(item)) return;
 const d = new Date(item.date);
 if(d.getMonth() === selectedMonth && d.getFullYear() === selectedYear) {
+const isRepLinked = item.salesRep && item.salesRep !== 'NONE';
 if (item.isMerged && item.mergedSummary) {
 const ms = item.mergedSummary;
 cashData[d.getDate()   - 1] += (ms.cashSales    || 0);
 creditData[d.getDate() - 1] += (ms.unpaidCredit || 0);
-} else if(item.paymentType === 'CASH' || item.creditReceived) {
-cashData[d.getDate() - 1] += item.totalValue;
 } else if(item.paymentType === 'CREDIT' && !item.creditReceived) {
 creditData[d.getDate() - 1] += item.totalValue;
+} else if(isRepLinked) {
+// Rep-linked CASH/received → owed to calculator, counted as credit (not direct cash)
+creditData[d.getDate() - 1] += item.totalValue;
+} else if(item.paymentType === 'CASH' || item.creditReceived) {
+cashData[d.getDate() - 1] += item.totalValue;
 }
 }
 });
@@ -7589,24 +7576,26 @@ labels = months;
 cashData = new Array(12).fill(0);
 creditData = new Array(12).fill(0);
 customerSales.forEach(item => {
-if (isRepSale(item)) return;
 const d = new Date(item.date);
 if(d.getFullYear() === selectedYear) {
+const isRepLinked = item.salesRep && item.salesRep !== 'NONE';
 if (item.isMerged && item.mergedSummary) {
 const ms = item.mergedSummary;
 cashData[d.getMonth()]   += (ms.cashSales    || 0);
 creditData[d.getMonth()] += (ms.unpaidCredit || 0);
-} else if(item.paymentType === 'CASH' || item.creditReceived) {
-cashData[d.getMonth()] += item.totalValue;
 } else if(item.paymentType === 'CREDIT' && !item.creditReceived) {
 creditData[d.getMonth()] += item.totalValue;
+} else if(isRepLinked) {
+// Rep-linked CASH/received → owed to calculator, counted as credit (not direct cash)
+creditData[d.getMonth()] += item.totalValue;
+} else if(item.paymentType === 'CASH' || item.creditReceived) {
+cashData[d.getMonth()] += item.totalValue;
 }
 }
 });
 } else if (currentCustomerChartMode === 'all') {
 const monthData = {};
 customerSales.forEach(item => {
-if (isRepSale(item)) return;
 const d = new Date(item.date);
 const monthYear = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 const monthLabel = `${d.toLocaleDateString('en-US', {month:'short'})} ${d.getFullYear()}`;
@@ -7617,14 +7606,18 @@ cash: 0,
 credit: 0
 };
 }
+const isRepLinked = item.salesRep && item.salesRep !== 'NONE';
 if (item.isMerged && item.mergedSummary) {
 const ms = item.mergedSummary;
 monthData[monthYear].cash   += (ms.cashSales    || 0);
 monthData[monthYear].credit += (ms.unpaidCredit || 0);
-} else if(item.paymentType === 'CASH' || item.creditReceived) {
-monthData[monthYear].cash += item.totalValue;
 } else if(item.paymentType === 'CREDIT' && !item.creditReceived) {
 monthData[monthYear].credit += item.totalValue;
+} else if(isRepLinked) {
+// Rep-linked CASH/received → owed to calculator, counted as credit (not direct cash)
+monthData[monthYear].credit += item.totalValue;
+} else if(item.paymentType === 'CASH' || item.creditReceived) {
+monthData[monthYear].cash += item.totalValue;
 }
 });
 const sortedMonths = Object.keys(monthData).sort();
@@ -7640,7 +7633,6 @@ creditData = creditData.slice(-12);
 }
 }
 customerSales.forEach(item => {
-if (!isDirectSale(item)) return;
 const d = new Date(item.date);
 const dYear = d.getFullYear();
 const dMonth = d.getMonth();
@@ -7655,14 +7647,18 @@ if(currentCustomerChartMode === 'month' && dYear === selectedYear && dMonth === 
 if(currentCustomerChartMode === 'year' && dYear === selectedYear) include = true;
 if(currentCustomerChartMode === 'all') include = true;
 if(include) {
+const isRepLinked = item.salesRep && item.salesRep !== 'NONE';
 if (item.isMerged && item.mergedSummary) {
 const ms = item.mergedSummary;
 totalCash   += (ms.cashSales    || 0);
 totalCredit += (ms.unpaidCredit || 0);
-} else if(item.paymentType === 'CASH' || item.creditReceived) {
-totalCash += item.totalValue;
 } else if(item.paymentType === 'CREDIT' && !item.creditReceived) {
 totalCredit += item.totalValue;
+} else if(isRepLinked) {
+// Rep-linked CASH/received → owed to calculator, counted as credit (not direct cash)
+totalCredit += item.totalValue;
+} else if(item.paymentType === 'CASH' || item.creditReceived) {
+totalCash += item.totalValue;
 }
 }
 });
@@ -7814,7 +7810,7 @@ freshSales = Array.from(localMap.values());
 await idb.set('customer_sales', freshSales);
 }
 } catch (firestoreError) {
-console.error('Failed to save data locally.', firestoreError);
+console.error('Failed to save data locally.', _safeErr(firestoreError));
 showToast('Failed to save data locally.', 'error');
 }
 }
@@ -7858,9 +7854,11 @@ if (a.date !== selectedDate && b.date === selectedDate) return 1;
 return compareTimestamps(getRecordTimestamp(b), getRecordTimestamp(a));
 });
 sortedSales.forEach(item => {
-if (!isDirectSale(item) ||
-item.paymentType === 'PARTIAL_PAYMENT' ||
-item.paymentType === 'COLLECTION') return;
+const isRepLinked = item.salesRep && item.salesRep !== 'NONE';
+// Skip direct COLLECTION and PARTIAL_PAYMENT from stats (they reduce credit balance, not new sales volume)
+if (!isRepLinked && (item.paymentType === 'PARTIAL_PAYMENT' ||
+item.paymentType === 'COLLECTION')) return;
+// For rep-linked sales, include all types (CREDIT stays in credits, CASH counts as rep credit)
 const rowDate = new Date(item.date);
 const rowYear = rowDate.getFullYear();
 const rowMonth = rowDate.getMonth();
@@ -7873,10 +7871,15 @@ if (item.isMerged && item.mergedSummary) {
 const ms = item.mergedSummary;
 period.cash   += (ms.cashSales    || 0);
 period.credit += (ms.unpaidCredit || 0);
-} else if(item.paymentType === 'CASH' || item.creditReceived) {
-period.cash += item.totalValue;
 } else if(item.paymentType === 'CREDIT' && !item.creditReceived) {
+// All unpaid credit (direct or rep-linked) → outstanding credit
 period.credit += item.totalValue;
+} else if(isRepLinked) {
+// Rep-linked CASH/received → owed to calculator, counted as credit (not direct cash)
+period.credit += item.totalValue;
+} else if(item.paymentType === 'CASH' || item.creditReceived) {
+// Direct cash sales only
+period.cash += item.totalValue;
 }
 };
 if(item.date === selectedDate) updatePeriod(stats.day);
@@ -7886,7 +7889,6 @@ if(rowYear === selectedYear) updatePeriod(stats.year);
 updatePeriod(stats.all);
 });
 const displayData = sortedSales.filter(item =>
-isDirectSale(item) &&
 item.paymentType !== 'PARTIAL_PAYMENT' &&
 item.paymentType !== 'COLLECTION'
 );
@@ -7950,9 +7952,7 @@ if (item.isMerged) {
 mergedBadge = _mergedBadgeHtml(item, {inline:true});
 }
 const card = document.createElement('div');
-const isRepLinked = isRepSale(item);
 card.className = `card liquid-card ${highlightClass}${item.isSettled ? ' is-settled-record' : ''}`.trim();
-if (isRepLinked) card.style.display = 'none';
 if (item.date) card.setAttribute('data-date', item.date);
 let creditSection = '';
 if (!isOldDebtItem) {
@@ -8124,12 +8124,11 @@ if (Array.isArray(salesHistory)) {
   });
 }
 let totalSold = 0;
-customerSales.forEach(sale => {
+(Array.isArray(customerSales) ? customerSales : []).forEach(sale => {
   if (sale.salesRep === seller &&
-      isDirectSale(sale) &&
+      sale.paymentType === 'CREDIT' &&
+      !sale.creditReceived &&
       !reconciledSalesIds.has(sale.id) &&
-      sale.paymentType !== 'PARTIAL_PAYMENT' &&
-      sale.paymentType !== 'COLLECTION' &&
       sale.transactionType !== 'OLD_DEBT') {
     totalSold += (sale.quantity || 0);
   }
@@ -8163,10 +8162,12 @@ if (Array.isArray(salesHistory)) {
     }
   });
 }
-repSales.forEach(sale => { if (sale.usedInCalcId) usedRepSaleIds.add(sale.id); });
+(Array.isArray(repSales) ? repSales : []).forEach(sale => {
+  if (sale.usedInCalcId) usedRepSaleIds.add(sale.id);
+});
 let creditSalesKg = 0;
 let recoveredCash = 0;
-repSales.forEach(sale => {
+(Array.isArray(repSales) ? repSales : []).forEach(sale => {
   if (sale.salesRep === seller && sale.date === date && !usedRepSaleIds.has(sale.id)) {
     if (sale.paymentType === 'CREDIT') {
       creditSalesKg += (sale.quantity || 0);
@@ -10023,7 +10024,7 @@ await idb.setBatch([
 ['payment_transactions', paymentTransactions]
 ]);
 } catch (rollbackError) {
-console.error('Failed to render data.', rollbackError);
+console.error('Failed to render data.', _safeErr(rollbackError));
 showToast('Failed to render data.', 'error');
 }
 showToast('Failed to save expense. Please try again.', 'error');
@@ -12027,7 +12028,7 @@ const timestamp = new Date().toISOString().split('T')[0];
 _triggerFileDownload(encryptedBlob, `NaswarDealers_SecureBackup_${timestamp}.gznd`);
 showToast('Encrypted backup saved! Only your account credentials can restore this file.', 'success', 5000);
 } catch(encErr) {
-console.error('Encryption failed:', encErr);
+console.error('Encryption failed:', _safeErr(encErr));
 showToast('Encryption failed: ' + encErr.message, 'error');
 }
 }
@@ -12318,7 +12319,7 @@ return currentBatch;
 };
 const collections = {
 'production': merged.mfg_pro_pkr,
-'sales': (merged.customer_sales || []).filter(s => s && s.isRepModeEntry !== true),
+'sales': (merged.customer_sales || []),
 'rep_sales': merged.rep_sales,
 'calculator_history': merged.noman_history,
 'inventory': merged.factory_inventory_data,
@@ -12954,7 +12955,7 @@ const phoneContainer = document.getElementById(phoneContainerId);
 if (!phoneContainer) return;
 const allSales = isRep ?
 (Array.isArray(repSales) ? repSales : []).filter(s => s && s.salesRep === currentRepProfile) :
-(Array.isArray(customerSales) ? customerSales : []).filter(s => s && isDirectSale(s));
+(Array.isArray(customerSales) ? customerSales : []).filter(s => s);
 const allRegistryNames = !isRep && Array.isArray(salesCustomers)
 ? salesCustomers.filter(c => c && c.name).map(c => String(c.name).trim().toLowerCase())
 : Array.isArray(repCustomers)
@@ -13000,7 +13001,7 @@ const _salesRegMap = new Map((_freshSalesReg).filter(c => c && c.id).map(c => [c
 if (Array.isArray(salesCustomers)) salesCustomers.forEach(c => { if (c && c.id && !_salesRegMap.has(c.id)) _salesRegMap.set(c.id, c); });
 const _mergedSalesReg = Array.from(_salesRegMap.values());
 const _custNamesFromSales = customerSales
-.filter(s => s && isDirectSale(s))
+.filter(s => s)
 .map(s => s.customerName)
 .filter(n => n && typeof n === 'string');
 const _custNamesFromRegistry = _mergedSalesReg
@@ -14763,4 +14764,3 @@ window._teamUnsubscribe = null;
 }
 window.listenForTeamChanges = listenForTeamChanges;
 window.applyRemoteModeChange = applyRemoteModeChange;
-

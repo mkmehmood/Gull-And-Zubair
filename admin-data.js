@@ -74,9 +74,9 @@ const uuidStats = (typeof UUIDSyncRegistry !== 'undefined') ? UUIDSyncRegistry.s
 const myDeviceShard = uuidStats._myDeviceShard || '—';
 const collections = [
 { name: 'production',         snap: productionSnap,            idbKey: 'mfg_pro_pkr',               jsVar: 'db',                       description: 'Factory production records' },
-{ name: 'sales',              snap: salesSnap,                  idbKey: 'customer_sales',             jsVar: 'customerSales',            description: 'Direct customer sales (isRepModeEntry:false)' },
+{ name: 'sales',              snap: salesSnap,                  idbKey: 'customer_sales',             jsVar: 'customerSales',            description: 'Direct customer sales' },
 { name: 'customer_sales',     snap: customerSalesLegacySnap,    idbKey: 'customer_sales',             jsVar: 'customerSales',            description: 'Legacy alias for sales collection (placeholder only)' },
-{ name: 'rep_sales',          snap: repSalesSnap,               idbKey: 'rep_sales',                  jsVar: 'repSales',                 description: 'Rep sales to customers (isRepModeEntry:true)' },
+{ name: 'rep_sales',          snap: repSalesSnap,               idbKey: 'rep_sales',                  jsVar: 'repSales',                 description: 'Rep sales to customers' },
 { name: 'rep_customers',      snap: repCustomersSnap,           idbKey: 'rep_customers',              jsVar: 'repCustomers',             description: 'Rep customer contact registry' },
 { name: 'sales_customers',    snap: salesCustomersSnap,         idbKey: 'sales_customers',            jsVar: 'salesCustomers',           description: 'Sales tab customer contact registry' },
 { name: 'calculator_history', snap: calcHistorySnap,            idbKey: 'noman_history',              jsVar: 'salesHistory',             description: 'Calculator / daily ledger entries' },
@@ -919,7 +919,7 @@ if (Array.isArray(customerSales)) {
   S.sales.total = customerSales.length;
   customerSales.forEach(i => {
     if (i.customerName) S.sales.customers.add(i.customerName);
-    if (i.isMerged !== true && isDirectSale(i)) {
+    if (i.isMerged !== true) {
       S.sales.nonMerged++;
       if (i.paymentType === 'CASH' || (i.paymentType === 'CREDIT' && i.creditReceived)) S.sales.settledCount++;
       else if (i.paymentType === 'CREDIT' && !i.creditReceived) S.sales.creditCount++;
@@ -953,7 +953,7 @@ if (Array.isArray(repSales)) {
   repSales.forEach(i => {
     if (i.customerName) S.repSales.customers.add(i.customerName);
     if (i.salesRep) S.repSales.reps.add(i.salesRep);
-    if (i.isMerged !== true && isRepSale(i)) {
+    if (i.isMerged !== true && i.salesRep && i.salesRep !== 'NONE' && i.salesRep !== 'ADMIN') {
       S.repSales.nonMerged++;
       if (i.paymentType === 'CASH' || (i.paymentType === 'CREDIT' && i.creditReceived)) S.repSales.settledCount++;
       else if (i.paymentType === 'CREDIT' && !i.creditReceived) S.repSales.creditCount++;
@@ -1189,7 +1189,7 @@ async function verifyMergeConsistency(snap) {
     }
   }
   if (Array.isArray(customerSales)) {
-    const mergedSales = customerSales.filter(i => i.isMerged && isDirectSale(i));
+    const mergedSales = customerSales.filter(i => i.isMerged);
     const totalValue = mergedSales.reduce((s, i) => s + (i.totalValue || 0), 0);
     const totalCost = mergedSales.reduce((s, i) => s + (i.totalCost || 0), 0);
     const expectedProfit = totalValue - totalCost;
@@ -1292,14 +1292,14 @@ try {
       _triggerFileDownload(encryptedBlob, `NaswarDealers_YearClose_${timestamp}.gznd`);
       showToast('🔐 Encrypted year-end backup downloaded!', 'success', 4000);
     } catch (encErr) {
-      console.error('Encryption failed:', encErr);
+      console.error('Encryption failed:', _safeErr(encErr));
       showToast('Local backup encryption failed — proceeding with cloud backup only.', 'warning', 4000);
     }
   } else {
     showToast('No verified password — skipping local encrypted backup.', 'info', 2500);
   }
 } catch (bkpPhaseErr) {
-  console.error('Backup phase error:', bkpPhaseErr);
+  console.error('Backup phase error:', _safeErr(bkpPhaseErr));
   const proceed = await showGlassConfirm(
     'Backup could not be completed.\n\nDo you want to proceed with closing the financial year anyway?\n\n\u26a0\ufe0f This is irreversible — proceed only if you have an existing backup.',
     { title: 'Backup Failed', confirmText: 'Proceed Anyway', cancelText: 'Abort' }
@@ -1324,11 +1324,11 @@ closeYearAbortController = new AbortController();
 const { signal } = closeYearAbortController;
 const snap = {
   prod:    { before: Array.isArray(db)                      ? db.filter(i=>i.isMerged!==true).length : 0 },
-  sales:   { before: Array.isArray(customerSales)           ? customerSales.filter(i=>i.isMerged!==true&&isDirectSale(i)).length : 0 },
+  sales:   { before: Array.isArray(customerSales)           ? customerSales.filter(i=>i.isMerged!==true).length : 0 },
   calc:    { before: Array.isArray(salesHistory)             ? salesHistory.filter(i=>i.isMerged!==true).length : 0 },
   pay:     { before: Array.isArray(paymentTransactions)      ? paymentTransactions.filter(i=>i.isMerged!==true).length : 0 },
   factory: { before: Array.isArray(factoryProductionHistory) ? factoryProductionHistory.filter(i=>i.isMerged!==true).length : 0 },
-  repSales:{ before: Array.isArray(repSales)                ? repSales.filter(i=>i.isMerged!==true&&isRepSale(i)).length : 0 },
+  repSales:{ before: Array.isArray(repSales)                ? repSales.filter(i=>i.isMerged!==true&&i.salesRep&&i.salesRep!=='NONE'&&i.salesRep!=='ADMIN').length : 0 },
   expenses:{ before: Array.isArray(expenseRecords)           ? expenseRecords.filter(i=>i.isMerged!==true).length : 0 },
   returns: { before: Array.isArray(stockReturns)             ? stockReturns.filter(i=>i.isMerged!==true).length : 0 }
 };
@@ -1366,7 +1366,7 @@ const sellerMerged = prodMerged.filter(i=>i.isReturn).length;
 liveUpdate('prod', `${storeMerged} store + ${sellerMerged} seller return card${sellerMerged!==1?'s':''}`, 'var(--accent)', `${storeMerged + sellerMerged} merged cards`, `${storeMerged} store balance${storeMerged!==1?'s':''} + ${sellerMerged} seller return card${sellerMerged!==1?'s':''}`);
 snap.prod.after = prodMerged.length;
 await mergeSalesData(signal);
-snap.sales.after = Array.isArray(customerSales) ? customerSales.filter(i=>i.isMerged&&isDirectSale(i)).length : 0;
+snap.sales.after = Array.isArray(customerSales) ? customerSales.filter(i=>i.isMerged).length : 0;
 liveUpdate('sales', `${snap.sales.after} merged record${snap.sales.after!==1?'s':''}`, 'var(--accent-emerald)', `${snap.sales.after} customer records`, 'One opening balance per customer');
 await mergeCalculatorData(signal);
 snap.calc.after = Array.isArray(salesHistory) ? salesHistory.filter(i=>i.isMerged).length : 0;
@@ -1378,7 +1378,7 @@ await mergeFactoryData(signal);
 snap.factory.after = Array.isArray(factoryProductionHistory) ? factoryProductionHistory.filter(i=>i.isMerged).length : 0;
 liveUpdate('factory', `${snap.factory.after} merged record${snap.factory.after!==1?'s':''}`, 'var(--accent-purple)', `${snap.factory.after} formula records`, '1 per formula store');
 await mergeRepSalesData(signal);
-snap.repSales.after = Array.isArray(repSales) ? repSales.filter(i=>i.isMerged&&isRepSale(i)).length : 0;
+snap.repSales.after = Array.isArray(repSales) ? repSales.filter(i=>i.isMerged&&i.salesRep&&i.salesRep!=='NONE'&&i.salesRep!=='ADMIN').length : 0;
 liveUpdate('repsales', `${snap.repSales.after} merged record${snap.repSales.after!==1?'s':''}`, 'var(--store-b)', `${snap.repSales.after} rep×customer records`, 'Keyed per customer × rep combination');
 await mergeExpensesData(signal);
 snap.expenses.after = Array.isArray(expenseRecords) ? expenseRecords.filter(i=>i.isMerged).length : 0;
@@ -1506,7 +1506,7 @@ if (error.name === 'AbortError') {
       await restoreFromBackup(backupTimestamp);
       showToast('Data restored from backup. No changes were committed.', 'info');
     } catch (restoreErr) {
-      console.error('Failed to restore from backup:', restoreErr);
+      console.error('Failed to restore from backup:', _safeErr(restoreErr));
       showToast('CRITICAL: Failed to restore from backup. Manual intervention required.', 'error');
     }
   }
@@ -1695,7 +1695,6 @@ const mergedRecords = [];
 const customerBuckets = {};
 customerSales.forEach(item => {
   if (item.isMerged === true) return;
-  if (isRepSale(item)) return;
   const name = item.customerName || 'Unknown';
   if (!customerBuckets[name]) {
     customerBuckets[name] = {
@@ -1785,7 +1784,6 @@ for (const [customer, b] of Object.entries(customerBuckets)) {
     partialPaymentReceived: isSettled ? 0 : alreadyPaid,
     balancePaid:           alreadyPaid,
     paid:                  isSettled,
-    isRepModeEntry:        false,
     notes:                 'Combined year-end balance carried forward from financial year close',
     mergedRecordCount:     recordCount,
     mergedSummary: {
@@ -2082,7 +2080,7 @@ const mergedRecords = [];
 const repBuckets = {};
 repSales.forEach(item => {
   if (item.isMerged === true) return;
-  if (!isRepSale(item)) return;
+  if (!item.salesRep || item.salesRep === 'NONE' || item.salesRep === 'ADMIN') return;
   const name = item.customerName || 'Unknown';
   const rep  = item.salesRep     || 'NONE';
   const key  = `${name}::${rep}`;
@@ -2173,7 +2171,6 @@ for (const [, b] of Object.entries(repBuckets)) {
     paid:                  isSettled,
     salesRep:              rep,
     supplyStore:           _repMergedStore,
-    isRepModeEntry:        true,
     notes:                 'Combined year-end balance carried forward from financial year close',
     mergedRecordCount:     recordCount,
     mergedSummary: {
@@ -2988,7 +2985,7 @@ try {
         if (typeof DeltaSync !== 'undefined') await DeltaSync.setLastSyncTimestamp(col.firestore);
 
       } catch (colErr) {
-        console.error('[Cleanup] Firestore sync failed for', col.firestore, colErr);
+        console.error('[Cleanup] Firestore sync failed for', col.firestore, _safeErr(colErr));
         showToast('Firestore sync failed for ' + col.label + ': ' + colErr.message, 'error');
       }
     }
@@ -3015,4 +3012,3 @@ window.runUnifiedCleanup = runUnifiedCleanup;
 window._showDeltaSyncDetails = showDeltaSyncDetails;
 window._runUnifiedCleanup = runUnifiedCleanup;
 window._showCloseFinancialYearDialog = showCloseFinancialYearDialog;
-

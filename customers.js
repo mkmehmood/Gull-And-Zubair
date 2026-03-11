@@ -15,8 +15,7 @@ window._selectCustomerBase = selectCustomer;
 async function calculateCustomerStatsForDisplay(name) {
 if (!name) return;
 const sales = customerSales.filter(s =>
-s && s.customerName && s.customerName.toLowerCase() === name.toLowerCase() &&
-isDirectSale(s)
+s && s.customerName && s.customerName.toLowerCase() === name.toLowerCase()
 );
 if (sales.length === 0) {
 document.getElementById('customer-info-display').classList.add('hidden');
@@ -26,22 +25,36 @@ let totalCredit = 0;
 let totalQty = 0;
 sales.forEach(s => {
 totalQty += (s.quantity || 0);
+const isRepLinked = s.salesRep && s.salesRep !== 'NONE';
 if (s.transactionType === 'OLD_DEBT') {
 if (!s.creditReceived) {
 const partialPaid = s.partialPaymentReceived || 0;
 totalCredit += (getSaleTransactionValue(s) - partialPaid);
 }
 } else if (s.paymentType === 'CREDIT' && !s.creditReceived) {
+// All unpaid credit sales (direct or rep-linked) → outstanding credit owed
 if (s.isMerged && typeof s.creditValue === 'number') {
 totalCredit += s.creditValue;
 } else {
 const partialPaid = s.partialPaymentReceived || 0;
 totalCredit += (getSaleTransactionValue(s) - partialPaid);
 }
+} else if (isRepLinked) {
+// Rep-linked: CASH/received adds to credit owed, COLLECTION/PARTIAL_PAYMENT settles it
+if (s.paymentType === 'CASH' || s.creditReceived) {
+totalCredit += (s.totalValue || 0);
 } else if (s.paymentType === 'COLLECTION') {
 totalCredit -= (s.totalValue || 0);
 } else if (s.paymentType === 'PARTIAL_PAYMENT') {
 totalCredit -= (s.totalValue || 0);
+}
+} else {
+// Direct sales: COLLECTION/PARTIAL_PAYMENT reduce outstanding credit
+if (s.paymentType === 'COLLECTION') {
+totalCredit -= (s.totalValue || 0);
+} else if (s.paymentType === 'PARTIAL_PAYMENT') {
+totalCredit -= (s.totalValue || 0);
+}
 }
 });
 totalCredit = Math.max(0, totalCredit);
@@ -88,9 +101,9 @@ const filterInput = document.getElementById('customer-filter');
 const filterValue = filterInput ? filterInput.value.toLowerCase() : '';
 const customerStats = {};
 customerSales.forEach(sale => {
-if (!isDirectSale(sale)) return;
 const name = sale.customerName;
 if (!name || name.trim() === '') return;
+const isRepLinked = sale.salesRep && sale.salesRep !== 'NONE';
 if (!customerStats[name]) {
 customerStats[name] = { name: name, credit: 0, quantity: 0, lastSaleDate: 0 };
 }
@@ -99,16 +112,30 @@ if (sale.transactionType === 'OLD_DEBT' && !sale.creditReceived) {
 const partialPaid = sale.partialPaymentReceived || 0;
 customerStats[name].credit += (getSaleTransactionValue(sale) - partialPaid);
 } else if (sale.paymentType === 'CREDIT' && !sale.creditReceived) {
+// All unpaid credit sales (direct or rep-linked) → outstanding credit owed
 if (sale.isMerged && typeof sale.creditValue === 'number') {
 customerStats[name].credit += sale.creditValue;
 } else {
 const partialPaid = sale.partialPaymentReceived || 0;
 customerStats[name].credit += (getSaleTransactionValue(sale) - partialPaid);
 }
+} else if (isRepLinked) {
+// Rep-linked non-credit transactions: CASH adds to credit owed (goods out via rep),
+// COLLECTION/PARTIAL_PAYMENT reduce it (rep has collected and settled)
+if (sale.paymentType === 'CASH' || sale.creditReceived) {
+customerStats[name].credit += (sale.totalValue || 0);
 } else if (sale.paymentType === 'COLLECTION') {
 customerStats[name].credit -= (sale.totalValue || 0);
 } else if (sale.paymentType === 'PARTIAL_PAYMENT') {
 customerStats[name].credit -= (sale.totalValue || 0);
+}
+} else {
+// Direct sales (salesRep === 'NONE'): COLLECTION/PARTIAL_PAYMENT reduce credit
+if (sale.paymentType === 'COLLECTION') {
+customerStats[name].credit -= (sale.totalValue || 0);
+} else if (sale.paymentType === 'PARTIAL_PAYMENT') {
+customerStats[name].credit -= (sale.totalValue || 0);
+}
 }
 if (customerStats[name].credit < 0) customerStats[name].credit = 0;
 const saleDate = sale.date;
@@ -129,7 +156,7 @@ if (Array.isArray(salesCustomers)) {
 const statsNames = new Set(sortedCustomers.map(c => c.name.toLowerCase()));
 const directSalesNames = new Set(
 (Array.isArray(customerSales) ? customerSales : [])
-.filter(s => isDirectSale(s) && s.customerName)
+.filter(s => s.customerName)
 .map(s => s.customerName.toLowerCase())
 );
 salesCustomers.forEach(sc => {
@@ -197,7 +224,6 @@ const contact = salesCustomers.find(ct => ct && ct.name && c && c.name && ct.nam
 const customerSaleData = customerSales.find(s =>
 s && s.customerName && c && c.name &&
 s.customerName === c.name &&
-isDirectSale(s) &&
 s.customerPhone
 );
 phone = contact?.phone || customerSaleData?.customerPhone || '-';
@@ -271,8 +297,7 @@ async function deleteCurrentCustomer() {
 if (!currentManagingCustomer) return;
 const name = currentManagingCustomer;
 const txs = customerSales.filter(s =>
-s && s.customerName === name &&
-isDirectSale(s)
+s && s.customerName === name
 );
 const totalDebt = txs
 .filter(s => s.paymentType === 'CREDIT' && !s.creditReceived)
@@ -329,21 +354,18 @@ recordMap.set(s.id, s);
 }
 customerSales = Array.from(recordMap.values());
 transactions = customerSales.filter(s =>
-s && s.customerName === name &&
-isDirectSale(s)
+s && s.customerName === name
 );
 } else {
 transactions = customerSales.filter(s =>
-s && s.customerName === name &&
-isDirectSale(s)
+s && s.customerName === name
 );
 }
 } catch (error) {
 console.error('Customer data operation failed.', _safeErr(error));
 showToast('Customer data operation failed.', 'error');
 transactions = customerSales.filter(s =>
-s && s.customerName === name &&
-isDirectSale(s)
+s && s.customerName === name
 );
 }
 const rangeSelect = document.getElementById('customerPdfRange');
@@ -728,7 +750,6 @@ try {
 let remaining = amount, updatedCount = 0, partialPaymentMade = false;
 const pending = customerSales.filter(s =>
 s.customerName === currentManagingCustomer &&
-isDirectSale(s) &&
 s.paymentType === 'CREDIT' && !s.creditReceived
 ).sort((a, b) => a.timestamp - b.timestamp);
 if (pending.length === 0) { showToast('No pending credit transactions found for this customer.', 'info', 4000); return; }
@@ -761,7 +782,7 @@ date: nowISODate, time: nowTime,
 customerName: currentManagingCustomer, customerPhone: sale.customerPhone || '', quantity: 0,
 supplyStore: sale.supplyStore || 'STORE_A', paymentType: 'PARTIAL_PAYMENT', salesRep: 'NONE',
 totalCost: 0, totalValue: remaining, profit: 0, creditReceived: true,
-relatedSaleId: sale.id, syncedAt: new Date().toISOString(), isRepModeEntry: false
+relatedSaleId: sale.id, syncedAt: new Date().toISOString()
 }, false, false));
 partialPaymentMade = true; remaining = 0; updatedCount++; break;
 }
@@ -775,7 +796,7 @@ date: nowISODate, time: nowTime,
 customerName: currentManagingCustomer, customerPhone: ls?.customerPhone || '', quantity: 0,
 supplyStore: ls?.supplyStore || 'STORE_A', paymentType: 'COLLECTION', salesRep: 'NONE',
 totalCost: 0, totalValue: remaining, profit: 0, creditReceived: true,
-syncedAt: new Date().toISOString(), isRepModeEntry: false
+syncedAt: new Date().toISOString()
 }, false, false));
 }
 if (updatedCount > 0 || partialPaymentMade) {
@@ -848,7 +869,7 @@ date: nowISODate, time: nowTime,
 customerName: currentManagingRepCustomer, customerPhone: sale.customerPhone || '', quantity: 0,
 supplyStore: sale.supplyStore || 'STORE_A', paymentType: 'PARTIAL_PAYMENT', salesRep: currentRepProfile,
 totalCost: 0, totalValue: remaining, profit: 0, creditReceived: true,
-relatedSaleId: sale.id, syncedAt: new Date().toISOString(), isRepModeEntry: true
+relatedSaleId: sale.id, syncedAt: new Date().toISOString()
 }, false, false));
 partialPaymentMade = true; remaining = 0; updatedCount++; break;
 }
@@ -862,7 +883,7 @@ date: nowISODate, time: nowTime,
 customerName: currentManagingRepCustomer, customerPhone: ls?.customerPhone || '', quantity: 0,
 supplyStore: ls?.supplyStore || 'STORE_A', paymentType: 'COLLECTION', salesRep: currentRepProfile,
 totalCost: 0, totalValue: remaining, profit: 0, creditReceived: true,
-syncedAt: new Date().toISOString(), isRepModeEntry: true
+syncedAt: new Date().toISOString()
 }, false, false));
 }
 if (updatedCount > 0 || partialPaymentMade) {
@@ -1035,13 +1056,11 @@ nameInput.dataset.originalName = customerName;
 const contact = salesCustomers.find(c => c && c.name && c.name.toLowerCase() === customerName.toLowerCase());
 const saleRecord = customerSales.find(s =>
 s && s.customerName === customerName &&
-isDirectSale(s) &&
 s.customerPhone
 );
 const existingOldDebtTx = customerSales.find(s =>
 s && s.customerName && s.customerName.toLowerCase() === customerName.toLowerCase() &&
-s.transactionType === 'OLD_DEBT' &&
-isDirectSale(s)
+s.transactionType === 'OLD_DEBT'
 );
 const oldDebitValue = existingOldDebtTx ? (existingOldDebtTx.totalValue || 0) : (contact?.oldDebit || 0);
 document.getElementById('edit-cust-phone').value = contact?.phone || saleRecord?.customerPhone || '';
@@ -1114,8 +1133,7 @@ renamedRecords.push(s);
 }
 const oldDebtIdx = salesArray.findIndex(s =>
 s && s.customerName === name &&
-s.transactionType === 'OLD_DEBT' &&
-isDirectSale(s)
+s.transactionType === 'OLD_DEBT'
 );
 let oldDebtModified = false, oldDebtRecord = null, deletedOldDebtId = null;
 if (oldDebit > 0) {
@@ -1136,7 +1154,7 @@ supplyStore: 'N/A', paymentType: 'CREDIT', transactionType: 'OLD_DEBT',
 totalValue: oldDebit, creditReceived: false, partialPaymentReceived: 0,
 time: new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}),
 timestamp: getTimestamp(), createdAt: getTimestamp(), updatedAt: getTimestamp(),
-notes: 'Previous balance brought forward', isRepModeEntry: false };
+notes: 'Previous balance brought forward' };
 salesArray.push(tx); oldDebtModified = true; oldDebtRecord = tx;
 }
 } else if (oldDebit === 0 && oldDebtIdx !== -1) {
@@ -1263,4 +1281,3 @@ statusDiv.style.color = "var(--danger)";
 if(btn) btn.disabled = false;
 }, gpsOptions);
 }
-
