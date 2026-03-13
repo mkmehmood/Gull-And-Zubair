@@ -8982,8 +8982,17 @@ document.addEventListener('DOMContentLoaded', async function _appBootstrap() {
     if (typeof OfflineQueue !== 'undefined') await OfflineQueue.init();
     loadFirestoreStats();
   } catch (e) {
-    showToast('Failed to initialize database. Please refresh the page.', 'error', 5000);
-    return;
+    if (e && e.code === 'DECRYPT_FAILED') {
+      // Key not yet available — data exists but can't be decrypted until the user
+      // re-authenticates. Continue bootstrap so Firebase auth can fire and prompt
+      // for password recovery via onAuthStateChanged.
+      console.warn('Bootstrap: DECRYPT_FAILED on loadAllData — continuing for auth recovery', e.failedKeys);
+      try { await initializeDeviceListeners(); } catch(_) {}
+      if (typeof OfflineQueue !== 'undefined') { try { await OfflineQueue.init(); } catch(_) {} }
+    } else {
+      showToast('Failed to initialize database. Please refresh the page.', 'error', 5000);
+      return;
+    }
   }
   await enforceRepModeLock();
   preventAdminAccess();
@@ -14281,7 +14290,7 @@ return `
 }).join('');
 }
 function switchManageTeamTab(tab) {
-['rep', 'userrole', 'accounts'].forEach(t => {
+['rep', 'userrole'].forEach(t => {
 const btn = document.getElementById('team-tab-' + t);
 const panel = document.getElementById('team-panel-' + t);
 if (btn) btn.classList.toggle('active', t === tab);
@@ -14289,7 +14298,6 @@ if (panel) panel.style.display = t === tab ? '' : 'none';
 });
 if (tab === 'userrole') renderUserRoleList();
 if (tab === 'rep') renderManageRepsList();
-if (tab === 'accounts' && typeof loadAccountsList === 'function') loadAccountsList();
 }
 async function addNewUserRole() {
 const input = document.getElementById('new-userrole-name-input');

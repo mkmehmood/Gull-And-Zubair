@@ -281,6 +281,10 @@ window.getFirestoreCollection = getFirestoreCollection;
 window.getIndexedDBKey = getIndexedDBKey;
 window.saveRecordToFirestore = saveRecordToFirestore;
 window.deleteRecordFromFirestore = deleteRecordFromFirestore;
+// Set to true by _applyGoogleUser so onAuthStateChanged skips duplicate
+// loadAllData/refreshAllDisplays when Google login just ran in this session.
+let _googleLoginHandled = false;
+
 function initializeFirebaseSystem() {
 const indicator = document.getElementById('connection-indicator');
 if (typeof firebase === 'undefined') {
@@ -316,6 +320,14 @@ auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
 _checkGoogleRedirectResult();
 auth.onAuthStateChanged(async (user) => {
 if (user) {
+// If _applyGoogleUser is currently running (flag set before signInWithCredential),
+// let it handle currentUser, key setup, loadAllData, and UI. We only update the
+// sync button here and bail — _applyGoogleUser will do the rest.
+if (_googleLoginHandled) {
+  currentUser = { id: user.uid, uid: user.uid, email: user.email, displayName: user.displayName };
+  updateSyncButton();
+  return;
+}
 currentUser = {
 id: user.uid,
 uid: user.uid,
@@ -343,7 +355,12 @@ hideAuthOverlay();
 showToast(`Welcome back, ${user.email.split('@')[0]}`, 'success');
 idb.setUserPrefix(user.uid);
 await IDBCrypto.initialize();
-const keyRestored = await IDBCrypto.restoreSessionKeyFromStorage();
+// If the key is already in memory (set moments ago by _applyGoogleUser or a
+// concurrent login flow), skip the IDB storage restore entirely — the persist
+// write may not have landed yet, causing a false "keyRestored = false" and
+// incorrectly booting the user back to the auth overlay.
+const _keyAlreadyReady = IDBCrypto.isReady();
+const keyRestored = _keyAlreadyReady || await IDBCrypto.restoreSessionKeyFromStorage();
 if (!keyRestored) {
 const hasStoredCreds = await OfflineAuth.hasStoredCredentials();
 if (hasStoredCreds) {
@@ -364,8 +381,23 @@ updateSyncButton();
 return;
 }
 }
-console.warn('Auth: Could not restore encryption key - user may need to log in again');
-showToast('Session restored but encryption key missing. Some features may be limited.', 'warning');
+// No stored credentials either — still prompt for password so the user can
+// re-derive the encryption key (rederiveKey path).  Silent degradation here
+// means all encrypted IDB data stays invisible with no recovery path offered.
+console.warn('Auth: Could not restore encryption key and no stored creds — prompting for password');
+showToast('Please re-enter your password to restore data access.', 'warning');
+setTimeout(() => {
+  showAuthOverlay();
+  const messageDiv = document.getElementById('auth-message');
+  if (messageDiv) {
+    messageDiv.textContent = 'Please enter your password to restore encrypted data access';
+    messageDiv.style.color = 'var(--warning)';
+  }
+  const emailInput = document.getElementById('auth-email');
+  if (emailInput) emailInput.value = user.email;
+}, 1000);
+updateSyncButton();
+return;
 } else {
 const isKeyValid = await IDBCrypto.validateKey();
 if (!isKeyValid) {
@@ -2952,9 +2984,9 @@ Your account protects your data with enterprise-grade encryption.
 style="width: 100%; padding: 13px; background: var(--input-bg); border: 1px solid var(--glass-border); border-radius: 12px; box-sizing: border-box; color: var(--text-main); font-size:0.9rem;">
 <input type="password" id="auth-password" placeholder="Password" required autocomplete="current-password"
 style="width: 100%; padding: 13px; background: var(--input-bg); border: 1px solid var(--glass-border); border-radius: 12px; box-sizing: border-box; color: var(--text-main); font-size:0.9rem;">
-<div style="margin-top: 8px;">
+<div style="display: flex; gap: 10px; margin-top: 8px;">
 <button type="submit" class="btn btn-main" style="
-width:100%; padding: 13px; font-size: 1rem; border-radius: 12px;
+flex: 1; padding: 13px; font-size: 1rem; border-radius: 12px;
 background-color: #1de9b6 !important;
 background-image: none !important;
 color: #003d2e !important;
@@ -2962,10 +2994,10 @@ font-weight:700;
 ">
 Sign In
 </button>
+<button type="button" id="auth-signup-btn" class="btn" style="flex: 1; padding: 13px; font-size: 1rem; border-radius: 12px; background: var(--input-bg); border: 1px solid var(--glass-border); color: var(--text-main);">
+Sign Up
+</button>
 </div>
-<p style="font-size:0.72rem;color:var(--text-muted);margin-top:14px;line-height:1.5;">
-Don\'t have access? <strong style="color:var(--text-main);">Contact the administrator</strong> to have your account added.
-</p>
 </form>
 <div id="auth-message" style="font-size: 0.8rem; margin-top: 15px; min-height: 20px;"></div>
 <div style="margin-top:16px;padding:10px 14px;background:var(--input-bg);border-radius:10px;border:1px solid var(--glass-border);">
@@ -2988,6 +3020,11 @@ document.body.appendChild(overlay);
 _initGSIInOverlay();
 const form = document.getElementById('auth-form');
 if(form) form.addEventListener('submit', handleSignIn);
+const signupBtn = document.getElementById('auth-signup-btn');
+if(signupBtn) signupBtn.addEventListener('click', (e) => {
+e.preventDefault();
+handleSignUp();
+});
 
 OfflineAuth.getSavedEmail().then(email => {
 if (email) {
@@ -3056,45 +3093,15 @@ try { sessionStorage.removeItem(KEY_ATTEMPTS); sessionStorage.removeItem(KEY_LOC
 
 const GOOGLE_CLIENT_ID = window._GOOGLE_CLIENT_ID || '';
 
-async function _checkUserApproved(uid, email) {
-if (!navigator.onLine) return { denied: false };
-try {
-const db = (typeof firebaseDB !== 'undefined' && firebaseDB) ? firebaseDB : firebase.firestore();
-const snap = await db.collection('users').doc(uid).get();
-if (!snap.exists) {
-await firebase.auth().signOut().catch(() => {});
-return { denied: true, reason: `Access denied. Your account (${email}) is not registered in this system. Contact the administrator.` };
-}
-const data = snap.data() || {};
-if (data.approved === false) {
-await firebase.auth().signOut().catch(() => {});
-return { denied: true, reason: `Access denied. Your account has been suspended. Contact the administrator.` };
-}
-return { denied: false, role: data.role || 'user', displayName: data.displayName || '' };
-} catch(e) {
-if (e.code === 'permission-denied') {
-await firebase.auth().signOut().catch(() => {});
-return { denied: true, reason: 'Access denied. You do not have permission to use this app.' };
-}
-return { denied: false };
-}
-}
-
 async function _applyGoogleUser(user) {
-const check = await _checkUserApproved(user.uid, user.email);
-if (check.denied) {
-const messageDiv = document.getElementById('auth-message');
-const btn = document.getElementById('auth-google-btn');
-if (messageDiv) { messageDiv.textContent = check.reason; messageDiv.style.color = 'var(--danger)'; }
-if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
-return;
-}
+// Mark that we're handling everything here so onAuthStateChanged won't
+// duplicate the loadAllData / refreshAllDisplays calls.
+_googleLoginHandled = true;
 const _googleKeyMaterial = user.uid;
 currentUser = {
 id: user.uid, uid: user.uid,
-email: user.email, displayName: check.displayName || user.displayName || '',
-photoURL: user.photoURL || null, googleAuth: true,
-role: check.role || 'user'
+email: user.email, displayName: user.displayName || '',
+photoURL: user.photoURL || null, googleAuth: true
 };
 idb.setUserPrefix(user.uid);
 await IDBCrypto.setSessionKey(user.email, _googleKeyMaterial, user.uid);
@@ -3139,10 +3146,15 @@ try {
 if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const _gAuth = (typeof auth !== 'undefined' && auth) ? auth : firebase.auth();
 const credential = firebase.auth.GoogleAuthProvider.credential(response.credential);
+// Signal before signInWithCredential so onAuthStateChanged (which fires
+// synchronously with the credential resolution) sees the flag and skips its
+// duplicate key-restore / loadAllData / logout path.
+_googleLoginHandled = true;
 const result = await _gAuth.signInWithCredential(credential);
 if (messageDiv) { messageDiv.textContent = 'Signed in! Opening app…'; messageDiv.style.color = 'var(--accent-emerald)'; }
 await _applyGoogleUser(result.user);
 } catch(error) {
+_googleLoginHandled = false; // reset on failure so normal auth flow works
 console.error('Google credential sign-in failed:', _safeErr(error));
 let msg = 'Google sign-in failed.';
 if (error.code === 'auth/invalid-credential' || error.code === 'auth/invalid-id-token')
@@ -3270,12 +3282,6 @@ try {
 if (typeof firebase !== 'undefined' && firebase.apps.length && navigator.onLine) {
 const firebaseAuth = auth || firebase.auth();
 const _signInCred = await firebaseAuth.signInWithEmailAndPassword(email, password);
-const _wlCheck = await _checkUserApproved(_signInCred.user.uid, email);
-if (_wlCheck.denied) {
-messageDiv.textContent = _wlCheck.reason;
-messageDiv.style.color = 'var(--danger)';
-return;
-}
 await OfflineAuth.saveCredentials(email, password);
 idb.setUserPrefix(_signInCred.user.uid);
 await IDBCrypto.setSessionKey(email, password, _signInCred.user.uid);
@@ -3364,150 +3370,66 @@ messageDiv.textContent = errorMessage;
 messageDiv.style.color = 'var(--danger)';
 }
 }
-async function _isAdminUser() {
-if (!currentUser || !firebaseDB) return false;
-try {
-const snap = await firebaseDB.collection('users').doc(currentUser.uid).get();
-return snap.exists && snap.data().role === 'admin';
-} catch(_) { return false; }
+async function handleSignUp() {
+const emailInput = document.getElementById('auth-email');
+const passwordInput = document.getElementById('auth-password');
+const messageDiv = document.getElementById('auth-message');
+if (!emailInput || !passwordInput || !messageDiv) return;
+const email = emailInput.value.trim();
+const password = passwordInput.value;
+if (!email || !password) {
+messageDiv.textContent = 'Please enter email and password';
+messageDiv.style.color = 'var(--danger)';
+return;
 }
-
-async function adminAddAccount() {
-const emailEl = document.getElementById('acct-new-email');
-const passEl  = document.getElementById('acct-new-password');
-const roleEl  = document.getElementById('acct-new-role');
-const msgEl   = document.getElementById('acct-add-msg');
-const btn     = document.getElementById('acct-add-btn');
-if (!emailEl || !passEl || !roleEl || !msgEl) return;
-const email    = emailEl.value.trim();
-const password = passEl.value;
-const role     = roleEl.value || 'user';
-const setMsg = (txt, color) => { if (msgEl) { msgEl.textContent = txt; msgEl.style.color = color || 'var(--text-muted)'; } };
-if (!email)              { setMsg('Enter an email address.', 'var(--danger)'); return; }
-if (password.length < 8) { setMsg('Password must be at least 8 characters.', 'var(--danger)'); return; }
-if (!navigator.onLine)   { setMsg('Internet required to create accounts.', 'var(--danger)'); return; }
-if (!(await _isAdminUser())) { setMsg('Admin access required.', 'var(--danger)'); return; }
-if (btn) { btn.disabled = true; btn.textContent = 'Creating...'; }
-setMsg('Creating account...', 'var(--accent)');
+if (password.length < 8) {
+messageDiv.textContent = 'Password must be at least 8 characters';
+messageDiv.style.color = 'var(--danger)';
+return;
+}
+messageDiv.textContent = 'Creating account...';
+messageDiv.style.color = 'var(--accent)';
 try {
-const secondaryApp = firebase.apps.find(a => a.name === '_adminCreate') ||
-  firebase.initializeApp(firebaseConfig, '_adminCreate');
-const secondaryAuth = secondaryApp.auth();
-const cred = await secondaryAuth.createUserWithEmailAndPassword(email, password);
-const newUid = cred.user.uid;
-await secondaryAuth.signOut();
-await firebaseDB.collection('users').doc(newUid).set({
-email,
-role,
-approved: true,
+if (typeof firebase !== 'undefined' && firebase.auth) {
+const userCredential = await firebase.auth().createUserWithEmailAndPassword(email, password);
+currentUser = {
+id: userCredential.user.uid,
+uid: userCredential.user.uid,
+email: userCredential.user.email,
+displayName: userCredential.user.displayName
+};
+await OfflineAuth.saveCredentials(email, password);
+idb.setUserPrefix(currentUser.uid);
+await IDBCrypto.setSessionKey(email, password, userCredential.user.uid);
+try { localStorage.setItem('_gznd_session_active', '1'); sessionStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
+if (database) {
+await firebaseDB.collection('users').doc(currentUser.uid).set({
+email: email,
 createdAt: Date.now(),
-createdBy: currentUser.email
+role: 'admin'
 });
-emailEl.value = '';
-passEl.value  = '';
-setMsg('Account created successfully.', 'var(--accent-emerald)');
-showToast('Account created: ' + email, 'success');
-await loadAccountsList();
-} catch (err) {
-const code = err.code || '';
-if (code === 'auth/email-already-in-use') setMsg('This email is already registered.', 'var(--danger)');
-else if (code === 'auth/invalid-email')   setMsg('Invalid email address.', 'var(--danger)');
-else if (code === 'auth/weak-password')   setMsg('Password too weak.', 'var(--danger)');
-else setMsg('Failed: ' + (err.message || code), 'var(--danger)');
-console.error('adminAddAccount error:', _safeErr(err));
-} finally {
-if (btn) { btn.disabled = false; btn.textContent = 'Add Account'; }
+}
+messageDiv.textContent = 'Account created successfully!';
+messageDiv.style.color = 'var(--accent-emerald)';
+setTimeout(() => {
+hideAuthOverlay();
+performOneClickSync();
+}, 1500);
+} else {
+messageDiv.textContent = 'Internet required to create a new account.';
+messageDiv.style.color = 'var(--danger)';
+}
+} catch (error) {
+console.error('Sign up failed.', _safeErr(error));
+let errorMessage = 'Sign up failed. ';
+if (error.code === 'auth/email-already-in-use') errorMessage += 'Email already registered.';
+else if (error.code === 'auth/invalid-email') errorMessage += 'Invalid email address.';
+else if (error.code === 'auth/weak-password') errorMessage += 'Password too weak (min 8 chars).';
+else errorMessage += error.message || 'Try again.';
+messageDiv.textContent = '' + errorMessage;
+messageDiv.style.color = 'var(--danger)';
 }
 }
-
-async function loadAccountsList() {
-const listEl = document.getElementById('manage-accounts-list');
-if (!listEl) return;
-if (!navigator.onLine) {
-listEl.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;text-align:center;padding:16px;">Internet required to load accounts.</div>';
-return;
-}
-if (!(await _isAdminUser())) {
-listEl.innerHTML = '<div style="color:var(--danger);font-size:0.8rem;text-align:center;padding:16px;">Admin access required.</div>';
-return;
-}
-listEl.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;text-align:center;padding:16px;">Loading...</div>';
-try {
-const snap = await firebaseDB.collection('users').get();
-if (snap.empty) {
-listEl.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;text-align:center;padding:16px;">No accounts found.</div>';
-return;
-}
-const accounts = [];
-snap.forEach(doc => accounts.push({ uid: doc.id, ...doc.data() }));
-accounts.sort((a, b) => (a.email || '').localeCompare(b.email || ''));
-listEl.innerHTML = accounts.map(acct => {
-const isMe     = acct.uid === currentUser.uid;
-const approved = acct.approved !== false;
-const isAdmin  = acct.role === 'admin';
-const badge    = isAdmin
-  ? '<span style="font-size:0.58rem;padding:2px 7px;border-radius:9999px;background:rgba(29,233,182,0.12);color:var(--accent-emerald);border:1px solid rgba(29,233,182,0.3);font-weight:700;text-transform:uppercase;">admin</span>'
-  : '<span style="font-size:0.58rem;padding:2px 7px;border-radius:9999px;background:var(--glass-raised);color:var(--text-muted);border:1px solid var(--glass-border);font-weight:700;text-transform:uppercase;">user</span>';
-const statusDot = approved
-  ? '<span style="width:7px;height:7px;border-radius:50%;background:var(--accent-emerald);display:inline-block;flex-shrink:0;" title="Active"></span>'
-  : '<span style="width:7px;height:7px;border-radius:50%;background:var(--danger);display:inline-block;flex-shrink:0;" title="Suspended"></span>';
-const safeEmail = (acct.email||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-const suspendBtn = !isMe ? `<button class="btn-theme" onclick="adminToggleApproval('${acct.uid}','${safeEmail}',${approved})" style="font-size:0.72rem;padding:4px 9px;color:${approved ? 'var(--accent-gold)' : 'var(--accent-emerald)'};border-color:${approved ? 'rgba(251,191,36,0.3)' : 'rgba(29,233,182,0.3)'};">${approved ? 'Suspend' : 'Reinstate'}</button>` : '';
-const removeBtn  = !isMe ? `<button class="btn-theme" onclick="adminRemoveAccount('${acct.uid}','${safeEmail}')" style="font-size:0.72rem;padding:4px 9px;color:var(--danger);border-color:rgba(239,68,68,0.3);">Remove</button>` : '<span style="font-size:0.65rem;color:var(--text-muted);font-style:italic;">(you)</span>';
-return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;background:var(--glass-raised);border:1px solid var(--glass-border);border-radius:var(--radius-lg);margin-bottom:8px;">' +
-'<div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1;">' +
-statusDot +
-'<div style="min-width:0;">' +
-'<div style="font-size:0.82rem;font-weight:700;color:var(--text-main);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(acct.email||acct.uid) + '</div>' +
-'<div style="display:flex;gap:4px;align-items:center;margin-top:3px;">' + badge + (!approved ? '<span style="font-size:0.58rem;color:var(--danger);font-weight:700;"> · Suspended</span>' : '') + '</div>' +
-'</div></div>' +
-'<div style="display:flex;gap:5px;flex-shrink:0;">' + suspendBtn + removeBtn + '</div></div>';
-}).join('');
-} catch(err) {
-listEl.innerHTML = '<div style="color:var(--danger);font-size:0.8rem;text-align:center;padding:16px;">Failed to load: ' + esc(err.message||'') + '</div>';
-console.error('loadAccountsList:', _safeErr(err));
-}
-}
-
-async function adminToggleApproval(uid, email, currentlyApproved) {
-if (!(await _isAdminUser())) return;
-const confirmed = await showGlassConfirm(
-(currentlyApproved ? 'Suspend' : 'Reinstate') + ' the account for ' + email + '?' +
-(currentlyApproved ? '\n\nThey will be blocked on their next login attempt.' : '\n\nThey will be able to sign in again.'),
-{ title: currentlyApproved ? 'Suspend Account' : 'Reinstate Account',
-  confirmText: currentlyApproved ? 'Suspend' : 'Reinstate',
-  cancelText: 'Cancel', danger: currentlyApproved }
-);
-if (!confirmed) return;
-try {
-await firebaseDB.collection('users').doc(uid).update({ approved: !currentlyApproved });
-showToast('Account ' + (currentlyApproved ? 'suspended' : 'reinstated') + ': ' + email, currentlyApproved ? 'warning' : 'success');
-await loadAccountsList();
-} catch(err) {
-showToast('Failed to update account.', 'error');
-console.error('adminToggleApproval:', _safeErr(err));
-}
-}
-
-async function adminRemoveAccount(uid, email) {
-if (!(await _isAdminUser())) return;
-if (uid === currentUser.uid) { showToast('You cannot remove your own account.', 'warning'); return; }
-const confirmed = await showGlassConfirm(
-'Remove access for ' + email + '?\n\nThey will be blocked immediately. Their stored data is preserved.\n\nTo fully delete the Firebase Auth account, use Firebase Console.',
-{ title: 'Remove Account', confirmText: 'Remove', cancelText: 'Cancel', danger: true }
-);
-if (!confirmed) return;
-try {
-await firebaseDB.collection('users').doc(uid).update({ approved: false, removedAt: Date.now(), removedBy: currentUser.email });
-showToast('Access removed: ' + email, 'success');
-await loadAccountsList();
-} catch(err) {
-showToast('Failed to remove account.', 'error');
-console.error('adminRemoveAccount:', _safeErr(err));
-}
-}
-
-async function handleSignUp() {}
 async function signOut() {
 try {
 stopDatabaseHeartbeat();

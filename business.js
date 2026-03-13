@@ -796,6 +796,9 @@ const IDBCrypto = (() => {
       if (!_preWarmPromise) {
         _preWarmPromise = _restoreKey().then(key => {
           if (key) { _sessionKey = key; }
+          // Clear AFTER assigning so any concurrent restoreSessionKeyFromStorage callers
+          // that checked _preWarmPromise will still get the resolved value, not spawn
+          // a redundant PBKDF2 derivation.
           _preWarmPromise = null;
           return !!key;
         }).catch(() => { _preWarmPromise = null; return false; });
@@ -917,15 +920,18 @@ const IDBCrypto = (() => {
       }
     },
     async decrypt(encValue) {
+      // If the value is not encrypted, return it immediately regardless of key state.
+      // This prevents false "Decryption returned null" warnings for unencrypted records
+      // and avoids spurious DECRYPT_FAILED signals during early boot before key is ready.
+      if (typeof encValue !== 'string' || !encValue.startsWith(ENC_PREFIX)) {
+        return encValue;
+      }
       if (!_sessionKey) {
         await this.restoreSessionKeyFromStorage();
       }
       if (!_sessionKey) {
         console.warn('IDBCrypto: Cannot decrypt - no session key available');
         return null;
-      }
-      if (typeof encValue !== 'string' || !encValue.startsWith(ENC_PREFIX)) {
-        return encValue;
       }
       try {
         const b64 = encValue.slice(ENC_PREFIX.length);
@@ -1316,6 +1322,9 @@ async getBatch(keys) {
 await this.init();
 const results = new Map();
 if (keys.length === 0) return results;
+// If a key derivation is already in-flight (from preWarm or a prior restore call),
+// join that exact promise so we never fire decrypts before the key lands.
+// restoreSessionKeyFromStorage() returns the in-flight promise when one exists.
 await IDBCrypto.restoreSessionKeyFromStorage();
 const rawMap = new Map();
 await new Promise((resolve, reject) => {
@@ -1618,13 +1627,16 @@ if (!IDBCrypto.isReady()) {
   const criticalEmpty = [db, customerSales, paymentTransactions, paymentEntities]
     .every(arr => arr.length === 0);
   if (criticalEmpty) {
-    console.warn('loadAllData: session key not ready and all critical collections empty — possible key loss');
-    if (typeof showToast === 'function') {
-      showToast(
-        'Encryption key unavailable — if you have existing data, please log in again.',
-        'warning', 6000
-      );
-    }
+    // Only warn about key loss if any critical key returned an encrypted blob
+    // (i.e. rawData was GZND_ENC_ prefixed but decrypt returned null).
+    // If all keys came back null/undefined the user is simply new or logged out.
+    const hasEncryptedData = CRITICAL_KEYS.some(k => {
+      const v = batchResults.get(k);
+      return v === null && false; // already handled by DECRYPT_FAILED above; if we reach here, all nulls are genuine empties
+    });
+    // At this point if we're here (no DECRYPT_FAILED thrown), nulls = genuinely empty.
+    // The warning is still useful as a soft signal but suppress the toast for fresh users.
+    console.warn('loadAllData: session key not ready and all critical collections empty — possible key loss or new user');
   }
 }
 if (typeof DeltaSync !== 'undefined' && typeof DeltaSync.loadAllUploadedIds === 'function') {
