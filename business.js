@@ -210,80 +210,133 @@ if (window.trustedTypes && window.trustedTypes.createPolicy) {
   window.setHTML = (el, html) => { el.innerHTML = html; };
 }
 const CryptoEngine = (() => {
-const MAGIC = new Uint8Array([0x47,0x5A,0x4E,0x44,0x5F,0x45,0x4E,0x43,0x5F,0x56,0x32]);
+// V2 magic: legacy files (no UID binding, SHA-256, 100k iters)
+const MAGIC_V2 = new Uint8Array([0x47,0x5A,0x4E,0x44,0x5F,0x45,0x4E,0x43,0x5F,0x56,0x32]);
+// V4 magic: current (UID-bound, SHA-512, 210k iters, versioned header)
+const MAGIC_V4 = new Uint8Array([0x47,0x5A,0x4E,0x44,0x5F,0x45,0x4E,0x43,0x5F,0x56,0x34]);
 const SALT_LEN = 32;
 const IV_LEN = 12;
-const PBKDF2_ITERS = 100000;
-async function deriveKey(email, password, salt) {
-const enc = new TextEncoder();
-const keyMaterial = await crypto.subtle.importKey(
-'raw',
-enc.encode(email.toLowerCase().trim() + ':' + password),
-'PBKDF2',
-false,
-['deriveKey']
-);
-return crypto.subtle.deriveKey(
-{ name: 'PBKDF2', salt: salt, iterations: PBKDF2_ITERS, hash: 'SHA-256' },
-keyMaterial,
-{ name: 'AES-GCM', length: 256 },
-false,
-['encrypt', 'decrypt']
-);
+const UID_HASH_LEN = 32; // SHA-256 of uid, stored for binding check
+const PBKDF2_ITERS_V4 = 210000; // OWASP 2023 recommendation for PBKDF2-HMAC-SHA-512
+const PBKDF2_ITERS_V2 = 100000; // legacy
+
+// Derive AES-256-GCM key from email + password + uid using PBKDF2-SHA-512
+async function deriveKeyV4(email, password, uid, salt) {
+  const enc = new TextEncoder();
+  // Key material binds email, password AND the Firebase UID
+  const ikm = enc.encode(email.toLowerCase().trim() + ':' + password + ':' + (uid || ''));
+  const keyMaterial = await crypto.subtle.importKey('raw', ikm, 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: PBKDF2_ITERS_V4, hash: 'SHA-512' },
+    keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+  );
 }
-async function deriveKeyHash(email, password) {
-const enc = new TextEncoder();
-const keyMaterial = await crypto.subtle.importKey(
-'raw', enc.encode(email.toLowerCase().trim() + ':' + password),
-'PBKDF2', false, ['deriveKey']
-);
-const fixedSalt = enc.encode('GZND_LOCAL_AUTH_SALT_v2_' + email.toLowerCase().trim());
-const key = await crypto.subtle.deriveKey(
-{ name: 'PBKDF2', salt: fixedSalt, iterations: PBKDF2_ITERS, hash: 'SHA-256' },
-keyMaterial, { name: 'AES-GCM', length: 256 }, true, ['encrypt']
-);
-const raw = await crypto.subtle.exportKey('raw', key);
-const hashBuf = await crypto.subtle.digest('SHA-256', raw);
-return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2,'0')).join('');
+
+// Legacy V2 key derivation (email:password only, SHA-256) — for decrypting old backups
+async function deriveKeyV2(email, password, salt) {
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw', enc.encode(email.toLowerCase().trim() + ':' + password), 'PBKDF2', false, ['deriveKey']
+  );
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: PBKDF2_ITERS_V2, hash: 'SHA-256' },
+    keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+  );
 }
+
+// Hash UID for storage in backup header (for binding check without exposing raw UID)
+async function _hashUID(uid) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(uid || ''));
+  return new Uint8Array(buf);
+}
+
+// Hash credentials with a RANDOM per-user salt — caller must store and pass back the salt
+async function deriveKeyHashV4(email, password, salt) {
+  const enc = new TextEncoder();
+  const ikm = enc.encode(email.toLowerCase().trim() + ':' + password);
+  const keyMaterial = await crypto.subtle.importKey('raw', ikm, 'PBKDF2', false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: PBKDF2_ITERS_V4, hash: 'SHA-512' },
+    keyMaterial, { name: 'AES-GCM', length: 256 }, true, ['encrypt']
+  );
+  const raw = await crypto.subtle.exportKey('raw', key);
+  const hashBuf = await crypto.subtle.digest('SHA-512', raw);
+  return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
 return {
-async encrypt(dataObj, email, password) {
-const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
-const iv = crypto.getRandomValues(new Uint8Array(IV_LEN));
-const key = await deriveKey(email, password, salt);
-const plaintext = new TextEncoder().encode(JSON.stringify(dataObj));
-const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
-const ctBytes = new Uint8Array(ciphertext);
-const out = new Uint8Array(MAGIC.length + SALT_LEN + IV_LEN + ctBytes.length);
-let offset = 0;
-out.set(MAGIC, offset); offset += MAGIC.length;
-out.set(salt, offset); offset += SALT_LEN;
-out.set(iv, offset); offset += IV_LEN;
-out.set(ctBytes, offset);
-return new Blob([out], { type: 'application/octet-stream' });
-},
-async decrypt(arrayBuffer, email, password) {
-const bytes = new Uint8Array(arrayBuffer);
-const magic = bytes.slice(0, MAGIC.length);
-for (let i = 0; i < MAGIC.length; i++) {
-if (magic[i] !== MAGIC[i]) throw new Error('INVALID_FORMAT');
-}
-let offset = MAGIC.length;
-const salt = bytes.slice(offset, offset + SALT_LEN); offset += SALT_LEN;
-const iv = bytes.slice(offset, offset + IV_LEN); offset += IV_LEN;
-const ciphertext = bytes.slice(offset);
-const key = await deriveKey(email, password, salt);
-let plaintext;
-try {
-plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
-} catch(e) {
-throw new Error('WRONG_CREDENTIALS');
-}
-return JSON.parse(new TextDecoder().decode(plaintext));
-},
-async hashCredentials(email, password) {
-return deriveKeyHash(email, password);
-}
+  // Encrypt dataObj with email + password + uid (uid binds backup to this account)
+  async encrypt(dataObj, email, password, uid) {
+    const _uid = uid || (typeof currentUser !== 'undefined' && currentUser ? (currentUser.uid || currentUser.email || '') : '');
+    const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
+    const iv = crypto.getRandomValues(new Uint8Array(IV_LEN));
+    const uidHash = await _hashUID(_uid);
+    const key = await deriveKeyV4(email, password, _uid, salt);
+    const plaintext = new TextEncoder().encode(JSON.stringify(dataObj));
+    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
+    const ctBytes = new Uint8Array(ciphertext);
+    // Layout: MAGIC_V4(11) | UID_HASH(32) | SALT(32) | IV(12) | CIPHERTEXT
+    const out = new Uint8Array(MAGIC_V4.length + UID_HASH_LEN + SALT_LEN + IV_LEN + ctBytes.length);
+    let offset = 0;
+    out.set(MAGIC_V4, offset); offset += MAGIC_V4.length;
+    out.set(uidHash, offset); offset += UID_HASH_LEN;
+    out.set(salt, offset);    offset += SALT_LEN;
+    out.set(iv, offset);      offset += IV_LEN;
+    out.set(ctBytes, offset);
+    return new Blob([out], { type: 'application/octet-stream' });
+  },
+
+  // Decrypt — handles both V4 (current) and V2 (legacy) backup files
+  async decrypt(arrayBuffer, email, password, uid) {
+    const bytes = new Uint8Array(arrayBuffer);
+    const magicLen = MAGIC_V4.length;
+
+    // Detect format version by magic bytes
+    const isV4 = bytes.length >= magicLen && MAGIC_V4.every((b, i) => bytes[i] === b);
+    const isV2 = !isV4 && bytes.length >= magicLen && MAGIC_V2.every((b, i) => bytes[i] === b);
+    if (!isV4 && !isV2) throw new Error('INVALID_FORMAT');
+
+    let offset = magicLen;
+    if (isV4) {
+      // V4: verify UID binding before attempting decryption
+      const storedUidHash = bytes.slice(offset, offset + UID_HASH_LEN); offset += UID_HASH_LEN;
+      const _uid = uid || (typeof currentUser !== 'undefined' && currentUser ? (currentUser.uid || currentUser.email || '') : '');
+      const actualUidHash = await _hashUID(_uid);
+      const uidMatch = storedUidHash.every((b, i) => b === actualUidHash[i]);
+      if (!uidMatch) throw new Error('WRONG_ACCOUNT');
+      const salt = bytes.slice(offset, offset + SALT_LEN); offset += SALT_LEN;
+      const iv  = bytes.slice(offset, offset + IV_LEN);   offset += IV_LEN;
+      const ciphertext = bytes.slice(offset);
+      const key = await deriveKeyV4(email, password, _uid, salt);
+      try {
+        const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+        return JSON.parse(new TextDecoder().decode(plaintext));
+      } catch(e) { throw new Error('WRONG_CREDENTIALS'); }
+    } else {
+      // V2 legacy path — no UID binding check
+      const salt = bytes.slice(offset, offset + SALT_LEN); offset += SALT_LEN;
+      const iv  = bytes.slice(offset, offset + IV_LEN);   offset += IV_LEN;
+      const ciphertext = bytes.slice(offset);
+      const key = await deriveKeyV2(email, password, salt);
+      try {
+        const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+        return JSON.parse(new TextDecoder().decode(plaintext));
+      } catch(e) { throw new Error('WRONG_CREDENTIALS'); }
+    }
+  },
+
+  // Hash credentials for offline auth. Returns { hash, saltHex } — caller stores saltHex.
+  async hashCredentials(email, password, existingSaltHex) {
+    let salt;
+    if (existingSaltHex) {
+      salt = new Uint8Array(existingSaltHex.match(/.{2}/g).map(h => parseInt(h, 16)));
+    } else {
+      salt = crypto.getRandomValues(new Uint8Array(32));
+    }
+    const hash = await deriveKeyHashV4(email, password, salt);
+    const saltHex = Array.from(salt).map(b => b.toString(16).padStart(2,'0')).join('');
+    return { hash, saltHex };
+  }
 };
 })();
 const OfflineAuth = {
@@ -300,11 +353,13 @@ req.onerror = e => rej(e.target.error || new Error('OfflineAuth: IDB open failed
 });
 },
 async saveCredentials(email, password) {
-const hash = await CryptoEngine.hashCredentials(email, password);
+// Generate a fresh random salt each time credentials are saved
+const { hash, saltHex } = await CryptoEngine.hashCredentials(email, password);
 const db = await this._getDB();
 return new Promise((res, rej) => {
 const tx = db.transaction(this.STORE, 'readwrite');
-tx.objectStore(this.STORE).put({ hash, email, savedAt: Date.now() }, 'active');
+// Store the salt alongside the hash so verification can reproduce the same derivation
+tx.objectStore(this.STORE).put({ hash, saltHex, email, savedAt: Date.now(), version: 4 }, 'active');
 tx.oncomplete = () => res(true);
 tx.onerror = e => rej(e.target.error || new Error('OfflineAuth: saveCredentials failed'));
 });
@@ -319,7 +374,13 @@ req.onerror = e => rej(e.target.error || new Error('OfflineAuth: verifyCredentia
 });
 if (!record) return false;
 if (record.email.toLowerCase().trim() !== email.toLowerCase().trim()) return false;
-const hash = await CryptoEngine.hashCredentials(email, password);
+if (!record.saltHex) {
+// Legacy record (v2/v3) — no salt stored, treat as invalid and force re-login
+console.warn('OfflineAuth: legacy credential record found, re-authentication required');
+return false;
+}
+// Re-derive using the stored salt so the hash is deterministic and unique per save
+const { hash } = await CryptoEngine.hashCredentials(email, password, record.saltHex);
 return hash === record.hash;
 },
 async getSavedEmail() {
@@ -405,25 +466,23 @@ req.onerror = () => resolve(false);
 const IDBCrypto = (() => {
   let _sessionKey = null;
   let _keyEmail = null;
+  let _keyUid = null;      // Firebase UID bound to current session key
   let _db = null;
   let _initPromise = null;
   let _preWarmPromise = null;
-  const PBKDF2_ITERS = 100000;
+  // In-memory wrap-key cache — never written to disk (clears on logout/reload)
+  const _wrapKeyMemCache = new Map();
+  const PBKDF2_ITERS = 210000; // OWASP 2023: PBKDF2-HMAC-SHA-512
+  const PBKDF2_HASH  = 'SHA-512';
   const DB_NAME = 'GZND_SecureStorage';
-  const DB_VERSION = 3;
+  const DB_VERSION = 4; // bumped: adds per-user kdfSalt, removes wrapKeyCache store
   const KEY_STORE = 'encryptedKeys';
   const ENTROPY_STORE = 'deviceEntropy';
   const SESSION_STORE = 'userSession';
-  const WRAPKEY_CACHE_STORE = 'wrapKeyCache';
-  const IDB_KDF_SALT = new Uint8Array([
-    0x47,0x5A,0x4E,0x44,0x49,0x44,0x42,0x4B,
-    0x45,0x59,0x53,0x41,0x4C,0x54,0x76,0x31,
-    0x32,0x30,0x32,0x34,0x41,0x45,0x53,0x32,
-    0x35,0x36,0x47,0x43,0x4D,0x45,0x4E,0x43
-  ]);
+  // WRAPKEY_CACHE_STORE intentionally removed — cached in memory only
   const IV_LEN = 12;
   const ENC_PREFIX = 'GZND_ENC_';
-  const KEY_VERSION = '3';
+  const KEY_VERSION = '4';
   const LEGACY_LS_KEY = '_gznd_idbk_v2';
   const LEGACY_LS_SECRET = '_gznd_wksec_v2';
   const LEGACY_LS_EMAIL = '_gznd_key_email';
@@ -442,6 +501,7 @@ const IDBCrypto = (() => {
       };
       request.onupgradeneeded = (event) => {
         const db = event.target.result;
+        // Create required stores if absent
         if (!db.objectStoreNames.contains(KEY_STORE)) {
           const keyStore = db.createObjectStore(KEY_STORE, { keyPath: 'id' });
           keyStore.createIndex('email', 'email', { unique: false });
@@ -453,8 +513,9 @@ const IDBCrypto = (() => {
         if (!db.objectStoreNames.contains(SESSION_STORE)) {
           db.createObjectStore(SESSION_STORE, { keyPath: 'id' });
         }
-        if (!db.objectStoreNames.contains(WRAPKEY_CACHE_STORE)) {
-          db.createObjectStore(WRAPKEY_CACHE_STORE, { keyPath: 'id' });
+        // v4 migration: drop the old wrapKeyCache store — keys are now memory-cached only
+        if (db.objectStoreNames.contains('wrapKeyCache')) {
+          db.deleteObjectStore('wrapKeyCache');
         }
       };
     });
@@ -491,25 +552,13 @@ const IDBCrypto = (() => {
       request.onerror = () => reject(request.error || new Error("IDB request failed"));
     });
   }
-  async function _getCachedWrapKeyBytes(saltHex) {
-    try {
-      const db = await _initDB();
-      const result = await new Promise((res, rej) => {
-        const tx = db.transaction(WRAPKEY_CACHE_STORE, 'readonly');
-        const req = tx.objectStore(WRAPKEY_CACHE_STORE).get('primary');
-        req.onsuccess = () => res(req.result);
-        req.onerror = () => res(null);
-      });
-      if (result && result.saltHex === saltHex && result.keyBytes) return result.keyBytes;
-    } catch (e) {}
-    return null;
+  // Wrap-key cache is intentionally memory-only: no disk persistence of unwrapped key bytes.
+  // Cache key: saltHex — cache value: CryptoKey object (non-exportable after import).
+  function _getCachedWrapKey(saltHex) {
+    return _wrapKeyMemCache.get(saltHex) || null;
   }
-  async function _setCachedWrapKeyBytes(saltHex, keyBytes) {
-    try {
-      const db = await _initDB();
-      const tx = db.transaction(WRAPKEY_CACHE_STORE, 'readwrite');
-      tx.objectStore(WRAPKEY_CACHE_STORE).put({ id: 'primary', saltHex, keyBytes, ts: Date.now() });
-    } catch (e) {}
+  function _setCachedWrapKey(saltHex, cryptoKey) {
+    _wrapKeyMemCache.set(saltHex, cryptoKey);
   }
   async function _idbSessionSet(id, value) {
     try {
@@ -550,96 +599,78 @@ const IDBCrypto = (() => {
       });
     } catch(e) {}
   }
-  async function deriveSessionKey(email, password) {
+  // Derive the IDB session key. kdfSalt must be a random 32-byte Uint8Array generated
+  // once per user and stored alongside the wrapped key record. This ensures the same
+  // email+password produces different key material for each user account.
+  async function deriveSessionKey(email, password, kdfSalt) {
     const enc = new TextEncoder();
-    const keyMaterial = await crypto.subtle.importKey(
-      'raw',
-      enc.encode(email.toLowerCase().trim() + ':' + password),
-      'PBKDF2',
-      false,
-      ['deriveKey']
-    );
+    // Bind to email + password; the per-user kdfSalt makes this unique per account
+    const ikm = enc.encode(email.toLowerCase().trim() + ':' + password);
+    const keyMaterial = await crypto.subtle.importKey('raw', ikm, 'PBKDF2', false, ['deriveKey']);
     return crypto.subtle.deriveKey(
-      {
-        name: 'PBKDF2',
-        salt: IDB_KDF_SALT,
-        iterations: PBKDF2_ITERS,
-        hash: 'SHA-256'
-      },
+      { name: 'PBKDF2', salt: kdfSalt, iterations: PBKDF2_ITERS, hash: PBKDF2_HASH },
       keyMaterial,
       { name: 'AES-GCM', length: 256 },
       true,
       ['encrypt', 'decrypt']
     );
   }
-  async function deriveWrappingKey(wrapSalt) {
+
+  // Derive the AES-KW wrapping key from device entropy + wrap salt + UID.
+  // Binding the UID means the wrapping key is account-specific, not just device-specific.
+  async function deriveWrappingKey(wrapSalt, uid) {
     const saltHex = Array.from(wrapSalt).map(b => b.toString(16).padStart(2, '0')).join('');
-    const cachedBytes = await _getCachedWrapKeyBytes(saltHex);
-    if (cachedBytes) {
-      try {
-        return await crypto.subtle.importKey(
-          'raw',
-          new Uint8Array(cachedBytes),
-          { name: 'AES-KW' },
-          false,
-          ['wrapKey', 'unwrapKey']
-        );
-      } catch (e) {
-      }
-    }
+    const cacheKey = saltHex + ':' + (uid || '');
+    // Check in-memory cache first (never touches disk)
+    const cached = _getCachedWrapKey(cacheKey);
+    if (cached) return cached;
+
     const deviceEntropy = await _getDeviceEntropy();
-    const combined = new Uint8Array(deviceEntropy.length + wrapSalt.length);
+    const enc = new TextEncoder();
+    const uidBytes = enc.encode(uid || '');
+    // IKM = device entropy | wrap salt | UID bytes — all three factors must match
+    const combined = new Uint8Array(deviceEntropy.length + wrapSalt.length + uidBytes.length);
     combined.set(deviceEntropy, 0);
     combined.set(wrapSalt, deviceEntropy.length);
-    const keyMaterial = await crypto.subtle.importKey(
-      'raw',
-      combined,
-      'PBKDF2',
-      false,
-      ['deriveKey']
-    );
+    combined.set(uidBytes, deviceEntropy.length + wrapSalt.length);
+    // Use a stable, app-specific PBKDF2 salt for the wrapping key derivation
+    const wkSalt = enc.encode('GZND_WK_SALT_v4:' + (uid || 'anon'));
+    const keyMaterial = await crypto.subtle.importKey('raw', combined, 'PBKDF2', false, ['deriveKey']);
     const wrapKey = await crypto.subtle.deriveKey(
-      {
-        name: 'PBKDF2',
-        salt: IDB_KDF_SALT,
-        iterations: PBKDF2_ITERS,
-        hash: 'SHA-256'
-      },
+      { name: 'PBKDF2', salt: wkSalt, iterations: PBKDF2_ITERS, hash: PBKDF2_HASH },
       keyMaterial,
       { name: 'AES-KW', length: 256 },
-      true,
+      false, // non-exportable: prevents raw key bytes from ever leaving SubtleCrypto
       ['wrapKey', 'unwrapKey']
     );
-    try {
-      const rawBuf = await crypto.subtle.exportKey('raw', wrapKey);
-      await _setCachedWrapKeyBytes(saltHex, Array.from(new Uint8Array(rawBuf)));
-      return await crypto.subtle.importKey(
-        'raw',
-        new Uint8Array(rawBuf),
-        { name: 'AES-KW' },
-        false,
-        ['wrapKey', 'unwrapKey']
-      );
-    } catch (e) {
-      return wrapKey;
-    }
+    // Cache the CryptoKey object in memory only (non-exportable, safe to hold in RAM)
+    _setCachedWrapKey(cacheKey, wrapKey);
+    return wrapKey;
   }
-  async function _persistKey(key, email) {
+  // Persist the session key, wrapped with a key derived from device entropy + UID.
+  // kdfSalt: the per-user random salt used during deriveSessionKey (stored for re-derivation).
+  async function _persistKey(key, email, uid, kdfSalt) {
     try {
       const db = await _initDB();
       const wrapSalt = crypto.getRandomValues(new Uint8Array(16));
-      const wrapKey = await deriveWrappingKey(wrapSalt);
+      const wrapKey = await deriveWrappingKey(wrapSalt, uid);
       const wrapped = await crypto.subtle.wrapKey('raw', key, wrapKey, 'AES-KW');
       const wrappedBytes = new Uint8Array(wrapped);
-      const saltHex = Array.from(wrapSalt).map(b => b.toString(16).padStart(2, '0')).join('');
+      const wrapSaltHex = Array.from(wrapSalt).map(b => b.toString(16).padStart(2, '0')).join('');
       const keyHex = Array.from(wrappedBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+      // kdfSaltHex: the per-user random salt for PBKDF2 key derivation (needed to re-derive on next login)
+      const kdfSaltHex = kdfSalt
+        ? Array.from(kdfSalt).map(b => b.toString(16).padStart(2, '0')).join('')
+        : null;
       await new Promise((resolve, reject) => {
         const tx = db.transaction(KEY_STORE, 'readwrite');
         const store = tx.objectStore(KEY_STORE);
         const request = store.put({
           id: 'primary',
-          email: email,
-          salt: saltHex,
+          email,
+          uid: uid || null,
+          salt: wrapSaltHex,      // wrap salt (for unwrapping the wrapped key)
+          kdfSalt: kdfSaltHex,    // per-user KDF salt (for re-deriving the session key on login)
           wrappedKey: keyHex,
           version: KEY_VERSION,
           createdAt: Date.now()
@@ -647,13 +678,14 @@ const IDBCrypto = (() => {
         request.onsuccess = () => resolve();
         request.onerror = () => reject(request.error || new Error("IDB request failed"));
       });
+      // Session backup in IDB SESSION_STORE only — no localStorage copy of key material
       try {
-        const keyBackup = { email, salt: saltHex, wrappedKey: keyHex, version: KEY_VERSION, ts: Date.now() };
+        const keyBackup = { email, uid: uid || null, salt: wrapSaltHex, kdfSalt: kdfSaltHex, wrappedKey: keyHex, version: KEY_VERSION, ts: Date.now() };
         await _idbSessionSet('keyBackup', keyBackup);
-        localStorage.setItem('_gznd_session_key_backup', JSON.stringify(keyBackup));
-        sessionStorage.setItem('_gznd_session_key_backup', JSON.stringify(keyBackup));
+        // Do NOT write keyBackup to localStorage/sessionStorage — keep key material off disk
       } catch (e) {}
       _keyEmail = email;
+      _keyUid   = uid || null;
       _clearLegacyStorage();
     } catch (e) {
       console.error('IDBCrypto: Failed to persist key:', _safeErr(e));
@@ -671,53 +703,44 @@ const IDBCrypto = (() => {
         request.onerror = () => reject(request.error || new Error("IDB request failed"));
       });
       if (stored && stored.salt && stored.wrappedKey) {
-        const wrapSalt = new Uint8Array(stored.salt.match(/.{2}/g).map(h => parseInt(h, 16)));
+        const wrapSalt    = new Uint8Array(stored.salt.match(/.{2}/g).map(h => parseInt(h, 16)));
         const wrappedBytes = new Uint8Array(stored.wrappedKey.match(/.{2}/g).map(h => parseInt(h, 16)));
-        const wrapKey = await deriveWrappingKey(wrapSalt);
-        const key = await crypto.subtle.unwrapKey(
-          'raw',
-          wrappedBytes,
-          wrapKey,
-          'AES-KW',
-          { name: 'AES-GCM', length: 256 },
-          false,
-          ['encrypt', 'decrypt']
-        );
-        _keyEmail = stored.email;
-        return key;
+        const uid = stored.uid || null;
+        const wrapKey = await deriveWrappingKey(wrapSalt, uid);
+        try {
+          const key = await crypto.subtle.unwrapKey(
+            'raw', wrappedBytes, wrapKey, 'AES-KW',
+            { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+          );
+          _keyEmail = stored.email;
+          _keyUid   = uid;
+          return key;
+        } catch(unwrapErr) {
+          // Wrapping key mismatch — device entropy may have changed; fall through to legacy
+          console.warn('IDBCrypto: Primary key unwrap failed, trying backup', unwrapErr);
+        }
       }
+      // IDB session backup (no localStorage fallback for key material in v4)
       const idbBackup = await _idbSessionGet('keyBackup');
       if (idbBackup && idbBackup.salt && idbBackup.wrappedKey) {
-        const wrapSalt = new Uint8Array(idbBackup.salt.match(/.{2}/g).map(h => parseInt(h, 16)));
+        const wrapSalt     = new Uint8Array(idbBackup.salt.match(/.{2}/g).map(h => parseInt(h, 16)));
         const wrappedBytes = new Uint8Array(idbBackup.wrappedKey.match(/.{2}/g).map(h => parseInt(h, 16)));
-        const wrapKey = await deriveWrappingKey(wrapSalt);
-        const key = await crypto.subtle.unwrapKey(
-          'raw', wrappedBytes, wrapKey, 'AES-KW',
-          { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
-        );
-        _keyEmail = idbBackup.email;
-        await _persistKey(key, idbBackup.email);
-        return key;
-      }
-      const sessionBackup = sessionStorage.getItem('_gznd_session_key_backup') || localStorage.getItem('_gznd_session_key_backup');
-      if (sessionBackup) {
-        const backup = JSON.parse(sessionBackup);
-        if (backup.salt && backup.wrappedKey) {
-          const wrapSalt = new Uint8Array(backup.salt.match(/.{2}/g).map(h => parseInt(h, 16)));
-          const wrappedBytes = new Uint8Array(backup.wrappedKey.match(/.{2}/g).map(h => parseInt(h, 16)));
-          const wrapKey = await deriveWrappingKey(wrapSalt);
+        const uid = idbBackup.uid || null;
+        const wrapKey = await deriveWrappingKey(wrapSalt, uid);
+        try {
           const key = await crypto.subtle.unwrapKey(
-            'raw',
-            wrappedBytes,
-            wrapKey,
-            'AES-KW',
-            { name: 'AES-GCM', length: 256 },
-            false,
-            ['encrypt', 'decrypt']
+            'raw', wrappedBytes, wrapKey, 'AES-KW',
+            { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
           );
-          _keyEmail = backup.email;
-          await _persistKey(key, backup.email);
+          _keyEmail = idbBackup.email;
+          _keyUid   = uid;
+          const kdfSalt = idbBackup.kdfSalt
+            ? new Uint8Array(idbBackup.kdfSalt.match(/.{2}/g).map(h => parseInt(h, 16)))
+            : null;
+          await _persistKey(key, idbBackup.email, uid, kdfSalt);
           return key;
+        } catch(e) {
+          console.warn('IDBCrypto: Backup key unwrap failed', e);
         }
       }
       return await _migrateFromLegacy();
@@ -754,8 +777,9 @@ const IDBCrypto = (() => {
         false,
         ['encrypt', 'decrypt']
       );
-      await _persistKey(key, email);
+      await _persistKey(key, email, null, null);
       _keyEmail = email;
+      _keyUid = null;
       return key;
     } catch (e) {
       console.error('IDBCrypto: Legacy migration failed:', _safeErr(e));
@@ -791,12 +815,17 @@ const IDBCrypto = (() => {
       }
       return _preWarmPromise;
     },
-    async setSessionKey(email, password) {
-      _sessionKey = await deriveSessionKey(email, password);
-      await _persistKey(_sessionKey, email);
+    // Call this after successful login. uid = Firebase UID (pass null for offline-only accounts).
+    async setSessionKey(email, password, uid) {
+      const _uid = uid || null;
+      // Generate a fresh random per-user KDF salt each time credentials are set
+      const kdfSalt = crypto.getRandomValues(new Uint8Array(32));
+      _sessionKey = await deriveSessionKey(email, password, kdfSalt);
+      await _persistKey(_sessionKey, email, _uid, kdfSalt);
       _keyEmail = email;
+      _keyUid   = _uid;
       await _idbSessionSet('login', {
-        uid: null,
+        uid: _uid,
         email,
         lastLogin: new Date().toISOString()
       });
@@ -817,36 +846,57 @@ const IDBCrypto = (() => {
       }
       return this._restorePromise;
     },
-    async rederiveKey(email, password) {
+    // Re-derive the session key using the stored per-user kdfSalt (if available).
+    // Called when Firebase fires onAuthStateChanged but no key is in memory.
+    async rederiveKey(email, password, uid) {
       try {
-        _sessionKey = await deriveSessionKey(email, password);
-        await _persistKey(_sessionKey, email);
+        const _uid = uid || _keyUid || null;
+        // Try to reload the stored kdfSalt so we re-derive the exact same key
+        let kdfSalt = null;
+        try {
+          const db = await _initDB();
+          const stored = await new Promise((res) => {
+            const tx = db.transaction(KEY_STORE, 'readonly');
+            const req = tx.objectStore(KEY_STORE).get('primary');
+            req.onsuccess = () => res(req.result);
+            req.onerror  = () => res(null);
+          });
+          if (stored && stored.kdfSalt) {
+            kdfSalt = new Uint8Array(stored.kdfSalt.match(/.{2}/g).map(h => parseInt(h, 16)));
+          }
+        } catch(e) {}
+        // If no stored kdfSalt (e.g. first time or after clear), generate a new one
+        if (!kdfSalt) kdfSalt = crypto.getRandomValues(new Uint8Array(32));
+        _sessionKey = await deriveSessionKey(email, password, kdfSalt);
+        await _persistKey(_sessionKey, email, _uid, kdfSalt);
         _keyEmail = email;
+        _keyUid   = _uid;
         return true;
       } catch (e) {
         console.error('IDBCrypto: Failed to re-derive key:', _safeErr(e));
         return false;
       }
     },
-    getStoredEmail() {
-      return _keyEmail;
-    },
+    getStoredEmail() { return _keyEmail; },
+    getStoredUid()   { return _keyUid; },
     clearSessionKey() {
       _sessionKey = null;
-      _keyEmail = null;
+      _keyEmail   = null;
+      _keyUid     = null;
+      _wrapKeyMemCache.clear(); // wipe in-memory wrap-key cache
       _initDB().then(db => {
-        const tx = db.transaction([KEY_STORE, ENTROPY_STORE, SESSION_STORE, WRAPKEY_CACHE_STORE], 'readwrite');
+        const stores = [KEY_STORE, ENTROPY_STORE, SESSION_STORE].filter(s => db.objectStoreNames.contains(s));
+        if (stores.length === 0) return;
+        const tx = db.transaction(stores, 'readwrite');
         tx.objectStore(KEY_STORE).delete('primary');
         tx.objectStore(ENTROPY_STORE).delete('primary');
         tx.objectStore(SESSION_STORE).clear();
-        tx.objectStore(WRAPKEY_CACHE_STORE).clear();
       }).catch(() => {});
       try {
-        sessionStorage.removeItem('_gznd_session_key_backup');
         sessionStorage.removeItem('_gznd_session_active');
-        localStorage.removeItem('_gznd_session_key_backup');
         localStorage.removeItem('_gznd_session_active');
         localStorage.removeItem('persistentLogin');
+        // No key backup in localStorage/sessionStorage in v4 — nothing to remove there
       } catch (e) {}
       _clearLegacyStorage();
     },
@@ -988,6 +1038,7 @@ _initPromise: null,
 _prefix: '',
 _quotaToastShown: false,
 _DEVICE_GLOBAL: new Set(['device_id', 'device_name', 'theme', 'appMode', 'appMode_timestamp', 'repProfile', 'repProfile_timestamp', 'assignedManager', 'assignedUserTabs']),
+_PLAINTEXT_KEYS: new Set(['appMode', 'appMode_timestamp', 'repProfile', 'repProfile_timestamp', 'assignedManager', 'assignedUserTabs', 'device_name', 'theme', 'last_synced', 'firestore_initialized', 'firestore_init_timestamp']),
 setUserPrefix(uid) {
   const newPrefix = uid ? 'u_' + uid + '_' : '';
   if (this._prefix !== newPrefix) {
@@ -1126,6 +1177,19 @@ resolve(defaultValue);
 const rawData = this._unwrapValue(wrapped);
 if (rawData === null || rawData === undefined) { resolve(defaultValue); return; }
 try {
+const isPlaintext = this._PLAINTEXT_KEYS && this._PLAINTEXT_KEYS.has(key);
+if (isPlaintext) {
+if (typeof rawData === 'string' && rawData.startsWith('GZND_ENC_')) {
+// Stale encrypted value for a now-plaintext key — clear it and return default
+this.remove(key).catch(() => {});
+resolve(defaultValue);
+return;
+}
+if (typeof rawData === 'string') {
+try { resolve(JSON.parse(rawData)); } catch(e) { resolve(rawData); }
+} else { resolve(rawData); }
+return;
+}
 const decrypted = await IDBCrypto.decrypt(rawData);
 if (decrypted === null) {
 console.warn('IDB: Decryption returned null for key:', key);
@@ -1179,14 +1243,15 @@ return record;
 value = ensureRecordIntegrity(value);
 }
 const serialized = typeof value === 'string' ? value : JSON.stringify(value);
-const encryptedData = await IDBCrypto.encrypt(serialized);
+const isPlaintext = this._PLAINTEXT_KEYS && this._PLAINTEXT_KEYS.has(key);
+const encryptedData = isPlaintext ? serialized : await IDBCrypto.encrypt(serialized);
 try {
 return await new Promise((resolve, reject) => {
 const transaction = this.db.transaction(IDB_CONFIG.store, 'readwrite');
 const store = transaction.objectStore(IDB_CONFIG.store);
 const wrapped = this._wrapValue(key, value);
 wrapped.data = encryptedData;
-wrapped.metadata.encrypted = IDBCrypto.isReady();
+wrapped.metadata.encrypted = isPlaintext ? false : IDBCrypto.isReady();
 const request = store.put(wrapped, this._k(key));
 request.onsuccess = () => {
 resolve();
@@ -1224,11 +1289,12 @@ const encryptedEntries = await Promise.all(
 validatedEntries.map(async ([key, value]) => {
 try {
 const serialized = typeof value === 'string' ? value : JSON.stringify(value);
-const encryptedData = await IDBCrypto.encrypt(serialized);
-return [key, value, encryptedData];
+const isPlaintext = this._PLAINTEXT_KEYS && this._PLAINTEXT_KEYS.has(key);
+const encryptedData = isPlaintext ? serialized : await IDBCrypto.encrypt(serialized);
+return [key, value, encryptedData, isPlaintext];
 } catch (encErr) {
 console.error('IDB: Encryption failed for key:', key, _safeErr(encErr));
-return [key, value, typeof value === 'string' ? value : JSON.stringify(value)];
+return [key, value, typeof value === 'string' ? value : JSON.stringify(value), false];
 }
 })
 );
@@ -1241,10 +1307,10 @@ for (const batch of batches) {
 await new Promise((resolve, reject) => {
 const transaction = this.db.transaction(IDB_CONFIG.store, 'readwrite');
 const store = transaction.objectStore(IDB_CONFIG.store);
-batch.forEach(([key, value, encryptedData]) => {
+batch.forEach(([key, value, encryptedData, isPlaintext]) => {
 const wrapped = this._wrapValue(key, value);
 wrapped.data = encryptedData;
-wrapped.metadata.encrypted = IDBCrypto.isReady();
+wrapped.metadata.encrypted = isPlaintext ? false : IDBCrypto.isReady();
 const putReq = store.put(wrapped, this._k(key));
 putReq.onerror = () => reject(putReq.error || new Error("IDB setBatch put failed for key: " + key));
 });
@@ -1291,6 +1357,22 @@ await Promise.all(keys.map(async key => {
 const rawData = rawMap.get(key);
 if (rawData === null || rawData === undefined) { results.set(key, null); return; }
 try {
+const isPlaintext = this._PLAINTEXT_KEYS && this._PLAINTEXT_KEYS.has(key);
+if (isPlaintext) {
+// Plaintext keys: parse directly, no decryption needed.
+// If a stale encrypted value exists (GZND_ENC_ prefix), treat as missing
+// so it gets written fresh (unencrypted) on next save.
+if (typeof rawData === 'string' && rawData.startsWith('GZND_ENC_')) {
+results.set(key, null);
+// Schedule async deletion of stale encrypted value
+this.remove(key).catch(() => {});
+return;
+}
+if (typeof rawData === 'string') {
+try { results.set(key, JSON.parse(rawData)); } catch(e) { results.set(key, rawData); }
+} else { results.set(key, rawData); }
+return;
+}
 const decrypted = await IDBCrypto.decrypt(rawData);
 if (decrypted === null) {
 const wasEncrypted = typeof rawData === 'string' && rawData.startsWith('GZND_ENC_');
@@ -1500,28 +1582,31 @@ const loadedDefaultSettings = batchResults.get('naswar_default_settings');
 if (loadedDefaultSettings && typeof loadedDefaultSettings === 'object') {
 defaultSettings = loadedDefaultSettings;
 }
+const _notFailed = v => v !== null && v !== undefined && v !== idb.DECRYPT_FAILED;
 const loadedAppMode = batchResults.get('appMode');
-if (loadedAppMode) {
+if (_notFailed(loadedAppMode) && typeof loadedAppMode === 'string') {
 appMode = loadedAppMode;
 }
 const loadedRepProfile = batchResults.get('repProfile');
-if (loadedRepProfile) {
+if (_notFailed(loadedRepProfile) && typeof loadedRepProfile === 'string') {
 currentRepProfile = loadedRepProfile;
+} else if (loadedRepProfile === idb.DECRYPT_FAILED) {
+console.warn('loadAllData: repProfile decryption failed — will re-acquire from Firestore on registerDevice');
 }
 const loadedExpenseCategories = batchResults.get('expense_categories');
-if (loadedExpenseCategories && Array.isArray(loadedExpenseCategories)) {
+if (_notFailed(loadedExpenseCategories) && Array.isArray(loadedExpenseCategories)) {
 expenseCategories = loadedExpenseCategories;
 }
 const loadedSalesRepsList = batchResults.get('sales_reps_list');
-if (loadedSalesRepsList && Array.isArray(loadedSalesRepsList) && loadedSalesRepsList.length > 0) {
+if (_notFailed(loadedSalesRepsList) && Array.isArray(loadedSalesRepsList) && loadedSalesRepsList.length > 0) {
 salesRepsList = loadedSalesRepsList;
 }
 const loadedAssignedManager = batchResults.get('assignedManager');
-if (loadedAssignedManager) {
+if (_notFailed(loadedAssignedManager) && typeof loadedAssignedManager === 'string') {
 window._assignedManagerName = loadedAssignedManager;
 }
 const loadedAssignedUserTabs = batchResults.get('assignedUserTabs');
-if (Array.isArray(loadedAssignedUserTabs)) {
+if (_notFailed(loadedAssignedUserTabs) && Array.isArray(loadedAssignedUserTabs)) {
 window._assignedUserTabs = loadedAssignedUserTabs;
 window._userRoleAllowedTabs = loadedAssignedUserTabs;
 }
@@ -1682,8 +1767,12 @@ if (!deviceId) {
 try { deviceId = await idb.get('device_id'); } catch (e) {  }
 }
 if (!deviceId) deviceId = await _readCacheAnchor();
-if (!deviceId) deviceId = await _recoverDeviceIdByToken();
-if (!deviceId) deviceId = await _recoverDeviceIdByFingerprint();
+if (!deviceId && firebaseDB && currentUser) {
+deviceId = await _recoverDeviceIdByToken();
+}
+if (!deviceId && firebaseDB && currentUser) {
+deviceId = await _recoverDeviceIdByFingerprint();
+}
 if (!deviceId) deviceId = _generateUUID();
 await _persistDeviceId(deviceId);
 const existingToken = _readCookie(INSTALL_TOKEN_COOKIE) || _readSession('gz_itk_session');
@@ -1699,6 +1788,11 @@ return deviceId;
 }
 async function refreshDeviceIdAnchors() {
 try {
+if (firebaseDB && currentUser) {
+try { _writeCookie(DEVICE_ID_COOKIE, ''); } catch(e) {}
+try { localStorage.removeItem('persistent_device_id'); } catch(e) {}
+try { await idb.set('device_id', null); } catch(e) {}
+}
 const deviceId = await getDeviceId();
 await _persistDeviceId(deviceId);
 } catch (e) {  }
@@ -1804,6 +1898,19 @@ try { await idb.set('device_name', deviceName); } catch(e) {
 console.warn('Failed to save data locally.', e);
 }
 const userRef = firebaseDB.collection('users').doc(currentUser.uid);
+try {
+const dupSnap = await userRef.collection('devices')
+.where('fingerprint.stableHash', '==', fp.stableHash)
+.get();
+const deleteOps = dupSnap.docs
+.filter(doc => doc.id !== deviceId && doc.id !== 'default_device')
+.map(doc => doc.ref.delete());
+if (deleteOps.length > 0) {
+await Promise.all(deleteOps);
+}
+} catch (dupErr) {
+console.warn('Duplicate cleanup failed:', dupErr);
+}
 const userAgent = navigator.userAgent;
 const deviceType = /Mobile|Android|iPhone/.test(userAgent)
 ? 'mobile'
@@ -1901,7 +2008,12 @@ language: navigator.language || 'en',
 theme: document.documentElement.getAttribute('data-theme') || 'dark'
 }, { merge: true });
 startDeviceHeartbeat(deviceRef);
-await listenForDeviceCommands();
+// Defer the device command listener by one tick to ensure the Firestore SDK
+// has fully settled after the preceding .set() writes — avoids the
+// "INTERNAL ASSERTION FAILED: Unexpected state" error on cold start.
+setTimeout(() => {
+listenForDeviceCommands().catch(e => console.warn('Device command listener failed.', e));
+}, 2000);
 listenForTeamChanges();
 await logDeviceActivity('device_registered', {
 deviceId: deviceId,
@@ -1975,7 +2087,9 @@ console.warn('Firebase operation failed.', error);
 window.logDeviceActivity = logDeviceActivity;
 async function initializeDeviceListeners() {
 try {
-await listenForDeviceCommands();
+setTimeout(() => {
+listenForDeviceCommands().catch(e => console.warn('Device command listener failed.', e));
+}, 2000);
 listenForTeamChanges();
 } catch (error) {
 console.error('Device command listener failed.', _safeErr(error));
@@ -2085,7 +2199,7 @@ Object.defineProperties(window, Object.fromEntries(
     configurable: false
   }])
 ));
-let _cachedDeviceShard = null;
+
 const _MODE_CODES = {
   'admin':      '0',
   'rep':        '1',
@@ -2094,8 +2208,15 @@ const _MODE_CODES = {
   'userrole':   '4',
 };
 const _MODE_LABELS = { '0':'admin', '1':'rep', '2':'production', '3':'factory', '4':'userrole' };
+
+const _UUID_V5_NS = new Uint8Array([
+  0x6b,0xa7,0xb8,0x10, 0x9d,0xad, 0x11,0xd1,
+  0x80,0xb4, 0x00,0xc0,0x4f,0xd4,0x30,0xc8,
+]);
+let _cachedDeviceShard = null;
 let _uuidLastMs = 0;
 let _uuidSeq    = 0;
+
 function _deriveDeviceShard(did) {
   if (!did || typeof did !== 'string') return '0000';
   let h = 0x811c9dc5;
@@ -2138,7 +2259,57 @@ function _encodeModeTag() {
   const mode = (typeof appMode !== 'undefined' ? appMode : 'admin') || 'admin';
   return _MODE_CODES[mode] || '0';
 }
-async function initDeviceShard() {
+
+let _uuidV5Cache   = null;
+let _uuidV5Pending = false;
+function _refreshV5Cache() {
+  if (_uuidV5Pending) return;
+  _uuidV5Pending = true;
+  const name = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+    ? crypto.randomUUID()
+    : Array.from(_randomBytes(16)).map(b => b.toString(16).padStart(2,'0')).join('');
+  try {
+    const nameBytes = new TextEncoder().encode(name);
+    const input = new Uint8Array(_UUID_V5_NS.length + nameBytes.length);
+    input.set(_UUID_V5_NS, 0);
+    input.set(nameBytes, _UUID_V5_NS.length);
+    crypto.subtle.digest('SHA-1', input).then(buf => {
+      const b = new Uint8Array(buf.slice(0, 16));
+      b[6] = (b[6] & 0x0f) | 0x50;
+      b[8] = (b[8] & 0x3f) | 0x80;
+      _uuidV5Cache   = b;
+      _uuidV5Pending = false;
+    }).catch(() => { _uuidV5Pending = false; });
+  } catch (_) {
+    _uuidV5Pending = false;
+  }
+}
+function _buildUUIDv3Base() {
+
+  if (_uuidV5Cache !== null) {
+    const cached = _uuidV5Cache;
+    _uuidV5Cache = null;
+    _refreshV5Cache();
+    return cached;
+  }
+
+  const name = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+    ? crypto.randomUUID()
+    : null;
+  const b = _randomBytes(16);
+  if (name) {
+    const clean = name.replace(/-/g, '');
+    for (let i = 0; i < 16; i++) {
+      b[i] ^= parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+    }
+  }
+  b[6] = (b[6] & 0x0f) | 0x50;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  _refreshV5Cache();
+  return b;
+}
+
+async function initUUIDSalts() {
   try {
     const did = await getDeviceId();
     _cachedDeviceShard = _deriveDeviceShard(did);
@@ -2148,35 +2319,38 @@ async function initDeviceShard() {
   if (typeof UUIDSyncRegistry !== 'undefined') {
     UUIDSyncRegistry.setDeviceShard(_cachedDeviceShard);
   }
+  _refreshV5Cache();
 }
+async function initDeviceShard() { return initUUIDSalts(); }
+
 function generateUUID(prefix = '', retryCount = 0, tsMs = null, modeOverride = null) {
   const MAX_RETRIES = 3;
-  const rnd = _randomBytes(5);
   const nowMs = tsMs != null ? tsMs : Date.now();
   const { ts, seq } = _nextSeq(nowMs);
+  const base = _buildUUIDv3Base();
+
   const tsHi32 = Math.floor(ts / 0x10000);
+  base[0] = (tsHi32 >>> 24) & 0xff;
+  base[1] = (tsHi32 >>> 16) & 0xff;
+  base[2] = (tsHi32 >>>  8) & 0xff;
+  base[3] = (tsHi32       ) & 0xff;
+
   const tsLo16 = ts & 0xffff;
-  const p1 = tsHi32.toString(16).padStart(8, '0');
-  const p2 = tsLo16.toString(16).padStart(4, '0');
+  base[4] = (tsLo16 >>> 8) & 0xff;
+  base[5] = (tsLo16      ) & 0xff;
+
   const modeNib = modeOverride != null
-    ? (parseInt(modeOverride, 16) & 0xf).toString(16)
-    : _encodeModeTag();
-  const p3 = '4'
-    + ((seq >>> 4) & 0xf).toString(16)
-    + (seq         & 0xf).toString(16)
-    + modeNib;
-  const varNib   = ((rnd[4] & 0x3) | 0x8).toString(16);
-  const extraRnd = _randomBytes(1)[0];
-  const p4 = varNib
-    + ((rnd[4] >>> 4) & 0xf).toString(16)
-    + (extraRnd & 0xf).toString(16)
-    + ((extraRnd >>> 4) & 0xf).toString(16);
-  const nodeRand = rnd[0].toString(16).padStart(2, '0')
-                 + rnd[1].toString(16).padStart(2, '0')
-                 + rnd[2].toString(16).padStart(2, '0')
-                 + rnd[3].toString(16).padStart(2, '0');
-  const node = (_cachedDeviceShard || '0000') + nodeRand;
-  const uuid = `${p1}-${p2}-${p3}-${p4}-${node}`;
+    ? (parseInt(modeOverride, 16) & 0xf)
+    : parseInt(_encodeModeTag(), 16);
+  base[6] = 0x40 | ((seq >>> 4) & 0xf);
+  base[7] = ((seq & 0xf) << 4) | modeNib;
+
+  const shard = parseInt(_cachedDeviceShard || '0000', 16);
+  base[10] = (shard >>> 8) & 0xff;
+  base[11] = (shard      ) & 0xff;
+
+  const h = Array.from(base).map(b => b.toString(16).padStart(2, '0')).join('');
+  const uuid = `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20,32)}`;
   const finalUUID = prefix ? `${prefix}-${uuid}` : uuid;
   if (retryCount < MAX_RETRIES && !validateUUID(finalUUID)) {
     return generateUUID(prefix, retryCount + 1, tsMs, modeOverride);
@@ -2200,27 +2374,34 @@ function extractUUIDMeta(uuid) {
     const tsHi = parseInt(cp1, 16);
     const tsLo = parseInt(cp2, 16);
     const tsMs = tsHi * 0x10000 + tsLo;
-    const _V2_TS_MIN = 1577836800000;
-    const _V2_TS_MAX = 4102358400000;
-    if (tsMs >= _V2_TS_MIN && tsMs <= _V2_TS_MAX) {
+    const _V3_TS_MIN = 1577836800000;
+    const _V3_TS_MAX = 4102358400000;
+    if (tsMs >= _V3_TS_MIN && tsMs <= _V3_TS_MAX) {
       const seq = (parseInt(cp3[1], 16) << 4) | parseInt(cp3[2], 16);
+
       const deviceShard = node.slice(0, 4);
+      const v5entropy   = node.slice(4, 12);
       return {
         deviceShard,
+        v5entropy,
         timestamp: new Date(tsMs),
         appMode: appModeNew,
         sequence: seq,
         isEnriched: true,
-        version: 2,
+        version: 3,
       };
     }
     return null;
   }
   return null;
 }
-window.generateUUID    = generateUUID;
-window.validateUUID    = validateUUID;
-window.extractUUIDMeta = extractUUIDMeta;
+window.generateUUID       = generateUUID;
+window.validateUUID       = validateUUID;
+window.extractUUIDMeta    = extractUUIDMeta;
+window.initUUIDSalts      = initUUIDSalts;
+window.deriveDeviceShard  = _deriveDeviceShard;
+window._creatorBadgeHtml  = _creatorBadgeHtml;
+window._mergedBadgeHtml   = _mergedBadgeHtml;
 function compareRecordVersions(a, b) {
   if (!a && !b) return 0;
   if (!a) return -1;
@@ -2280,6 +2461,12 @@ if (opts.inline) {
   return ` <span style="background:rgba(175, 82, 222, 0.15); color:#af52de; padding:2px 6px; border-radius:4px; font-size:0.65rem; margin-left:6px; font-weight:600;">MERGED</span>`;
 }
 return `<span style="font-size:0.6rem; background:rgba(175, 82, 222, 0.15); color:#af52de; padding:1px 5px; border-radius:3px; border:1px solid rgba(175, 82, 222, 0.3); display:inline-block; margin-top:3px;">MERGED</span>`;
+}
+function _creatorBadgeHtml(record) {
+if (!record || !record.createdBy) return '';
+const name = String(record.createdBy).trim();
+if (!name) return '';
+return `<span class="creator-badge" title="Created by ${esc(name)}">${esc(name)}</span>`;
 }
 function compareTimestamps(timestamp1, timestamp2) {
 if (!validateTimestamp(timestamp1) || !validateTimestamp(timestamp2)) {

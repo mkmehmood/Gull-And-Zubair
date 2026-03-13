@@ -171,7 +171,12 @@ asaan: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] }
 requestAnimationFrame(() => {
 document.body.style.overflow = 'hidden';
 document.documentElement.style.overflow = 'hidden';
-document.getElementById('factorySettingsOverlay').style.display = 'flex';
+requestAnimationFrame(() => {
+document.body.style.overflow = 'hidden';
+document.documentElement.style.overflow = 'hidden';
+const _fsOv = document.getElementById('factorySettingsOverlay');
+if (_fsOv) _fsOv.style.display = 'flex';
+});
 });
 await renderFactorySettingsRows();
 }
@@ -197,7 +202,31 @@ if (container) container.style.opacity = '1';
 async function refreshFactorySettingsOverlay() {
 const overlay = document.getElementById('factorySettingsOverlay');
 if (overlay && overlay.style.display === 'flex') {
+// Snapshot any unsaved live selections so a sync re-render doesn't wipe them
+const container = document.getElementById('factoryRawMaterialsContainer');
+const liveRows = container ? Array.from(container.querySelectorAll('.factory-formula-grid')) : [];
+const liveState = liveRows.map(row => ({
+id: row.querySelector('.factory-mat-select')?.value || '',
+qty: row.querySelector('.factory-mat-qty')?.value || ''
+}));
+const hasUnsavedWork = liveState.some(r => r.id !== '');
 await renderFactorySettingsRows();
+// Restore live selections if the user had unsaved work in progress
+if (hasUnsavedWork) {
+const newRows = container ? Array.from(container.querySelectorAll('.factory-formula-grid')) : [];
+liveState.forEach((state, idx) => {
+if (!state.id) return;
+const row = newRows[idx];
+if (!row) return;
+const sel = row.querySelector('.factory-mat-select');
+const qty = row.querySelector('.factory-mat-qty');
+if (sel && state.id) {
+sel.value = state.id;
+updateFactoryRowCost(sel);
+}
+if (qty && state.qty) qty.value = state.qty;
+});
+}
 }
 }
 async function renderFactorySettingsRows() {
@@ -248,15 +277,16 @@ if (!formula || !Array.isArray(formula)) {
 factoryDefaultFormulas[currentFactorySettingsStore] = [];
 }
 let totalRawCost = 0, totalWeight = 0;
-container.innerHTML = '';
+const _fsFrag = document.createDocumentFragment();
 const safeFormula = factoryDefaultFormulas[currentFactorySettingsStore] || [];
 if(safeFormula.length > 0) {
 safeFormula.forEach(ing => {
 totalRawCost += (ing.cost * ing.quantity);
 totalWeight += ing.quantity;
-createFactorySettingRow(container, ing.id, ing.quantity);
+createFactorySettingRow(_fsFrag, ing.id, ing.quantity);
 });
 }
+container.replaceChildren(_fsFrag);
 if (!factoryUnitTracking || typeof factoryUnitTracking !== 'object') {
 factoryUnitTracking = {
 standard: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] },
@@ -296,7 +326,7 @@ const div = document.createElement('div');
 div.className = 'factory-formula-grid';
 let options = '<option value="">Select Material</option>';
 factoryInventoryData.forEach((i, index) => {
-options += `<option value="${esc(String(i.id))}" ${i.id == selectedId ? 'selected' : ''} data-cost="${i.cost}">${esc(i.name)}</option>`;
+options += `<option value="${esc(String(i.id))}" ${String(i.id) === String(selectedId) ? 'selected' : ''} data-cost="${i.cost}">${esc(i.name)}</option>`;
 });
 let currentCost = 0;
 if(selectedId) {
@@ -477,7 +507,12 @@ function openFactoryInventoryModal() {
 requestAnimationFrame(() => {
 document.body.style.overflow = 'hidden';
 document.documentElement.style.overflow = 'hidden';
-document.getElementById('factoryInventoryOverlay').style.display = 'flex';
+requestAnimationFrame(() => {
+document.body.style.overflow = 'hidden';
+document.documentElement.style.overflow = 'hidden';
+const _fiOv = document.getElementById('factoryInventoryOverlay');
+if (_fiOv) _fiOv.style.display = 'flex';
+});
 });
 const _facInvT1 = document.getElementById('factoryInventoryModalTitle'); if (_facInvT1) _facInvT1.innerText = 'Add Raw Material';
 const _delBtnHide = document.getElementById('deleteFactoryInventoryBtn'); if (_delBtnHide) _delBtnHide.style.display = 'none';
@@ -628,11 +663,14 @@ if(idx !== -1) {
 existingMaterial = factoryInventoryData[idx];
 const oldSupplierId = existingMaterial.supplierId;
 const supplierInput = document.getElementById('factoryExistingSupplier');
-const newSupplierId = supplierInput.getAttribute('data-supplier-id') || supplierInput.value;
-const isSupplierChanging = (supplierType === 'none' && oldSupplierId) ||
-(supplierType === 'existing' && oldSupplierId && String(oldSupplierId) !== String(newSupplierId));
+const newSupplierId = (supplierInput && (supplierInput.getAttribute('data-supplier-id') || supplierInput.value)) || '';
+const isSupplierSame = supplierType === 'existing' && oldSupplierId && newSupplierId && String(oldSupplierId) === String(newSupplierId);
+const isSupplierChanging = !isSupplierSame && (
+  (supplierType === 'none' && oldSupplierId) ||
+  (supplierType === 'existing' && oldSupplierId && newSupplierId && String(oldSupplierId) !== String(newSupplierId))
+);
 if (isSupplierChanging) {
-await unlinkSupplierFromMaterial(existingMaterial);
+await unlinkSupplierFromMaterial(existingMaterial, false, true);
 }
 factoryInventoryData[idx] = ensureRecordIntegrity({
 ...factoryInventoryData[idx],
@@ -648,7 +686,15 @@ purchaseUnitName: unitName,
 updatedAt: getTimestamp()
 }, true);
 }
-} else {
+}
+const _supplierUnchanged = editingFactoryInventoryId && supplierType === 'existing' &&
+(() => {
+const _m = factoryInventoryData.find(m => m.id === materialId);
+const _inp = document.getElementById('factoryExistingSupplier');
+const _newId = _inp && (_inp.getAttribute('data-supplier-id') || _inp.value);
+return _m && _m.supplierId && _newId && String(_m.supplierId) === String(_newId);
+})();
+if (!editingFactoryInventoryId) {
 const _matNow = getTimestamp();
 let _newMaterial = {
 id: materialId,
@@ -682,10 +728,12 @@ delete material.totalPayable;
 }
 }
 else if (supplierType === 'existing') {
+if (!_supplierUnchanged) {
 const supplierInput = document.getElementById('factoryExistingSupplier');
 const existingSupplierId = supplierInput.getAttribute('data-supplier-id') || supplierInput.value;
 if (existingSupplierId) {
-await linkMaterialToSupplier(materialId, existingSupplierId, totalValue);
+await linkMaterialToSupplier(materialId, existingSupplierId, totalValue, true);
+}
 }
 }
 else if (supplierType === 'new') {
@@ -700,7 +748,7 @@ materialName: name,
 materialTotal: totalValue
 });
 if (newSupplier && newSupplier.id) {
-await linkMaterialToSupplier(materialId, newSupplier.id, totalValue);
+await linkMaterialToSupplier(materialId, newSupplier.id, totalValue, true);
 }
 }
 }
@@ -716,7 +764,7 @@ showToast("Material saved successfully!", 'success');
 showToast('Failed to save material. Please try again.', 'error');
 }
 }
-async function unlinkSupplierFromMaterial(material, showToastOnNoSupplier = false) {
+async function unlinkSupplierFromMaterial(material, showToastOnNoSupplier = false, skipSideEffects = false) {
 if (!material) {
 showToast('Invalid material data', 'error');
 return;
@@ -736,12 +784,13 @@ t.entityId === supplierId &&
 t.isPayable === true
 );
 if (linkedTransactions.length > 0) {
-linkedTransactions.forEach(transaction => {
-paymentTransactions = paymentTransactions.filter(t => t.id !== transaction.id);
-});
+
+const removedTransactions = linkedTransactions.slice();
+const removedIds = new Set(removedTransactions.map(t => t.id));
+paymentTransactions = paymentTransactions.filter(t => !removedIds.has(t.id));
 await saveWithTracking('payment_transactions', paymentTransactions);
-for (const removedTx of linkedTransactions) {
-await registerDeletion(removedTx.id, 'transactions');
+for (const removedTx of removedTransactions) {
+await registerDeletion(removedTx.id, 'transactions', removedTx);
 await deleteRecordFromFirestore('payment_transactions', removedTx.id);
 }
 }
@@ -754,6 +803,7 @@ delete material.totalPayable;
 delete material.paidDate;
 material.updatedAt = getTimestamp();
 ensureRecordIntegrity(material, true);
+if (!skipSideEffects) {
 await unifiedSave('factory_inventory_data', factoryInventoryData, material);
 notifyDataChange('all');
 triggerAutoSync();
@@ -761,6 +811,7 @@ await renderFactoryInventory();
 await refreshPaymentTab();
 calculateNetCash();
 showToast(`Unlinked from ${esc(material.name)}`, 'success');
+}
 }
 async function createSupplierFromMaterial(supplierData) {
 const existingSupplier = paymentEntities.find(e =>
@@ -813,24 +864,16 @@ if (item.supplierName) {
 const originalAmount = item.totalValue || (item.purchaseCost && item.purchaseQuantity ? item.purchaseCost * item.purchaseQuantity : item.quantity * item.cost) || 0;
 const remainingPayable = item.totalPayable || 0;
 const isFullyPaid = item.paymentStatus === 'paid' || remainingPayable <= 0;
-const isPartial = !isFullyPaid && remainingPayable < originalAmount && remainingPayable > 0;
-const paymentStatus = isFullyPaid
-? '<span style="color:var(--accent-emerald); font-weight:600;"> PAID</span>'
-: isPartial
-? '<span style="color:var(--accent); font-weight:600;">PARTIAL</span>'
-: '<span class="u-text-warning u-fw-600" >PENDING</span>';
 const payableDisplay = isFullyPaid
 ? `<span class="u-text-emerald" >0.00</span>`
-: isPartial
-? `<span style="font-weight:600; color:var(--accent);">${safeNumber(remainingPayable, 0).toFixed(2)}</span>`
-: `<span style="font-weight:600;">${safeNumber(remainingPayable, 0).toFixed(2)}</span>`;
+: `<span style="font-weight:600; color:var(--accent);">${safeNumber(remainingPayable, 0).toFixed(2)}</span>`;
 supplierHtml = `
 <div style="font-size:0.65rem; color:var(--text-muted); margin-top:4px;">
 <div style="background:rgba(0, 122, 255, 0.1); color:var(--accent); padding:3px 8px; border-radius:4px; display:inline-block; margin-bottom:3px; font-weight:600;">
-SUPPLIER: ${String(item.supplierName).replace(/'/g, "&#39;").replace(/"/g, "&quot;")}
+${String(item.supplierName).replace(/'/g, "&#39;").replace(/"/g, "&quot;")}
 </div>
 <div style="margin-top:3px; font-size:0.7rem;">
-${paymentStatus} | ${payableDisplay}
+${payableDisplay}
 </div>
 </div>
 `;
@@ -1009,7 +1052,7 @@ option.disabled = true;
 selectElement.appendChild(option);
 }
 }
-async function linkMaterialToSupplier(materialId, supplierId, totalCost) {
+async function linkMaterialToSupplier(materialId, supplierId, totalCost, skipSideEffects = false) {
 let material = factoryInventoryData.find(m => m.id === materialId);
 if (!material) {
 const reloadedData = await idb.get('factory_inventory_data');
@@ -1045,7 +1088,7 @@ return;
 }
 }
 if (material.supplierId && String(material.supplierId) !== String(supplierIdToMatch)) {
-await unlinkSupplierFromMaterial(material);
+await unlinkSupplierFromMaterial(material, false, true);
 }
 material.supplierId = supplier.id;
 material.supplierName = supplier.name;
@@ -1055,6 +1098,7 @@ material.paymentStatus = 'pending';
 material.totalPayable = totalCost;
 material.updatedAt = getTimestamp();
 ensureRecordIntegrity(material, true);
+if (!skipSideEffects) {
 await unifiedSave('factory_inventory_data', factoryInventoryData, material);
 notifyDataChange('all');
 triggerAutoSync();
@@ -1062,6 +1106,7 @@ await renderFactoryInventory();
 await refreshPaymentTab();
 calculateNetCash();
 showToast(`Linked to ${esc(supplier.name)}`, 'success');
+}
 }
 function selectFactoryEntryStore(store, el) {
 currentFactoryEntryStore = store;
@@ -1192,7 +1237,8 @@ createdAt: factProdCreatedAt,
 updatedAt: factProdCreatedAt,
 timestamp: factProdCreatedAt,
 syncedAt: new Date().toISOString(),
-managedBy: (appMode === 'factory' && window._assignedManagerName) ? window._assignedManagerName : null
+managedBy: (appMode === 'factory' && window._assignedManagerName) ? window._assignedManagerName : null,
+createdBy: (appMode === 'userrole' && window._assignedManagerName) ? window._assignedManagerName : null
 };
 const validatedRecord = ensureRecordIntegrity(productionRecord);
 factoryProductionHistory.unshift(validatedRecord);
@@ -1262,11 +1308,12 @@ updateFactoryUnitsAvailableStats();
 }
 async function renderFactoryHistory() {
 const list = document.getElementById('factoryHistoryList');
-list.innerHTML = '';
+if (!list) return;
 if (factoryProductionHistory.length === 0) {
-list.innerHTML = '<div class="u-empty-state-sm" >No recent activity</div>';
+list.replaceChildren(Object.assign(document.createElement('div'), {className:'u-empty-state-sm',textContent:'No recent activity'}));
 return;
 }
+const _fhFrag = document.createDocumentFragment();
 const recent = [...factoryProductionHistory].sort((a, b) => {
 const timeA = a.timestamp || new Date(a.date + ' ' + a.time).getTime();
 const timeB = b.timestamp || new Date(b.date + ' ' + b.time).getTime();
@@ -1297,6 +1344,7 @@ ${_mergedBadgeHtml(entry)}
 </div>
 </div>
 ${entry.managedBy ? `<div style="margin-bottom:8px;"><span style="display:inline-flex;align-items:center;gap:4px;padding:2px 9px;font-size:0.65rem;font-weight:700;letter-spacing:0.04em;color:var(--accent-purple);background:rgba(206,147,216,0.10);border:1px solid rgba(206,147,216,0.28);border-radius:999px;">${esc(entry.managedBy)}</span></div>` : ''}
+${entry.createdBy ? `<div style="margin-bottom:8px;">${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(entry) : ''}</div>` : ''}
 <div class="factory-summary-row">
 <span class="factory-summary-label">Units Produced</span>
 <span class="qty-val">${entry.units}</span>
@@ -1323,8 +1371,9 @@ ${totalAdditionalCost > 0 ? `<div class="factory-summary-row">
 </div>
 ${entry.isMerged ? '' : `<button class="tbl-action-btn danger u-w-full u-mt-8" onclick="deleteFactoryEntry('${entry.id}')">Delete & Restore Inventory</button>`}
 `;
-list.appendChild(div);
+_fhFrag.appendChild(div);
 }
+list.replaceChildren(_fhFrag);
 _filterFactoryHistoryByMode(currentFactorySummaryMode || 'all');
 }
 async function deleteFactoryEntry(id) {
@@ -1385,7 +1434,7 @@ quantity: materialToRestore
 }
 factoryProductionHistory.splice(entryIndex, 1);
 await Promise.all([
-unifiedDelete('factory_production_history', factoryProductionHistory, id, { strict: true }),
+unifiedDelete('factory_production_history', factoryProductionHistory, id, { strict: true }, entry),
 saveWithTracking('factory_inventory_data', factoryInventoryData)
 ]);
 await refreshFactoryTab();
@@ -1630,7 +1679,7 @@ record.updatedAt = getTimestamp();
 ensureRecordIntegrity(record, true);
 }
 db = db.filter(item => item.id !== id);
-await unifiedDelete('mfg_pro_pkr', db, id, { strict: true });
+await unifiedDelete('mfg_pro_pkr', db, id, { strict: true }, record || null);
 notifyDataChange('production');
 syncFactoryProductionStats();
 await refreshUI();

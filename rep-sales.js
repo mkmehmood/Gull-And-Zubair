@@ -162,7 +162,7 @@ let gpsCoords = null;
 try {
 gpsCoords = await Promise.race([
 getPosition(),
-new Promise(resolve => setTimeout(() => resolve(null), 3000))
+new Promise(resolve => setTimeout(() => resolve(null), 10000))
 ]);
 } catch (e) {
 console.error('An unexpected error occurred.', _safeErr(e));
@@ -317,29 +317,46 @@ c => c && c.name && c.name.toLowerCase() === customerName.toLowerCase()
 );
 if (contactIndex === -1) return;
 const contact = repCustomers[contactIndex];
+if (contact.locationConfirmed) return;
 const isManualAddress = contact.address && contact.address.length > 5 && !contact.address.startsWith('GPS:');
 if (isManualAddress) return;
-const matchFound = repSales.some(sale => {
-if (sale.timestamp > Date.now() - 2000) return false;
-if (sale && sale.customerName && sale.customerName.toLowerCase() === customerName.toLowerCase() && sale.gps) {
-return getDistanceFromLatLonInMeters(
-currentGps.lat, currentGps.lng,
-sale.gps.lat, sale.gps.lng
-) < 100;
+const pastTransactions = repSales.filter(sale =>
+sale &&
+sale.customerName &&
+sale.customerName.toLowerCase() === customerName.toLowerCase() &&
+sale.gps &&
+sale.gps.lat &&
+sale.gps.lng &&
+sale.timestamp < Date.now() - 2000
+).sort((a, b) => b.timestamp - a.timestamp);
+if (pastTransactions.length < 3) return;
+const CLUSTER_RADIUS_M = 150;
+let clusterCount = 0;
+let clusterLat = 0;
+let clusterLng = 0;
+for (const sale of pastTransactions) {
+if (getDistanceFromLatLonInMeters(currentGps.lat, currentGps.lng, sale.gps.lat, sale.gps.lng) <= CLUSTER_RADIUS_M) {
+clusterCount++;
+clusterLat += sale.gps.lat;
+clusterLng += sale.gps.lng;
 }
-return false;
-});
-if (matchFound) {
-const coordsString = `GPS: ${safeNumber(currentGps.lat, 0).toFixed(2)}, ${safeNumber(currentGps.lng, 0).toFixed(2)}`;
-const isNewLocation = contact.address !== coordsString;
+if (clusterCount >= 3) break;
+}
+if (clusterCount < 3) return;
+const avgLat = ((clusterLat + currentGps.lat) / (clusterCount + 1));
+const avgLng = ((clusterLng + currentGps.lng) / (clusterCount + 1));
+const coordsString = `GPS: ${safeNumber(avgLat, 0).toFixed(6)}, ${safeNumber(avgLng, 0).toFixed(6)}`;
 repCustomers[contactIndex].address = coordsString;
+repCustomers[contactIndex].locationConfirmed = true;
 repCustomers[contactIndex].updatedAt = getTimestamp();
 ensureRecordIntegrity(repCustomers[contactIndex], true);
-await idb.set('rep_customers', repCustomers);
-notifyDataChange('rep');
-if (typeof showToast === 'function' && isNewLocation) {
-showToast(`Location confirmed! Saved as default for ${customerName}.`, "success");
+await saveWithTracking('rep_customers', repCustomers, repCustomers[contactIndex]);
+if (firebaseDB && currentUser) {
+saveRecordToFirestore('rep_customers', repCustomers[contactIndex]).catch(e => {});
 }
+notifyDataChange('rep');
+if (typeof showToast === 'function') {
+showToast(`Location confirmed for ${customerName} after 3 consistent visits.`, 'success');
 }
 }
 let repMap = null;
@@ -360,7 +377,7 @@ accuracy: position.coords.accuracy
 (error) => {
 resolve(null);
 },
-{ enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+{ enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
 );
 });
 }
@@ -691,7 +708,12 @@ const _repBulk = document.getElementById('repBulkPaymentAmount'); if (_repBulk) 
 requestAnimationFrame(() => {
 document.body.style.overflow = 'hidden';
 document.documentElement.style.overflow = 'hidden';
-document.getElementById('repCustomerManagementOverlay').style.display = 'flex';
+requestAnimationFrame(() => {
+document.body.style.overflow = 'hidden';
+document.documentElement.style.overflow = 'hidden';
+const _rcmOverlay = document.getElementById('repCustomerManagementOverlay');
+if (_rcmOverlay) _rcmOverlay.style.display = 'flex';
+});
 });
 await renderRepCustomerTransactions(customerName);
 }
@@ -735,16 +757,19 @@ if (!(await showGlassConfirm(msg, { title: 'Delete Rep Customer', confirmText: '
 try {
 const contactIdx = repCustomers.findIndex(c => c && c.name && c.name.toLowerCase() === name.toLowerCase());
 if (contactIdx !== -1) {
-const contactId = repCustomers[contactIdx].id;
-await registerDeletion(contactId, 'rep_customers');
+const contactRecord = repCustomers[contactIdx];
+const contactId = contactRecord.id;
+await registerDeletion(contactId, 'rep_customers', contactRecord);
 repCustomers.splice(contactIdx, 1);
 await saveWithTracking('rep_customers', repCustomers);
 await deleteRecordFromFirestore('rep_customers', contactId);
 }
 const idsToDelete = txs.map(s => s.id);
+
+const repTxsToDelete = txs.slice();
 repSales = repSales.filter(s => !idsToDelete.includes(s.id));
-for (const id of idsToDelete) {
-await registerDeletion(id, 'rep_sales');
+for (const tx of repTxsToDelete) {
+await registerDeletion(tx.id, 'rep_sales', tx);
 }
 await saveWithTracking('rep_sales', repSales);
 for (const id of idsToDelete) {
@@ -761,7 +786,6 @@ showToast('Failed to delete rep customer. Please try again.', 'error');
 async function renderRepCustomerTransactions(name) {
 const list = document.getElementById('repCustomerManagementHistoryList');
 if (!list) return;
-list.innerHTML = '';
 let transactions = [];
 try {
 const dbSales = await idb.get('rep_sales', []);
@@ -827,9 +851,10 @@ currentDebt = Math.max(0, currentDebt);
 const _repMCS = document.getElementById('repManageCustomerStats'); if (_repMCS) _repMCS.innerText = `Current Debt: ${await formatCurrency(currentDebt)}`;
 transactions.sort((a, b) => b.timestamp - a.timestamp);
 if (transactions.length === 0) {
-list.innerHTML = '<div class="u-empty-state-sm" >No history found</div>';
+list.replaceChildren(Object.assign(document.createElement('div'), {className:'u-empty-state-sm',textContent:'No history found'}));
 return;
 }
+const _repFrag = document.createDocumentFragment();
 for (const t of transactions) {
 const isCredit = t.paymentType === 'CREDIT';
 const isPartialPayment = t.paymentType === 'PARTIAL_PAYMENT';
@@ -905,8 +930,9 @@ ${deleteBtnHtml}
 </div>`;
 }
 item.innerHTML = itemContent;
-list.appendChild(item);
+_repFrag.appendChild(item);
 }
+list.replaceChildren(_repFrag);
 }
 function openRepCustomerEditModal(customerName) {
 const nameInput = document.getElementById('rep-edit-cust-name');
@@ -1011,8 +1037,10 @@ notes: 'Previous balance brought forward' };
 salesArray.push(tx); oldDebtModified = true; oldDebtRecord = tx;
 }
 } else if (oldDebit === 0 && oldDebtIdx !== -1) {
-deletedOldDebtId = salesArray[oldDebtIdx].id;
+const _repOldDebtRecordForDeletion = salesArray[oldDebtIdx];
+deletedOldDebtId = _repOldDebtRecordForDeletion.id;
 salesArray.splice(oldDebtIdx, 1); oldDebtModified = true;
+if (deletedOldDebtId) { window._repOldDebtRecordForDeletion = _repOldDebtRecordForDeletion; }
 }
 let phoneUpdated = false;
 salesArray.forEach(s => { if (s && s.customerName === name && s.customerPhone !== phone) { s.customerPhone = phone; phoneUpdated = true; } });
@@ -1021,7 +1049,8 @@ if (nameChanged || oldDebtModified || phoneUpdated) {
 await saveWithTracking('rep_sales', salesArray, oldDebtModified && !phoneUpdated && !nameChanged ? oldDebtRecord : null);
 if (oldDebtRecord) await saveRecordToFirestore('rep_sales', oldDebtRecord);
 if (deletedOldDebtId) {
-await registerDeletion(deletedOldDebtId, 'rep_sales');
+await registerDeletion(deletedOldDebtId, 'rep_sales', window._repOldDebtRecordForDeletion || null);
+window._repOldDebtRecordForDeletion = null;
 await deleteRecordFromFirestore('rep_sales', deletedOldDebtId);
 }
 if (nameChanged && renamedRecords.length > 0) {
@@ -1330,7 +1359,6 @@ showToast('Error generating PDF: ' + error.message, 'error');
 function renderRepHistory() {
 const list = document.getElementById('repHistoryList');
 if (!list) return;
-list.innerHTML = '';
 const dateInput = document.getElementById('rep-date');
 const selectedDate = dateInput && dateInput.value ? dateInput.value : new Date().toISOString().split('T')[0];
 const isToday = selectedDate === new Date().toISOString().split('T')[0];

@@ -32,7 +32,7 @@ const partialPaid = s.partialPaymentReceived || 0;
 totalCredit += (getSaleTransactionValue(s) - partialPaid);
 }
 } else if (s.paymentType === 'CREDIT' && !s.creditReceived) {
-// All unpaid credit sales (direct or rep-linked) → outstanding credit owed
+
 if (s.isMerged && typeof s.creditValue === 'number') {
 totalCredit += s.creditValue;
 } else {
@@ -40,7 +40,7 @@ const partialPaid = s.partialPaymentReceived || 0;
 totalCredit += (getSaleTransactionValue(s) - partialPaid);
 }
 } else if (isRepLinked) {
-// Rep-linked: CASH/received adds to credit owed, COLLECTION/PARTIAL_PAYMENT settles it
+
 if (s.paymentType === 'CASH' || s.creditReceived) {
 totalCredit += (s.totalValue || 0);
 } else if (s.paymentType === 'COLLECTION') {
@@ -49,7 +49,7 @@ totalCredit -= (s.totalValue || 0);
 totalCredit -= (s.totalValue || 0);
 }
 } else {
-// Direct sales: COLLECTION/PARTIAL_PAYMENT reduce outstanding credit
+
 if (s.paymentType === 'COLLECTION') {
 totalCredit -= (s.totalValue || 0);
 } else if (s.paymentType === 'PARTIAL_PAYMENT') {
@@ -62,6 +62,9 @@ const _setCust = (id, val) => { const el = document.getElementById(id); if (el) 
 _setCust('customer-current-credit', await formatCurrency(totalCredit));
 _setCust('customer-total-quantity', safeNumber(totalQty, 0).toFixed(2) + ' kg');
 document.getElementById('customer-info-display').classList.remove('hidden');
+if (typeof custTransactionMode !== 'undefined' && custTransactionMode === 'collection' && typeof updateCollectionPreview === 'function') {
+updateCollectionPreview();
+}
 }
 async function renderCustomersTable(page = 1) {
 const tbody = document.getElementById('customers-table-body');
@@ -113,7 +116,7 @@ if (sale.transactionType === 'OLD_DEBT' && !sale.creditReceived) {
 const partialPaid = sale.partialPaymentReceived || 0;
 customerStats[name].credit += (getSaleTransactionValue(sale) - partialPaid);
 } else if (sale.paymentType === 'CREDIT' && !sale.creditReceived) {
-// All unpaid credit sales (direct or rep-linked) → outstanding credit owed
+
 if (sale.isMerged && typeof sale.creditValue === 'number') {
 customerStats[name].credit += sale.creditValue;
 } else {
@@ -121,8 +124,7 @@ const partialPaid = sale.partialPaymentReceived || 0;
 customerStats[name].credit += (getSaleTransactionValue(sale) - partialPaid);
 }
 } else if (isRepLinked) {
-// Rep-linked non-credit transactions: CASH adds to credit owed (goods out via rep),
-// COLLECTION/PARTIAL_PAYMENT reduce it (rep has collected and settled)
+
 if (sale.paymentType === 'CASH' || sale.creditReceived) {
 customerStats[name].credit += (sale.totalValue || 0);
 } else if (sale.paymentType === 'COLLECTION') {
@@ -131,7 +133,7 @@ customerStats[name].credit -= (sale.totalValue || 0);
 customerStats[name].credit -= (sale.totalValue || 0);
 }
 } else {
-// Direct sales (salesRep === 'NONE'): COLLECTION/PARTIAL_PAYMENT reduce credit
+
 if (sale.paymentType === 'COLLECTION') {
 customerStats[name].credit -= (sale.totalValue || 0);
 } else if (sale.paymentType === 'PARTIAL_PAYMENT') {
@@ -262,7 +264,12 @@ document.getElementById('bulkPaymentAmount').value = '';
 requestAnimationFrame(() => {
 document.body.style.overflow = 'hidden';
 document.documentElement.style.overflow = 'hidden';
-document.getElementById('customerManagementOverlay').style.display = 'flex';
+requestAnimationFrame(() => {
+document.body.style.overflow = 'hidden';
+document.documentElement.style.overflow = 'hidden';
+const _cmOverlay = document.getElementById('customerManagementOverlay');
+if (_cmOverlay) _cmOverlay.style.display = 'flex';
+});
 });
 await renderCustomerTransactions(customerName);
 }
@@ -314,16 +321,19 @@ if (!(await showGlassConfirm(msg, { title: 'Delete Customer', confirmText: 'Dele
 try {
 const contactIdx = salesCustomers.findIndex(c => c && c.name && c.name.toLowerCase() === name.toLowerCase());
 if (contactIdx !== -1) {
-const contactId = salesCustomers[contactIdx].id;
-await registerDeletion(contactId, 'sales_customers');
+const contactRecord = salesCustomers[contactIdx];
+const contactId = contactRecord.id;
+await registerDeletion(contactId, 'sales_customers', contactRecord);
 salesCustomers.splice(contactIdx, 1);
 await saveWithTracking('sales_customers', salesCustomers);
 await deleteRecordFromFirestore('sales_customers', contactId);
 }
 const idsToDelete = txs.map(s => s.id);
+
+const txsToDelete = txs.slice();
 customerSales = customerSales.filter(s => !idsToDelete.includes(s.id));
-for (const id of idsToDelete) {
-await registerDeletion(id, 'sales');
+for (const tx of txsToDelete) {
+await registerDeletion(tx.id, 'sales', tx);
 }
 await saveWithTracking('customer_sales', customerSales);
 for (const id of idsToDelete) {
@@ -340,7 +350,6 @@ showToast('Failed to delete customer. Please try again.', 'error');
 async function renderCustomerTransactions(name) {
 const list = document.getElementById('customerManagementHistoryList');
 if (!list) return;
-list.innerHTML = '';
 let transactions = [];
 try {
 const dbSales = await idb.get('customer_sales', []);
@@ -432,10 +441,11 @@ currentDebt -= (t.totalValue || 0);
 currentDebt = Math.max(0, currentDebt);
 const _mcStats = document.getElementById('manageCustomerStats'); if (_mcStats) _mcStats.innerText = `Current Debt: ${await formatCurrency(currentDebt)}`;
 transactions.sort((a, b) => b.timestamp - a.timestamp);
-if(transactions.length === 0) {
-list.innerHTML = '<div class="u-empty-state-sm" >No history found</div>';
+if (transactions.length === 0) {
+list.replaceChildren(Object.assign(document.createElement('div'), {className:'u-empty-state-sm',textContent:'No history found'}));
 return;
 }
+const _custFrag = document.createDocumentFragment();
 for (const t of transactions) {
 const isCredit = t.paymentType === 'CREDIT';
 const isPartialPayment = t.paymentType === 'PARTIAL_PAYMENT';
@@ -474,7 +484,7 @@ let itemContent = '';
 if (isPartialPayment || isCollection) {
 itemContent = `
 <div class="cust-history-info">
-<div class="u-mono-bold" >${formatDisplayDate(t.date)}${_mergedBadgeHtml(t, {inline:true})}</div>
+<div class="u-mono-bold" >${formatDisplayDate(t.date)}${_mergedBadgeHtml(t, {inline:true})}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(t) : ''}</div>
 <div style="font-size:0.75rem; color:var(--accent-emerald);">
 Payment: ${await formatCurrency(t.totalValue)}
 </div>
@@ -492,7 +502,7 @@ itemContent = `
 <div class="cust-history-info">
 <div class="u-mono-bold" >
 ${formatDisplayDate(t.date)}
-<span style="background:rgba(255, 159, 10, 0.15); color:var(--warning); padding:2px 6px; border-radius:4px; font-size:0.65rem; margin-left:6px; font-weight:600;">OLD DEBT</span>${_mergedBadgeHtml(t, {inline:true})}
+<span style="background:rgba(255, 159, 10, 0.15); color:var(--warning); padding:2px 6px; border-radius:4px; font-size:0.65rem; margin-left:6px; font-weight:600;">OLD DEBT</span>${_mergedBadgeHtml(t, {inline:true})}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(t) : ''}
 </div>
 <div style="font-size:0.75rem; color:var(--warning);">
 Previous Balance: ${await formatCurrency(t.totalValue)}
@@ -512,7 +522,7 @@ const _displayUnitPrice = (t.unitPrice && t.unitPrice > 0)
   : getEffectiveSalePriceForCustomer(t.customerName, t.supplyStore || 'STORE_A');
 itemContent = `
 <div class="cust-history-info">
-<div class="u-mono-bold" >${formatDisplayDate(t.date)}${_mergedBadgeHtml(t, {inline:true})}</div>
+<div class="u-mono-bold" >${formatDisplayDate(t.date)}${_mergedBadgeHtml(t, {inline:true})}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(t) : ''}</div>
 <div class="u-fs-sm2 u-text-muted" >
 ${safeToFixed(t.quantity, 2)} kg @ ${await formatCurrency(_displayUnitPrice)} = ${await formatCurrency(_txValue)}
 </div>
@@ -528,8 +538,9 @@ ${deleteBtnHtml}
 `;
 }
 item.innerHTML = itemContent;
-list.appendChild(item);
+_custFrag.appendChild(item);
 }
+list.replaceChildren(_custFrag);
 }
 async function toggleSingleTransactionStatus(id) {
 const record = customerSales.find(s => s.id === id);
@@ -652,7 +663,7 @@ ensureRecordIntegrity(rel, true);
 }
 }
 customerSales = customerSales.filter(s => s.id !== id);
-await unifiedDelete('customer_sales', customerSales, id, { strict: true });
+await unifiedDelete('customer_sales', customerSales, id, { strict: true }, item);
 refreshAllCalculations();
 if (typeof refreshCustomerSales === 'function') await refreshCustomerSales();
 renderCustomersTable();
@@ -733,7 +744,7 @@ ensureRecordIntegrity(rel, true);
 }
 }
 repSales = repSales.filter(s => s.id !== id);
-await unifiedDelete('rep_sales', repSales, id, { strict: true });
+await unifiedDelete('rep_sales', repSales, id, { strict: true }, item);
 renderRepCustomerTransactions(currentManagingRepCustomer);
 renderRepCustomerTable();
 notifyDataChange('rep');
@@ -788,9 +799,10 @@ relatedSaleId: sale.id, syncedAt: new Date().toISOString()
 partialPaymentMade = true; remaining = 0; updatedCount++; break;
 }
 }
+let collId = null;
 if (remaining > 0 && updatedCount > 0) {
 const ls = pending[pending.length - 1];
-const collId = generateUUID('sale');
+collId = generateUUID('sale');
 customerSales.push(ensureRecordIntegrity({
 id: collId, timestamp: nowEpoch, createdAt: nowEpoch, updatedAt: nowEpoch,
 date: nowISODate, time: nowTime,
@@ -875,9 +887,10 @@ relatedSaleId: sale.id, syncedAt: new Date().toISOString()
 partialPaymentMade = true; remaining = 0; updatedCount++; break;
 }
 }
+let collId = null;
 if (remaining > 0 && updatedCount > 0) {
 const ls = pending[pending.length - 1];
-const collId = generateUUID('sale');
+collId = generateUUID('sale');
 repSales.push(ensureRecordIntegrity({
 id: collId, timestamp: nowEpoch, createdAt: nowEpoch, updatedAt: nowEpoch,
 date: nowISODate, time: nowTime,
@@ -1047,6 +1060,9 @@ if (btn) btn.focus();
 });
 }
 window.showGlassConfirm = showGlassConfirm;
+if (typeof window._onShowGlassConfirmReady === 'function') {
+window._onShowGlassConfirmReady();
+}
 function filterCustomers() {
 renderCustomersTable();
 }
@@ -1159,8 +1175,10 @@ notes: 'Previous balance brought forward' };
 salesArray.push(tx); oldDebtModified = true; oldDebtRecord = tx;
 }
 } else if (oldDebit === 0 && oldDebtIdx !== -1) {
-deletedOldDebtId = salesArray[oldDebtIdx].id;
+const _oldDebtRecordForDeletion = salesArray[oldDebtIdx];
+deletedOldDebtId = _oldDebtRecordForDeletion.id;
 salesArray.splice(oldDebtIdx, 1); oldDebtModified = true;
+if (deletedOldDebtId) { window._oldDebtRecordForDeletion = _oldDebtRecordForDeletion; }
 }
 let phoneUpdated = false;
 salesArray.forEach(s => { if (s && s.customerName === name && s.customerPhone !== phone) { s.customerPhone = phone; phoneUpdated = true; } });
@@ -1169,7 +1187,8 @@ if (nameChanged || oldDebtModified || phoneUpdated) {
 await saveWithTracking('customer_sales', salesArray, oldDebtModified && !phoneUpdated && !nameChanged ? oldDebtRecord : null);
 if (oldDebtRecord) await saveRecordToFirestore('customer_sales', oldDebtRecord);
 if (deletedOldDebtId) {
-await registerDeletion(deletedOldDebtId, 'sales');
+await registerDeletion(deletedOldDebtId, 'sales', window._oldDebtRecordForDeletion || null);
+window._oldDebtRecordForDeletion = null;
 await deleteRecordFromFirestore('customer_sales', deletedOldDebtId);
 }
 if (nameChanged && renamedRecords.length > 0) {

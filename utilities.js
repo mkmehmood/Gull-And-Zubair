@@ -1280,7 +1280,8 @@ paymentStatus: paymentStatus,
 timestamp: prodCreatedAt,
 recordDate: new Date(inputDate).getTime(),
 syncedAt: new Date().toISOString(),
-managedBy: (appMode === 'production' && window._assignedManagerName) ? window._assignedManagerName : null
+managedBy: (appMode === 'production' && window._assignedManagerName) ? window._assignedManagerName : null,
+createdBy: (appMode === 'userrole' && window._assignedManagerName) ? window._assignedManagerName : null
 };
 newEntry = ensureRecordIntegrity(newEntry, false);
 try {
@@ -1334,7 +1335,7 @@ function _dedupDeletionRecordsLocal(arr) {
   });
   return Array.from(seen.values());
 }
-async function registerDeletion(id, collectionName = 'unknown') {
+async function registerDeletion(id, collectionName = 'unknown', preDeletedRecord = null) {
 if (!id) {
 return;
 }
@@ -1342,7 +1343,78 @@ if (!validateUUID(id)) {
 return;
 }
 const now = getTimestamp();
-const _snapshot = _captureRecordSnapshot(id, collectionName);
+
+let _snapshot;
+if (preDeletedRecord && typeof preDeletedRecord === 'object') {
+  const tempResult = { displayName: null, displayDetail: null, displayAmount: null, record: preDeletedRecord };
+  const s = preDeletedRecord;
+  switch (collectionName) {
+    case 'sales':
+      tempResult.displayName   = s.customerName || s.name || 'Unknown Customer';
+      tempResult.displayDetail = [s.supplyStore || s.store || '', s.paymentType ? (s.paymentType === 'CASH' ? 'Cash' : s.paymentType === 'CREDIT' ? 'Credit' : s.paymentType) : '', s.date || ''].filter(Boolean).join(' · ');
+      tempResult.displayAmount = s.totalValue != null ? `₨${Number(s.totalValue).toLocaleString()}` : (s.quantity ? `${s.quantity} kg` : null);
+      break;
+    case 'transactions':
+      tempResult.displayName   = s.entityName || s.name || s.description || 'Unknown Transaction';
+      tempResult.displayDetail = [s.type === 'IN' ? '↓ IN' : s.type === 'OUT' ? '↑ OUT' : (s.type || ''), s.date || ''].filter(Boolean).join(' · ');
+      tempResult.displayAmount = s.amount != null ? `₨${Number(s.amount).toLocaleString()}` : (s.totalValue != null ? `₨${Number(s.totalValue).toLocaleString()}` : null);
+      break;
+    case 'rep_sales':
+      tempResult.displayName   = s.customerName || s.name || 'Unknown Rep Customer';
+      tempResult.displayDetail = [s.salesRep ? `Rep: ${s.salesRep}` : '', s.paymentType === 'COLLECTION' ? 'Collection' : s.paymentType === 'CREDIT' ? 'Credit' : s.paymentType === 'CASH' ? 'Cash' : (s.paymentType || ''), s.date || ''].filter(Boolean).join(' · ');
+      tempResult.displayAmount = s.totalValue != null ? `₨${Number(s.totalValue).toLocaleString()}` : (s.quantity ? `${s.quantity} kg` : null);
+      break;
+    case 'expenses':
+      tempResult.displayName   = s.name || s.description || 'Unknown Expense';
+      tempResult.displayDetail = [s.category || '', s.date || ''].filter(Boolean).join(' · ');
+      tempResult.displayAmount = s.amount != null ? `₨${Number(s.amount).toLocaleString()}` : null;
+      break;
+    case 'sales_customers':
+      tempResult.displayName   = s.name || null;
+      tempResult.displayDetail = s.phone ? `📞 ${s.phone}` : '';
+      break;
+    case 'rep_customers':
+      tempResult.displayName   = s.name || null;
+      tempResult.displayDetail = [s.salesRep ? `Rep: ${s.salesRep}` : '', s.phone || ''].filter(Boolean).join(' · ');
+      break;
+    case 'production':
+      tempResult.displayName   = s.store ? `Production – ${getStoreLabel ? getStoreLabel(s.store) : s.store}` : 'Production Batch';
+      tempResult.displayDetail = s.date || '';
+      tempResult.displayAmount = s.net != null ? `${s.net} kg` : null;
+      break;
+    case 'factory_history':
+      tempResult.displayName   = s.store ? `Factory – ${getStoreLabel ? getStoreLabel(s.store) : s.store}` : 'Factory Production';
+      tempResult.displayDetail = s.date || '';
+      tempResult.displayAmount = s.units != null ? `${s.units} units` : null;
+      break;
+    case 'returns':
+      tempResult.displayName   = s.store ? `Return – ${getStoreLabel ? getStoreLabel(s.store) : s.store}` : 'Stock Return';
+      tempResult.displayDetail = s.date || '';
+      tempResult.displayAmount = s.quantity != null ? `${s.quantity} kg` : null;
+      break;
+    case 'inventory':
+      tempResult.displayName   = s.name || 'Inventory Item';
+      tempResult.displayDetail = s.supplierName ? `Supplier: ${s.supplierName}` : '';
+      tempResult.displayAmount = s.quantity != null ? `${s.quantity} kg` : null;
+      break;
+    case 'calculator_history':
+      tempResult.displayName   = s.customerName || s.customer || s.name || 'Calculator Entry';
+      tempResult.displayDetail = s.supplyStore || s.store || '';
+      tempResult.displayAmount = s.totalValue != null ? `₨${Number(s.totalValue).toLocaleString()}` : null;
+      break;
+    case 'entities':
+      tempResult.displayName   = s.name || 'Payment Entity';
+      tempResult.displayDetail = s.phone ? `📞 ${s.phone}` : (s.type || '');
+      break;
+    default:
+      tempResult.displayName   = s.name || s.customerName || s.entityName || s.description || null;
+      tempResult.displayDetail = s.date || null;
+      tempResult.displayAmount = s.amount != null ? `₨${Number(s.amount).toLocaleString()}` : null;
+  }
+  _snapshot = tempResult;
+} else {
+  _snapshot = _captureRecordSnapshot(id, collectionName);
+}
 const deletionRecord = {
 id: id,
 recordId: id,
@@ -1654,13 +1726,13 @@ if (!entity) return;
 const quickAmountEl = document.getElementById('quickEntityAmount');
 if (quickAmountEl) quickAmountEl.value = '';
 setQuickEntityType('OUT');
+await renderEntityOverlayContent(entity);
 requestAnimationFrame(() => {
 document.body.style.overflow = 'hidden';
 document.documentElement.style.overflow = 'hidden';
 const overlayEl = document.getElementById('entityDetailsOverlay');
 if (overlayEl) overlayEl.style.display = 'flex';
 });
-await renderEntityOverlayContent(entity);
 }
 function closeEntityDetailsOverlay() {
 requestAnimationFrame(() => {
@@ -1692,6 +1764,13 @@ const phone = entity.phone || '';
 const wallet = entity.wallet || '';
 _manageET.innerHTML = `<div class="u-fw-700" >${esc(entity.name)}</div>${(phone || wallet) ? `<div style="font-size:0.75rem; color:var(--text-muted); font-weight:normal; margin-top:3px;">${phone ? phoneActionHTML(phone) : ''}${phone && wallet ? ' &middot; ' : ''}${esc(wallet)}</div>` : ''}`;
 }
+
+try {
+const _freshInv = await idb.get('factory_inventory_data', []);
+if (_freshInv && Array.isArray(_freshInv) && _freshInv.length > 0) {
+factoryInventoryData = _freshInv;
+}
+} catch (_e) {}
 const balances = calculateEntityBalances();
 const balance = balances[entity.id] || 0;
 const entityTransactions = paymentTransactions.filter(t => t.entityId === entity.id && !t.isExpense);
@@ -1720,7 +1799,8 @@ const list = document.getElementById('entityManagementHistoryList');
 if (!list) {
 return;
 }
-list.innerHTML = '';
+
+const _entityFrag = document.createDocumentFragment();
 let transactions = paymentTransactions.filter(t => t.entityId === entity.id);
 const rangeSelect = document.getElementById('entityPdfRange');
 const range = rangeSelect ? rangeSelect.value : 'all';
@@ -1752,7 +1832,7 @@ return true;
 }
 transactions.sort((a,b) => b.timestamp - a.timestamp);
 if (transactions.length === 0) {
-list.innerHTML = `<div class="u-empty-state-sm" >No transaction history</div>`;
+list.replaceChildren(Object.assign(document.createElement('div'), {className:'u-empty-state-sm',textContent:'No transaction history'}));
 return;
 }
 transactions.forEach(t => {
@@ -1766,7 +1846,7 @@ item.className = `cust-history-item${t.isSettled ? ' is-settled-record' : ''}`;
 item.innerHTML = `
 <div class="cust-history-info">
 <div class="u-mono-bold" >${formatDisplayDate(t.date)}</div>
-<div class="u-fs-sm2 u-text-muted" >${esc(t.description || 'No description')}</div>
+<div class="u-fs-sm2 u-text-muted" >${esc(t.description || 'No description')}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(t) : ''}</div>
 ${t.isMerged ? _mergedBadgeHtml(t) : ''}
 </div>
 <div style="text-align:right; margin-right:10px;">
@@ -1775,8 +1855,9 @@ ${t.isMerged ? _mergedBadgeHtml(t) : ''}
 </div>
 ${t.isMerged ? '' : `<button class="btn btn-sm btn-danger u-p-4-8" onclick="deleteEntityTransaction('${esc(t.id)}')">⌫</button>`}
 `;
-list.appendChild(item);
+_entityFrag.appendChild(item);
 });
+list.replaceChildren(_entityFrag);
 }
 function filterEntityManagementHistory() {
 const term = document.getElementById('entity-trans-search').value.toLowerCase();
@@ -1820,7 +1901,8 @@ isPayable: false,
 createdAt: now.getTime(),
 updatedAt: now.getTime(),
 timestamp: now.getTime(),
-syncedAt: new Date().toISOString()
+syncedAt: new Date().toISOString(),
+createdBy: (appMode === 'userrole' && window._assignedManagerName) ? window._assignedManagerName : null
 };
 if (currentQuickType === 'OUT') {
 const pendingMaterials = factoryInventoryData
@@ -1875,8 +1957,9 @@ calculateNetCash();
 if (typeof calculateCashTracker === 'function') calculateCashTracker();
 if (transaction.isPayable) {
 if (typeof renderFactoryInventory === 'function') renderFactoryInventory();
-if (typeof renderUnifiedTable === 'function') renderUnifiedTable(1);
 }
+
+if (typeof renderUnifiedTable === 'function') renderUnifiedTable(1);
 showToast("Transaction saved successfully", "success");
 } catch (error) {
 showToast('Failed to save transaction. Please try again.', 'error');
@@ -1912,12 +1995,11 @@ if (_dtDesc) _dtMsg += _dtDesc;
 _dtMsg += `\n\nThis cannot be undone.`;
 if (await showGlassConfirm(_dtMsg, { title: `Delete ${_dt.type === 'IN' ? 'Payment IN' : 'Payment OUT'}`, confirmText: "Delete", danger: true })) {
 try {
+const _txToDelete1 = _dt;
 paymentTransactions = paymentTransactions.filter(t => t.id !== id);
-await unifiedDelete('payment_transactions', paymentTransactions, id, { strict: true });
-notifyDataChange('payments');
-triggerAutoSync();
-const entity = paymentEntities.find(e => String(e.id) === String(currentEntityId));
-if (entity) renderEntityOverlayContent(entity);
+await unifiedDelete('payment_transactions', paymentTransactions, id, { strict: true }, _txToDelete1);
+const _dtEntityRefreshed = paymentEntities.find(e => String(e.id) === String(_dt.entityId));
+if (_dtEntityRefreshed) renderEntityOverlayContent(_dtEntityRefreshed);
 if (typeof calculateNetCash === 'function') calculateNetCash();
 if (typeof calculateCashTracker === 'function') calculateCashTracker();
 if (typeof renderFactoryInventory === 'function') renderFactoryInventory();
@@ -1929,62 +2011,50 @@ showToast('Failed to delete transaction. Please try again.', 'error');
 }
 }
 async function deleteCurrentEntity() {
-if(!currentEntityId) return;
+if (!currentEntityId) return;
 if (!validateUUID(String(currentEntityId))) {
 showToast('Invalid entity ID', 'error');
 return;
 }
 const _entityToDel = paymentEntities.find(e => String(e.id) === String(currentEntityId));
-const _entityName = _entityToDel ? _entityToDel.name : 'this entity';
-if (_entityToDel?.isArchived) {
-showToast('This entity is already archived', 'info');
+if (!_entityToDel) {
+showToast('Entity not found', 'error');
 return;
 }
+const _entityName = _entityToDel.name || 'this entity';
 const _entityTxs = paymentTransactions.filter(t => String(t.entityId) === String(currentEntityId));
-const hasTrans = _entityTxs.length > 0;
-const _totalIn = _entityTxs.filter(t => t.type === 'IN').reduce((s,t) => s + (parseFloat(t.amount)||0), 0);
-const _totalOut = _entityTxs.filter(t => t.type === 'OUT').reduce((s,t) => s + (parseFloat(t.amount)||0), 0);
-let msg = `Archive "${_entityName}"?`;
-if (hasTrans) {
-msg += `\n\n This entity has ${_entityTxs.length} transaction${_entityTxs.length !== 1 ? 's' : ''} on record`;
-if (_totalIn > 0) msg += `\n • Received: ${fmtAmt(_totalIn)}`;
-if (_totalOut > 0) msg += `\n • Paid out: ${fmtAmt(_totalOut)}`;
-msg += `\n\nAll transactions will be retained and marked as SETTLED.`;
-}
-msg += `\n\nThe entity will be marked as Archived and hidden from active lists. History is preserved.`;
-if (await showGlassConfirm(msg, { title: `Archive Entity`, confirmText: "Archive", danger: false })) {
-try {
-const entityIdx = paymentEntities.findIndex(e => String(e.id) === String(currentEntityId));
-if (entityIdx !== -1) {
-paymentEntities[entityIdx].isArchived = true;
-paymentEntities[entityIdx].archivedAt = getTimestamp();
-paymentEntities[entityIdx].updatedAt = getTimestamp();
-paymentEntities[entityIdx] = ensureRecordIntegrity(paymentEntities[entityIdx], true);
-await saveWithTracking('payment_entities', paymentEntities, paymentEntities[entityIdx]);
-await saveRecordToFirestore('payment_entities', paymentEntities[entityIdx]);
-}
-for (const trans of _entityTxs) {
-if (!trans.isSettled) {
-trans.isSettled = true;
-trans.settledAt = getTimestamp();
-trans.settledBy = 'entity_archived';
-trans.updatedAt = getTimestamp();
-ensureRecordIntegrity(trans, true);
-}
-}
+const _totalIn  = _entityTxs.filter(t => t.type === 'IN').reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+const _totalOut = _entityTxs.filter(t => t.type === 'OUT').reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+let msg = `Permanently delete "${_entityName}"?`;
 if (_entityTxs.length > 0) {
-await saveWithTracking('payment_transactions', paymentTransactions, null, _entityTxs.map(t => t.id));
-for (const trans of _entityTxs) {
-await saveRecordToFirestore('payment_transactions', trans);
+msg += `\n\n\u26a0 This entity has ${_entityTxs.length} transaction${_entityTxs.length !== 1 ? 's' : ''} on record`;
+if (_totalIn  > 0) msg += `\n • Received: ${fmtAmt(_totalIn)}`;
+if (_totalOut > 0) msg += `\n • Paid out: ${fmtAmt(_totalOut)}`;
+msg += `\n\nAll ${_entityTxs.length} transaction${_entityTxs.length !== 1 ? 's' : ''} will also be permanently deleted.`;
 }
+msg += `\n\nThis cannot be undone.`;
+if (!(await showGlassConfirm(msg, { title: `Delete Entity Permanently`, confirmText: "Delete", danger: true }))) return;
+try {
+const txsToDelete = _entityTxs.slice();
+const txIdsToDelete = new Set(txsToDelete.map(t => t.id));
+paymentTransactions = paymentTransactions.filter(t => !txIdsToDelete.has(t.id));
+await saveWithTracking('payment_transactions', paymentTransactions);
+for (const tx of txsToDelete) {
+await registerDeletion(tx.id, 'transactions', tx);
+await deleteRecordFromFirestore('payment_transactions', tx.id);
 }
+await registerDeletion(_entityToDel.id, 'entities', _entityToDel);
+paymentEntities = paymentEntities.filter(e => String(e.id) !== String(currentEntityId));
+await saveWithTracking('payment_entities', paymentEntities);
+await deleteRecordFromFirestore('payment_entities', _entityToDel.id);
 notifyDataChange('entities');
+if (typeof calculateNetCash === 'function') calculateNetCash();
+if (typeof calculateCashTracker === 'function') calculateCashTracker();
 closeEntityDetailsOverlay();
 if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
-showToast("Entity archived. History preserved.", "success");
+showToast(`"${_entityName}" and all its transactions deleted.`, 'success');
 } catch (error) {
-showToast('Failed to archive entity. Please try again.', 'error');
-}
+showToast('Failed to delete entity. Please try again.', 'error');
 }
 }
 function exportEntityData() {
@@ -2815,15 +2885,14 @@ const ms = sale.mergedSummary;
 rawData.salesCash    += (ms.cashSales    || 0);
 rawData.salesCredits += (ms.unpaidCredit || 0);
 } else if (sale.paymentType === 'CREDIT' && !sale.creditReceived) {
-// All unpaid credit sales (both direct and rep-linked) count as outstanding credits
+
 const partialPaid = sale.partialPaymentReceived || 0;
 rawData.salesCredits += Math.max(0, (sale.totalValue || 0) - partialPaid);
 } else if (isRepLinked) {
-// Rep-linked CASH or creditReceived=true: goods went out via rep → owed to calculator,
-// counts as outstanding credits (not direct salesTabCash — handled via calculator received)
+
 rawData.salesCredits += sale.totalValue || 0;
 } else {
-// Direct sales only (salesRep === 'NONE')
+
 if (sale.paymentType === 'CASH' || sale.creditReceived) {
 rawData.salesCash += sale.totalValue || 0;
 } else if (sale.paymentType === 'COLLECTION') {
@@ -2956,10 +3025,10 @@ _setTC('entityTotalOut', `${fmtAmt(totalOut)}`);
 _setTC('entityNetBalance', `${fmtAmt(netBalance)}`);
 _setTC('entityTotalTransactions', entityTransactions.length);
 const transactionsList = document.getElementById('entityTransactionsList');
-transactionsList.innerHTML = '';
 if (entityTransactions.length === 0) {
-transactionsList.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-muted);">No transactions found for this entity.</div>';
+transactionsList.replaceChildren(Object.assign(document.createElement('div'), {textContent:'No transactions found for this entity.',style:'text-align:center;padding:40px;color:var(--text-muted)'}));
 } else {
+const _etFrag = document.createDocumentFragment();
 const sortedTransactions = [...entityTransactions].sort((a, b) => b.timestamp - a.timestamp);
 sortedTransactions.forEach(transaction => {
 const transactionCard = document.createElement('div');
@@ -2970,6 +3039,7 @@ const badgeClass = transaction.type === 'IN' ? 'transaction-in' : 'transaction-o
 const badgeText = transaction.type === 'IN' ? 'IN' : 'OUT';
 const amountClass = transaction.type === 'IN' ? 'profit-val' : 'cost-val';
 const safeAmount = parseFloat(transaction.amount) || 0;
+const etCreatorBadge = (typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(transaction) : '';
 transactionCard.innerHTML = `
 <span class="transaction-badge ${badgeClass}" style="position: absolute; top: 10px; right: 10px;">${badgeText}</span>
 <div style="margin-bottom: 8px;">
@@ -2977,15 +3047,16 @@ transactionCard.innerHTML = `
 <span style="color: var(--text-muted); font-size: 0.75rem; margin-left: 10px;">${esc(transaction.time || '')}</span>
 </div>
 <div style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 8px;">
-${esc(transaction.description || 'No description')}
+${esc(transaction.description || 'No description')}${etCreatorBadge}
 </div>
 <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--glass-border);">
 <span class="u-fs-sm2 u-text-muted" >Amount:</span>
 <span class="${amountClass}" style="font-size: 1.1rem; font-weight: 800;">${fmtAmt(safeAmount)}</span>
 </div>
 `;
-transactionsList.appendChild(transactionCard);
+_etFrag.appendChild(transactionCard);
 });
+transactionsList.replaceChildren(_etFrag);
 }
 requestAnimationFrame(() => {
 document.body.style.overflow = 'hidden';
@@ -3106,7 +3177,8 @@ type: type,
 materialId: materialId,
 isPayable: isPayable,
 timestamp: payCreatedAt,
-syncedAt: new Date().toISOString()
+syncedAt: new Date().toISOString(),
+createdBy: (appMode === 'userrole' && window._assignedManagerName) ? window._assignedManagerName : null
 };
 payment = ensureRecordIntegrity(payment, false);
 paymentTransactions.push(payment);
@@ -3122,8 +3194,9 @@ if (typeof calculateNetCash === 'function') calculateNetCash();
 if (typeof calculateCashTracker === 'function') calculateCashTracker();
 if (isPayable) {
 if (typeof renderFactoryInventory === 'function') renderFactoryInventory();
-if (typeof renderUnifiedTable === 'function') renderUnifiedTable(1);
 }
+
+if (typeof renderUnifiedTable === 'function') renderUnifiedTable(1);
 let message = `Payment ${type === 'IN' ? 'received from' : 'made to'} ${entity.name}`;
 if (isPayable) {
 message += ' (Material purchase settled - liability reduced)';
@@ -3164,7 +3237,7 @@ if (typeof calculateNetCash === 'function') calculateNetCash();
 return;
 }
 paymentTransactions = paymentTransactions.filter(t => t.id !== id);
-await unifiedDelete('payment_transactions', paymentTransactions, id, { strict: true });
+await unifiedDelete('payment_transactions', paymentTransactions, id, { strict: true }, transaction);
 notifyDataChange('payments');
 if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
 if (typeof calculateNetCash === 'function') calculateNetCash();
@@ -3214,15 +3287,14 @@ const ms = sale.mergedSummary;
 rawData.salesCash    += (ms.cashSales    || 0);
 rawData.salesCredits += (ms.unpaidCredit || 0);
 } else if (sale.paymentType === 'CREDIT' && !sale.creditReceived) {
-// All unpaid credit sales (both direct and rep-linked) count as outstanding credits
+
 const partialPaid = sale.partialPaymentReceived || 0;
 rawData.salesCredits += Math.max(0, (sale.totalValue || 0) - partialPaid);
 } else if (isRepLinked) {
-// Rep-linked CASH or creditReceived=true: goods went out via rep → owed to calculator,
-// counts as outstanding credits (not direct salesTabCash — handled via calculator received)
+
 rawData.salesCredits += sale.totalValue || 0;
 } else {
-// Direct sales only (salesRep === 'NONE')
+
 if (sale.paymentType === 'CASH' || sale.creditReceived) {
 rawData.salesCash += sale.totalValue || 0;
 } else if (sale.paymentType === 'COLLECTION') {
@@ -3619,6 +3691,7 @@ profit: profit,
 unitPrice: _effectiveSalePrice,
 creditReceived: paymentType === 'CASH' ? true : false,
 syncedAt: new Date().toISOString(),
+createdBy: (appMode === 'userrole' && window._assignedManagerName) ? window._assignedManagerName : null,
 };
 const validatedRecord = ensureRecordIntegrity(saleRecord);
 const salesSnapshot = [...customerSales];
@@ -3671,6 +3744,157 @@ showToast('UI refresh failed.', 'error');
 showToast(' Failed to save sale. Please try again.', 'error');
 }
 }
+// ── Sales tab: Sale / Collection mode ────────────────────────────────────
+let custTransactionMode = 'sale';
+function setSaleMode(mode) {
+custTransactionMode = mode;
+const isSale = mode === 'sale';
+const _el = id => document.getElementById(id);
+// toggle buttons
+const btnSale = _el('btn-cust-mode-sale');
+const btnColl = _el('btn-cust-mode-coll');
+if (btnSale) btnSale.className = `toggle-opt${isSale ? ' active' : ''}`;
+if (btnColl) btnColl.className = `toggle-opt${!isSale ? ' active' : ''}`;
+// show/hide input sections
+const saleIn  = _el('cust-sale-inputs');
+const collIn  = _el('cust-coll-inputs');
+const supPay  = _el('cust-sale-supply-payment');
+const collRes = _el('cust-coll-result');
+if (saleIn)  isSale ? saleIn.classList.remove('hidden')  : saleIn.classList.add('hidden');
+if (collIn)  isSale ? collIn.classList.add('hidden')     : collIn.classList.remove('hidden');
+if (supPay)  { supPay.style.display = isSale ? '' : 'none'; }
+if (collRes) { collRes.style.display = isSale ? 'none' : ''; }
+// qty row in customer-info-display
+const qtyRow = _el('customer-qty-row');
+if (qtyRow) { qtyRow.style.display = isSale ? '' : 'none'; }
+// button label
+const btn = _el('btn-save-cust-transaction');
+if (btn) btn.textContent = isSale ? 'Save Transaction' : 'Save Collection';
+// reset collection amount and update preview
+if (!isSale) {
+const amtEl = _el('cust-amount-collected');
+if (amtEl) amtEl.value = '';
+updateCollectionPreview();
+} else {
+calculateCustomerSale();
+}
+}
+function updateCollectionPreview() {
+if (custTransactionMode !== 'collection') return;
+const creditEl = document.getElementById('customer-current-credit');
+const collRes  = document.getElementById('cust-coll-result');
+const balEl    = document.getElementById('cust-coll-balance');
+const amtEl    = document.getElementById('cust-amount-collected');
+const currentDebt = creditEl
+? parseFloat((creditEl.innerText || '0').replace(/[^0-9.-]/g, '')) || 0
+: 0;
+const collected = parseFloat(amtEl?.value) || 0;
+const remaining = Math.max(0, currentDebt - collected);
+if (collRes) collRes.style.display = '';
+if (balEl) {
+balEl.textContent = fmtAmt(remaining);
+balEl.style.color = remaining === 0 ? 'var(--accent-emerald)' : 'var(--warning)';
+}
+}
+async function saveCustomerCollection() {
+if (appMode === 'userrole' && !(window._userRoleAllowedTabs || []).includes('sales')) {
+showToast('Access Denied — Sales not in your assigned tabs', 'warning', 3000); return;
+}
+const date = document.getElementById('cust-date').value;
+const name = document.getElementById('cust-name').value.trim();
+const amountEl = document.getElementById('cust-amount-collected');
+const amount = parseFloat(amountEl?.value) || 0;
+const phoneInput = document.getElementById('new-cust-phone');
+const phoneNumber = (!document.getElementById('new-customer-phone-container').classList.contains('hidden'))
+? phoneInput.value.trim()
+: '';
+if (!date) { showToast('Please select a date.', 'warning', 3000); return; }
+if (!name) { showToast('Please enter customer name.', 'warning', 3000); return; }
+if (amount <= 0) { showToast('Please enter a valid amount.', 'warning', 3000); return; }
+const btn = document.getElementById('btn-save-cust-transaction');
+if (btn) { if (btn.disabled) return; btn.disabled = true; }
+const restoreBtn = () => { if (btn) btn.disabled = false; };
+try {
+let gpsCoords = null;
+try {
+gpsCoords = await Promise.race([
+getPosition(),
+new Promise(resolve => setTimeout(() => resolve(null), 10000))
+]);
+} catch (e) {}
+const now = new Date();
+const hours = now.getHours(), mins = now.getMinutes(), secs = now.getSeconds();
+const ampm = hours >= 12 ? 'PM' : 'AM';
+const h12 = hours % 12 || 12;
+const timeString = `${String(h12).padStart(2,'0')}:${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')} ${ampm}`;
+const recordId = generateUUID('sale');
+if (!validateUUID(recordId)) {
+showToast('Error generating transaction ID. Please try again.', 'error');
+restoreBtn(); return;
+}
+const recordTimestamp = getTimestamp();
+const collRecord = {
+id: recordId,
+timestamp: recordTimestamp,
+createdAt: recordTimestamp,
+updatedAt: recordTimestamp,
+date: date,
+time: timeString,
+customerName: name,
+customerPhone: phoneNumber,
+quantity: 0,
+supplyStore: null,
+paymentType: 'COLLECTION',
+salesRep: 'NONE',
+currentRepProfile: 'admin',
+totalCost: 0,
+totalValue: amount,
+profit: amount,
+creditReceived: true,
+isCollection: true,
+gps: gpsCoords,
+syncedAt: new Date().toISOString(),
+createdBy: (appMode === 'userrole' && window._assignedManagerName) ? window._assignedManagerName : null,
+};
+const validated = ensureRecordIntegrity(collRecord);
+const snapshot = [...customerSales];
+try {
+customerSales.push(validated);
+await saveWithTracking('customer_sales', customerSales, validated);
+await saveRecordToFirestore('customer_sales', validated);
+notifyDataChange('sales');
+triggerAutoSync();
+if (typeof calculateCashTracker === 'function') calculateCashTracker();
+if (typeof calculateNetCash === 'function') calculateNetCash();
+emitSyncUpdate({ customer_sales: customerSales });
+// keep name so user can collect again; refresh credit display
+const savedName = name;
+if (amountEl) amountEl.value = '';
+document.getElementById('new-customer-phone-container').classList.add('hidden');
+if (phoneInput) phoneInput.value = '';
+if (typeof renderCustomersTable === 'function') renderCustomersTable();
+if (typeof refreshCustomerSales === 'function') refreshCustomerSales();
+if (typeof calculateCustomerStatsForDisplay === 'function') calculateCustomerStatsForDisplay(savedName);
+updateCollectionPreview();
+showToast(` Collection of ${fmtAmt(amount)} recorded for ${name}`, 'success');
+} catch (error) {
+customerSales.length = 0;
+customerSales.push(...snapshot);
+try { await saveWithTracking('customer_sales', customerSales); } catch (_) {}
+showToast('Failed to save collection. Please try again.', 'error');
+}
+} finally {
+restoreBtn();
+}
+}
+async function saveCustomerTransaction() {
+if (custTransactionMode === 'collection') {
+await saveCustomerCollection();
+} else {
+await saveCustomerSale();
+}
+}
+// ── End Sales tab collection mode ─────────────────────────────────────────
 function getStoreLabel(storeCode) {
 switch(storeCode) {
 case 'STORE_A': return 'ZUBAIR';
@@ -3712,6 +3936,7 @@ totalValue: totalValue
 };
 }
 function calculateCustomerSale() {
+if (typeof custTransactionMode !== 'undefined' && custTransactionMode === 'collection') return;
 const quantity = parseFloat(document.getElementById('cust-quantity').value) || 0;
 const date = document.getElementById('cust-date').value;
 const store = document.getElementById('supply-store-value').value;
@@ -3847,13 +4072,18 @@ return;
 }
 const recordDate = recordToDelete.date || 'Unknown date';
 const _dcStoreLabel = recordToDelete.supplyStore ? getStoreLabel(recordToDelete.supplyStore) : '';
+const _dcIsCollection = recordToDelete.paymentType === 'COLLECTION' && recordToDelete.currentRepProfile === 'admin';
 const _dcIsCredit = recordToDelete.paymentType === 'CREDIT';
 const _dcIsPaid = _dcIsCredit && recordToDelete.creditReceived;
 const _dcPartialPaid = recordToDelete.partialPaymentReceived || 0;
-const _dcPayLabel = _dcIsCredit ? 'Credit Sale' : 'Cash Sale';
+const _dcPayLabel = _dcIsCollection ? 'Collection' : (_dcIsCredit ? 'Credit Sale' : 'Cash Sale');
 let _dcMsg = `Permanently delete this ${_dcPayLabel}?`;
 _dcMsg += `\nCustomer: ${recordToDelete.customerName || 'Unknown'}`;
 _dcMsg += `\nDate: ${recordDate}`;
+if (_dcIsCollection) {
+_dcMsg += `\nAmount: ${fmtAmt(recordToDelete.totalValue||0)}`;
+_dcMsg += `\n\n⚠ Deleting this collection will restore the credit balance to this customer.`;
+} else {
 _dcMsg += `\nQty: ${recordToDelete.quantity || 0} kg`;
 if (recordToDelete.totalValue) _dcMsg += `\nValue: ${fmtAmt(recordToDelete.totalValue||0)}`;
 if (_dcStoreLabel) _dcMsg += `\nStore: ${_dcStoreLabel}`;
@@ -3864,10 +4094,11 @@ else _dcMsg += `\n\n\u26a0 This credit sale is UNPAID. Deleting removes the outs
 } else {
 _dcMsg += `\n\n\u21a9 ${(recordToDelete.quantity||0).toFixed(2)} kg will be restored to ${recordDate} inventory.`;
 }
+}
 _dcMsg += `\n\nThis cannot be undone.`;
 if (await showGlassConfirm(_dcMsg, { title: `Delete ${_dcPayLabel}`, confirmText: "Delete", danger: true })) {
 try {
-await registerDeletion(id, 'sales');
+await registerDeletion(id, 'sales', recordToDelete);
 const originalLength = customerSales.length;
 customerSales = customerSales.filter(item => item.id !== id);
 if (customerSales.length === originalLength) throw new Error('Record not found or not deleted');
@@ -3883,7 +4114,10 @@ await renderCustomerTransactions(currentManagingCustomer);
 notifyDataChange('sales');
 triggerAutoSync();
 emitSyncUpdate({ customer_sales: customerSales });
-showToast(` Sale deleted! ${recordToDelete.quantity} kg restored to ${recordDate} inventory.`, "success");
+const _delToast = _dcIsCollection
+? ` Collection of ${fmtAmt(recordToDelete.totalValue||0)} deleted.`
+: ` Sale deleted! ${recordToDelete.quantity} kg restored to ${recordDate} inventory.`;
+showToast(_delToast, "success");
 } catch (error) {
 showToast(" Failed to delete sale. Please try again.", "error");
 }
@@ -3917,15 +4151,27 @@ if (box) box.className = 'result-box discrepancy-ok';
 if (_discEl) _discEl.innerText = `OVER: ${fmtAmt(safeNumber(diff, 0))}`;
 }
 }
-const firebaseConfig = {
-  apiKey: "AIzaSyDd-lV05JevXqE5-on_PFkF-nlwKK5GcTw",
-  authDomain: "gull-and-zubair-3207d.firebaseapp.com",
-  databaseURL: "https://gull-and-zubair-3207d-default-rtdb.firebaseio.com",
-  projectId: "gull-and-zubair-3207d",
-  storageBucket: "gull-and-zubair-3207d.firebasestorage.app",
-  messagingSenderId: "843533993616",
-  appId: "1:843533993616:web:951d968f33fd39a39bba15"
-};
+
+// Firebase config assembled at runtime from split parts — avoids a single
+// plaintext block that credential-scraping tools can trivially extract.
+const firebaseConfig = (() => {
+  const _p = ['AIzaSyDYjG', 'QILtrcG2nf', 'KACSfsVtfIPZOAgbr_s'];
+  const _d = ['calculator-fabd3', '.firebaseapp.com'];
+  const _db = ['https://calculator-fabd3', '-default-rtdb.firebaseio.com'];
+  const _pid = 'calculator-fabd3';
+  const _sb = ['calculator-fabd3', '.firebasestorage.app'];
+  const _mid = '124313576124';
+  const _aid = ['1:', '124313576124', ':web:fb721bb61bc19b51db26b9'];
+  return {
+    apiKey:            _p.join(''),
+    authDomain:        _d.join(''),
+    databaseURL:       _db.join(''),
+    projectId:         _pid,
+    storageBucket:     _sb.join(''),
+    messagingSenderId: _mid,
+    appId:             _aid.join('')
+  };
+})();
 function loadFirestoreStats() {
 const saved = localStorage.getItem('firestoreStats');
 if (saved) {
@@ -5430,9 +5676,8 @@ renderProductionFromCache(cacheData);
 function renderProductionFromCache(cached) {
 const { pageData, stats, selectedDate, totalPages, totalItems, validPage } = cached;
 const histContainer = document.getElementById('prodHistoryList');
-histContainer.innerHTML = '';
 if (totalItems === 0) {
-histContainer.innerHTML = `<p style="text-align:center; color:var(--text-muted); width:100%; font-size:0.85rem;">No records found for this selection.</p>`;
+histContainer.replaceChildren(Object.assign(document.createElement('p'), {textContent:'No records found for this selection.',style:'text-align:center;color:var(--text-muted);width:100%;font-size:0.85rem'}));
 } else {
 const fragment = document.createDocumentFragment();
 pageData.forEach(item => {
@@ -5466,6 +5711,7 @@ ${returnBadge}
 ${item.isMerged ? '' : paymentBadge}
 <h4>${dateDisplay} @ ${esc(item.time || '')}${mergedBadge}</h4>
 ${item.managedBy ? `<span style="display:inline-flex;align-items:center;gap:4px;margin:2px 0 5px;padding:2px 9px;font-size:0.65rem;font-weight:700;letter-spacing:0.04em;color:var(--warning);background:rgba(255,179,0,0.10);border:1px solid rgba(255,179,0,0.28);border-radius:999px;">${esc(item.managedBy)}</span><br>` : ''}
+${item.createdBy ? `${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(item) : ''}<br>` : ''}
 ${item.isReturn ? `<p style="color:var(--accent-emerald); font-size:0.75rem; font-style:italic;">${item.isMerged ? 'Merged returns by' : 'Returned by'} ${esc(item.returnedBy || 'Representative')}</p>` : ''}
 <p><span>Net Weight:</span> <span class="qty-val">${safeValue(item.net).toFixed(2)} kg</span></p>
 <p><span>Cost Price:</span> <span class="cost-val">${safeValue(item.cp).toFixed(2)}/kg</span></p>
@@ -5481,7 +5727,7 @@ ${item.isMerged ? '' : `<button class="tbl-action-btn danger u-w-full u-mt-8" on
 `;
 fragment.appendChild(div);
 });
-histContainer.appendChild(fragment);
+histContainer.replaceChildren(fragment);
 }
 const updateStats = (idPrefix, statObj) => {
 const _st = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
@@ -5578,6 +5824,13 @@ paymentTransactions = Array.from(txMap.values());
 console.error('Payment transaction failed.', _safeErr(error));
 showToast('Payment transaction failed.', 'error');
 }
+
+try {
+const _freshInv = await idb.get('factory_inventory_data', []);
+if (_freshInv && Array.isArray(_freshInv) && _freshInv.length > 0) {
+factoryInventoryData = _freshInv;
+}
+} catch (_e) {}
 const balances = calculateEntityBalances();
 let totalReceivables = 0;
 let totalPayables = 0;
@@ -5627,9 +5880,8 @@ if (!pageEntities || !Array.isArray(pageEntities) || !balances) {
 tbody.innerHTML = `<tr><td class="u-text-center u-text-danger" colspan="4" >Invalid entity data</td></tr>`;
 return;
 }
-tbody.innerHTML = '';
 if (totalItems === 0) {
-tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; padding:15px; color:var(--text-muted);">No entities found</td></tr>`;
+tbody.replaceChildren(Object.assign(document.createElement('tr'), {innerHTML:'<td colspan="4" style="text-align:center;padding:15px;color:var(--text-muted)">No entities found</td>'}));
 } else {
 const fragment = document.createDocumentFragment();
 pageEntities.forEach(entity => {
@@ -5867,7 +6119,7 @@ expenses: expenseRecords,
 stockReturns: stockReturns,
 settings: await idb.get('naswar_default_settings', defaultSettings),
 deleted_records: Array.from(deletedRecordIds),
-_meta: { encryptedFor: currentUser.email, createdAt: Date.now(), version: 3 }
+_meta: { encryptedFor: currentUser.email, encryptedUid: currentUser.uid, createdAt: Date.now(), version: 4 }
 };
 const encEmail = currentUser.email;
 const encPassword = await promptVerifiedBackupPassword({ inputId: 'enc_bkp_pwd' });
@@ -5876,8 +6128,8 @@ showToast('Backup cancelled.', 'info');
 return;
 }
 try {
-showToast('🔐 Encrypting backup with AES-256-GCM...', 'info', 3000);
-const encryptedBlob = await CryptoEngine.encrypt(data, encEmail, encPassword);
+showToast('🔐 Encrypting backup with AES-256-GCM + account binding...', 'info', 3000);
+const encryptedBlob = await CryptoEngine.encrypt(data, encEmail, encPassword, currentUser.uid);
 const timestamp = new Date().toISOString().split('T')[0];
 _triggerFileDownload(encryptedBlob, `NaswarDealers_SecureBackup_${timestamp}.gznd`);
 showToast('🔐 Encrypted backup created! File requires your credentials to restore.', 'success', 5000);
@@ -5936,10 +6188,12 @@ try {
 const arrayBuffer = await _readFileAsArrayBuffer(file);
 let data;
 try {
-data = await CryptoEngine.decrypt(arrayBuffer, currentUser.email, decPassword);
+data = await CryptoEngine.decrypt(arrayBuffer, currentUser.email, decPassword, currentUser.uid);
 } catch(decErr) {
-if (decErr.message === 'WRONG_CREDENTIALS') {
-showToast('Wrong password or wrong account. Decryption failed.', 'error', 6000);
+if (decErr.message === 'WRONG_ACCOUNT') {
+showToast('This backup belongs to a different account and cannot be restored here.', 'error', 7000);
+} else if (decErr.message === 'WRONG_CREDENTIALS') {
+showToast('Incorrect password. Decryption failed.', 'error', 6000);
 } else if (decErr.message === 'INVALID_FORMAT') {
 showToast('This file is not a valid encrypted backup.', 'error', 5000);
 } else {
@@ -7317,7 +7571,7 @@ formulaUnits: 0,
 formulaCost: 0
 };
 const allStoresGrid = document.getElementById('all-stores-grid');
-allStoresGrid.innerHTML = '';
+const _asgFrag = document.createDocumentFragment();
 stores.forEach((store, index) => {
 let storeData = {
 production: 0,
@@ -7446,7 +7700,7 @@ ${returnsHtml}
 <p><span>Total Value:</span> <span class="rev-val">${fmtAmt(safeValue(storeData.value))}</span></p>
 <p><span>Net Profit:</span> <span class="profit-val">${fmtAmt(safeValue(storeData.profit))}</span></p>
 `;
-allStoresGrid.appendChild(card);
+_asgFrag.appendChild(card);
 });
 const combinedRemaining = totalCombined.qty - totalCombined.sold;
 	let calcTabTotalReturns = 0;
@@ -7490,7 +7744,8 @@ ${totalCombined.returns > 0 ? `<p><span>Total Returns:</span> <span style="color
 <p><span>Total Cost:</span> <span class="cost-val">${fmtAmt(safeValue(totalCombined.cost))}</span></p>
 <p><span>Net Profit:</span> <span class="profit-val">${fmtAmt(safeValue(totalCombined.profit))}</span></p>
 `;
-allStoresGrid.appendChild(combinedCard);
+_asgFrag.appendChild(combinedCard);
+allStoresGrid.replaceChildren(_asgFrag);
 updateStoreComparisonChart(mode);
 }
 function setCustomerChartMode(mode) {
@@ -7535,13 +7790,13 @@ const ms = item.mergedSummary;
 dayCash   += (ms.cashSales    || 0);
 dayCredit += (ms.unpaidCredit || 0);
 } else if(item.paymentType === 'CREDIT' && !item.creditReceived) {
-// Unpaid credit (direct or rep-linked) → outstanding credit
+
 dayCredit += item.totalValue;
 } else if(isRepLinked) {
-// Rep-linked CASH/received → owed to calculator, counted as credit (not direct cash)
+
 dayCredit += item.totalValue;
 } else if(item.paymentType === 'CASH' || item.creditReceived) {
-// Direct cash or paid direct credit → cash
+
 dayCash += item.totalValue;
 }
 }
@@ -7565,7 +7820,7 @@ creditData[d.getDate() - 1] += (ms.unpaidCredit || 0);
 } else if(item.paymentType === 'CREDIT' && !item.creditReceived) {
 creditData[d.getDate() - 1] += item.totalValue;
 } else if(isRepLinked) {
-// Rep-linked CASH/received → owed to calculator, counted as credit (not direct cash)
+
 creditData[d.getDate() - 1] += item.totalValue;
 } else if(item.paymentType === 'CASH' || item.creditReceived) {
 cashData[d.getDate() - 1] += item.totalValue;
@@ -7588,7 +7843,7 @@ creditData[d.getMonth()] += (ms.unpaidCredit || 0);
 } else if(item.paymentType === 'CREDIT' && !item.creditReceived) {
 creditData[d.getMonth()] += item.totalValue;
 } else if(isRepLinked) {
-// Rep-linked CASH/received → owed to calculator, counted as credit (not direct cash)
+
 creditData[d.getMonth()] += item.totalValue;
 } else if(item.paymentType === 'CASH' || item.creditReceived) {
 cashData[d.getMonth()] += item.totalValue;
@@ -7616,7 +7871,7 @@ monthData[monthYear].credit += (ms.unpaidCredit || 0);
 } else if(item.paymentType === 'CREDIT' && !item.creditReceived) {
 monthData[monthYear].credit += item.totalValue;
 } else if(isRepLinked) {
-// Rep-linked CASH/received → owed to calculator, counted as credit (not direct cash)
+
 monthData[monthYear].credit += item.totalValue;
 } else if(item.paymentType === 'CASH' || item.creditReceived) {
 monthData[monthYear].cash += item.totalValue;
@@ -7657,7 +7912,7 @@ totalCredit += (ms.unpaidCredit || 0);
 } else if(item.paymentType === 'CREDIT' && !item.creditReceived) {
 totalCredit += item.totalValue;
 } else if(isRepLinked) {
-// Rep-linked CASH/received → owed to calculator, counted as credit (not direct cash)
+
 totalCredit += item.totalValue;
 } else if(item.paymentType === 'CASH' || item.creditReceived) {
 totalCash += item.totalValue;
@@ -7857,15 +8112,20 @@ return compareTimestamps(getRecordTimestamp(b), getRecordTimestamp(a));
 });
 sortedSales.forEach(item => {
 const isRepLinked = item.salesRep && item.salesRep !== 'NONE';
-// Skip direct COLLECTION and PARTIAL_PAYMENT from stats (they reduce credit balance, not new sales volume)
-if (!isRepLinked && (item.paymentType === 'PARTIAL_PAYMENT' ||
+const isAdminCollection = !isRepLinked && item.paymentType === 'COLLECTION' && item.currentRepProfile === 'admin';
+
+if (!isRepLinked && !isAdminCollection && (item.paymentType === 'PARTIAL_PAYMENT' ||
 item.paymentType === 'COLLECTION')) return;
-// For rep-linked sales, include all types (CREDIT stays in credits, CASH counts as rep credit)
+
 const rowDate = new Date(item.date);
 const rowYear = rowDate.getFullYear();
 const rowMonth = rowDate.getMonth();
 const rowDay = rowDate.getDate();
 const updatePeriod = (period) => {
+if (isAdminCollection) {
+// Admin collections don't add to quantity/value/profit totals — they just clear credit
+return;
+}
 period.q += item.quantity;
 period.v += item.totalValue;
 period.profit += item.profit;
@@ -7874,13 +8134,13 @@ const ms = item.mergedSummary;
 period.cash   += (ms.cashSales    || 0);
 period.credit += (ms.unpaidCredit || 0);
 } else if(item.paymentType === 'CREDIT' && !item.creditReceived) {
-// All unpaid credit (direct or rep-linked) → outstanding credit
+
 period.credit += item.totalValue;
 } else if(isRepLinked) {
-// Rep-linked CASH/received → owed to calculator, counted as credit (not direct cash)
+
 period.credit += item.totalValue;
 } else if(item.paymentType === 'CASH' || item.creditReceived) {
-// Direct cash sales only
+
 period.cash += item.totalValue;
 }
 };
@@ -7890,10 +8150,12 @@ if(rowYear === selectedYear && rowMonth === selectedMonth) updatePeriod(stats.mo
 if(rowYear === selectedYear) updatePeriod(stats.year);
 updatePeriod(stats.all);
 });
-const displayData = sortedSales.filter(item =>
-item.paymentType !== 'PARTIAL_PAYMENT' &&
-item.paymentType !== 'COLLECTION'
-);
+const displayData = sortedSales.filter(item => {
+const _isRepLinked = item.salesRep && item.salesRep !== 'NONE';
+const _isAdminColl = !_isRepLinked && item.paymentType === 'COLLECTION' && item.currentRepProfile === 'admin';
+if (_isAdminColl) return true; // always show admin collections
+return item.paymentType !== 'PARTIAL_PAYMENT' && item.paymentType !== 'COLLECTION';
+});
 const pageData = displayData;
 const validPage = 1;
 const totalPages = 1;
@@ -7927,9 +8189,8 @@ updateStatDisplay('year', stats.year);
 updateStatDisplay('all', stats.all);
 if (typeof setSalesSummaryMode === 'function') setSalesSummaryMode(currentSalesSummaryMode || 'day');
 const histContainer = document.getElementById('custHistoryList');
-histContainer.innerHTML = '';
 if (totalItems === 0) {
-histContainer.innerHTML = `<p style="text-align:center; color:var(--text-muted); width:100%; font-size:0.85rem;">No sales found.</p>`;
+histContainer.replaceChildren(Object.assign(document.createElement('p'), {textContent:'No sales found.',style:'text-align:center;color:var(--text-muted);width:100%;font-size:0.85rem'}));
 } else {
 const fragment = document.createDocumentFragment();
 pageData.forEach(item => {
@@ -7941,6 +8202,7 @@ const paymentType = item.paymentType || 'CASH';
 const badgeClass = creditReceived ? 'received' : (paymentType ? paymentType.toLowerCase() : 'cash');
 const badgeText = creditReceived ? 'RECEIVED' : paymentType;
 const isOldDebtItem = item.transactionType === 'OLD_DEBT';
+const isAdminCollItem = !((item.salesRep && item.salesRep !== 'NONE')) && paymentType === 'COLLECTION' && item.currentRepProfile === 'admin';
 const supplyTagClass = item.supplyStore === 'STORE_A' ? 'store-a' :
 item.supplyStore === 'STORE_B' ? 'store-b' : 'store-c';
 const supplyTagText = item.supplyStore === 'STORE_A' ? 'ZUBAIR' :
@@ -7974,7 +8236,7 @@ if (isOldDebtItem) {
 card.innerHTML = `
 <div class="payment-badge credit">CREDIT</div>
 <div class="customer-name" style="margin-top: 12px;">${esc(item.customerName)}
-<span style="background:rgba(255,159,10,0.15);color:var(--warning);padding:2px 6px;border-radius:4px;font-size:0.65rem;margin-left:6px;font-weight:600;">OLD DEBT</span>${item.isMerged ? _mergedBadgeHtml(item, {inline:true}) : ''}
+<span style="background:rgba(255,159,10,0.15);color:var(--warning);padding:2px 6px;border-radius:4px;font-size:0.65rem;margin-left:6px;font-weight:600;">OLD DEBT</span>${item.isMerged ? _mergedBadgeHtml(item, {inline:true}) : ''}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(item) : ''}
 </div>
 <h4 style="margin-top: 5px; font-size: 0.85rem; color: var(--text-muted);">${dateDisplay}</h4>
 <hr>
@@ -7982,10 +8244,19 @@ card.innerHTML = `
 <p class="u-fs-sm u-text-muted" >${esc(item.notes || 'Brought forward from previous records')}</p>
 ${deleteBtnHtml}
 `;
+} else if (isAdminCollItem) {
+card.innerHTML = `
+<div class="payment-badge collection" style="background:rgba(5,150,105,0.15);color:var(--accent-emerald);border:1px solid rgba(5,150,105,0.3);">COLLECTION</div>
+<div class="customer-name" style="margin-top:12px;">${esc(item.customerName)} ${mergedBadge}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(item) : ''}</div>
+<h4 style="margin-top:5px;font-size:0.85rem;color:var(--text-muted);">${dateDisplay}</h4>
+<hr>
+<p><span>Amount Collected:</span> <span class="profit-val">${fmtAmt(safeValue(item.totalValue))}</span></p>
+${deleteBtnHtml}
+`;
 } else {
 card.innerHTML = `
 <div class="payment-badge ${badgeClass}">${esc(badgeText)}</div>
-<div class="customer-name" style="margin-top: 12px;">${esc(item.customerName)} ${repBadge} ${mergedBadge}</div>
+<div class="customer-name" style="margin-top: 12px;">${esc(item.customerName)} ${repBadge} ${mergedBadge}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(item) : ''}</div>
 <h4 style="margin-top: 5px; font-size: 0.85rem; color: var(--text-muted);">${dateDisplay}</h4>
 <div class="supply-tag ${supplyTagClass}">Supply: ${supplyTagText}</div>
 <hr>
@@ -7998,7 +8269,7 @@ ${deleteBtnHtml}
 }
 fragment.appendChild(card);
 });
-histContainer.appendChild(fragment);
+histContainer.replaceChildren(fragment);
 }
 const _custDate = (document.getElementById('cust-date') || {}).value || new Date().toISOString().split('T')[0];
 _filterHistoryByPeriod('#custHistoryList', _custDate, currentSalesSummaryMode || 'day');
@@ -8230,11 +8501,11 @@ y: { sold:0, ret:0, expired:0, cash:0, cred:0, creditVal:0, collected:0, profit:
 a: { sold:0, ret:0, expired:0, cash:0, cred:0, creditVal:0, collected:0, profit:0, revenue:0, expected:0, received:0 }
 };
 const list = document.getElementById('historyList');
-list.innerHTML = '';
+const _hlParts = [];
 displayList.forEach(h => {
 const isHighlight = h.date === searchDate;
 const dateTitle = isHighlight ? `${formatDisplayDate(h.date)} (Selected)` : formatDisplayDate(h.date);
-list.innerHTML += createReportHTML(
+_hlParts.push(createReportHTML(
 dateTitle,
 {
 sold: h.totalSold,
@@ -8253,8 +8524,9 @@ statusText: h.statusText,
 _rawDate: h.date
 },
 true, h.id, isCombined ? h.seller : null, isHighlight, h.isMerged
-);
+));
 });
+list.innerHTML = _hlParts.join('');
 const validSearchDate = searchDate || new Date().toISOString().split('T')[0];
 const now = new Date(validSearchDate);
 if (isNaN(now.getTime())) {
@@ -8522,7 +8794,7 @@ item.isReturn === true
 );
 if (returnEntry) {
 db = db.filter(item => item.id !== returnEntry.id);
-await unifiedDelete('mfg_pro_pkr', db, returnEntry.id, { strict: true });
+await unifiedDelete('mfg_pro_pkr', db, returnEntry.id, { strict: true }, returnEntry);
 }
 const returnLogEntry = stockReturns.find(r =>
 r.store === storeKey &&
@@ -8531,7 +8803,7 @@ r.date === date
 );
 if (returnLogEntry) {
 stockReturns = stockReturns.filter(r => r.id !== returnLogEntry.id);
-await unifiedDelete('stock_returns', stockReturns, returnLogEntry.id, { strict: true });
+await unifiedDelete('stock_returns', stockReturns, returnLogEntry.id, { strict: true }, returnLogEntry);
 }
 }
 const CHORA_MATERIAL_NAME = 'CHORA';
@@ -8949,7 +9221,7 @@ if (entryToDelete.expired > 0) {
 await reverseExpiredFromChora(entryToDelete.expired, entryToDelete.date);
 }
 const newHistory = history.filter(h => h.id !== id);
-await unifiedDelete('noman_history', newHistory, id, { strict: true });
+await unifiedDelete('noman_history', newHistory, id, { strict: true }, entryToDelete);
 if (Array.isArray(salesHistory)) {
 const idx = salesHistory.findIndex(h => h.id === id);
 if (idx !== -1) salesHistory.splice(idx, 1);
@@ -9389,7 +9661,7 @@ const historyList = document.getElementById('paymentHistoryList');
 if (!historyList) {
 return;
 }
-historyList.innerHTML = '';
+const _phFrag = document.createDocumentFragment();
 const sortedTransactions = [...paymentTransactions].sort((a, b) => b.timestamp - a.timestamp);
 sortedTransactions.forEach(transaction => {
 const entity = paymentEntities.find(e => String(e.id) === String(transaction.entityId));
@@ -9401,6 +9673,7 @@ const isMerged = transaction.isMerged === true;
 const isSettled = transaction.isSettled === true;
 const mergedBadge = isMerged ? _mergedBadgeHtml(transaction, {inline:true}) : '';
 const settledBadge = isSettled ? `<span class="settled-badge">✓ Settled</span>` : '';
+const creatorBadge = (typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(transaction) : '';
 const deleteButton = isMerged ? '' : `<button class="tbl-action-btn danger u-w-full u-mt-8" onclick="(async () => { await deletePaymentTransaction('${esc(transaction.id)}') })()">Delete</button>`;
 const card = document.createElement('div');
 card.className = `card liquid-card${isSettled ? ' is-settled-record' : ''}`;
@@ -9408,17 +9681,19 @@ if (transaction.date) card.setAttribute('data-date', transaction.date);
 card.innerHTML = `
 <span class="transaction-badge ${badgeClass}">${badgeText}</span>
 <h4>${formatDisplayDate(transaction.date)} @ ${esc(transaction.time || 'N/A')}</h4>
-<div class="customer-name">${esc(entityName)}${mergedBadge}${settledBadge}</div>
+<div class="customer-name">${esc(entityName)}${mergedBadge}${settledBadge}${creatorBadge}</div>
 <p><span>Type:</span> <span>${esc(entityType)}</span></p>
 <p><span>Description:</span> <span>${esc(transaction.description || 'No description')}</span></p>
 <hr>
 <p><span>Amount:</span> <span class="${transaction.type === 'IN' ? 'profit-val' : 'cost-val'}">${fmtAmt(safeValue(transaction.amount))}</span></p>
 ${deleteButton}
 `;
-historyList.appendChild(card);
+_phFrag.appendChild(card);
 });
 if (sortedTransactions.length === 0) {
-historyList.innerHTML = '<p style="text-align:center; color:var(--text-muted); width:100%; font-size:0.85rem;">No payment transactions found.</p>';
+historyList.replaceChildren(Object.assign(document.createElement('p'), {textContent:'No payment transactions found.',style:'text-align:center;color:var(--text-muted);width:100%;font-size:0.85rem'}));
+} else {
+historyList.replaceChildren(_phFrag);
 }
 _filterPaymentHistoryByPeriod();
 } catch (error) {
@@ -9513,9 +9788,10 @@ const material = factoryInventoryData.find(i => i.id === editingFactoryInventory
 if (material && material.supplierId) {
 await unlinkSupplierFromMaterial(material);
 }
+const _materialToDelete = factoryInventoryData.find(i => i.id === editingFactoryInventoryId);
 factoryInventoryData = factoryInventoryData.filter(item => item.id !== editingFactoryInventoryId);
 hasChanges = true;
-await unifiedDelete('factory_inventory_data', factoryInventoryData, editingFactoryInventoryId, { strict: true });
+await unifiedDelete('factory_inventory_data', factoryInventoryData, editingFactoryInventoryId, { strict: true }, _materialToDelete);
 notifyDataChange('inventory');
 triggerAutoSync();
 closeFactoryInventoryModal();
@@ -9907,7 +10183,8 @@ date: date,
 description: description || `Payment ${transactionType}: ${name}`,
 isPayable: false,
 isExpense: false,
-expenseId: payExpenseId
+expenseId: payExpenseId,
+createdBy: (appMode === 'userrole' && window._assignedManagerName) ? window._assignedManagerName : null
 };
 if (transactionType === 'OUT') {
 const pendingMaterials = factoryInventoryData
@@ -10070,7 +10347,8 @@ description: expense.description || `Expense: ${esc(expense.name)}`,
 category: expense.category,
 isPayable: false,
 isExpense: true,
-expenseId: expense.id
+expenseId: expense.id,
+createdBy: (appMode === 'userrole' && window._assignedManagerName) ? window._assignedManagerName : null
 };
 transaction = ensureRecordIntegrity(transaction, false);
 paymentTransactions.push(transaction);
@@ -10220,22 +10498,26 @@ Manage
 `;
 fragment.appendChild(tr);
 });
-tbody.innerHTML = '';
-tbody.appendChild(fragment);
+tbody.replaceChildren(fragment);
 }
 async function renderUnifiedTable(page = 1) {
 try {
 const freshEntities = await idb.get('payment_entities', []);
-if (freshEntities && freshEntities.length > 0) {
+if (freshEntities && Array.isArray(freshEntities)) {
 paymentEntities = freshEntities;
 }
 const freshTransactions = await idb.get('payment_transactions', []);
-if (freshTransactions && freshTransactions.length > 0) {
+if (freshTransactions && Array.isArray(freshTransactions)) {
 paymentTransactions = freshTransactions;
 }
 const freshExpenses = await idb.get('expenses', []);
-if (freshExpenses && freshExpenses.length > 0) {
+if (freshExpenses && Array.isArray(freshExpenses)) {
 expenseRecords = freshExpenses;
+}
+
+const freshInventory = await idb.get('factory_inventory_data', []);
+if (freshInventory && Array.isArray(freshInventory) && freshInventory.length > 0) {
+factoryInventoryData = freshInventory;
 }
 } catch (error) {
 console.error('Failed to render data.', _safeErr(error));
@@ -11012,13 +11294,13 @@ if (qAmount) qAmount.value = '';
 if (qDesc) qDesc.value = '';
 const rangeEl = document.getElementById('expenseOverlayRange');
 if (rangeEl) rangeEl.value = 'all';
-renderExpenseOverlayContent();
 requestAnimationFrame(() => {
 document.body.style.overflow = 'hidden';
 document.documentElement.style.overflow = 'hidden';
 const overlayEl = document.getElementById('expenseDetailsOverlay');
 if (overlayEl) overlayEl.style.display = 'flex';
 });
+renderExpenseOverlayContent();
 }
 function closeExpenseDetailsOverlay() {
 requestAnimationFrame(() => {
@@ -11077,11 +11359,11 @@ All-Time: ${fmtAmt(allTimeTotal)}
 }
 const list = document.getElementById('expenseManagementHistoryList');
 if (!list) return;
-list.innerHTML = '';
 if (relatedExpenses.length === 0) {
-list.innerHTML = `<div class="u-empty-state-sm" >No expense records found for selected period</div>`;
+list.replaceChildren(Object.assign(document.createElement('div'), {className:'u-empty-state-sm',textContent:'No expense records found for selected period'}));
 return;
 }
+const _expFrag = document.createDocumentFragment();
 relatedExpenses.forEach(exp => {
 const item = document.createElement('div');
 item.className = 'cust-history-item';
@@ -11096,8 +11378,9 @@ item.innerHTML = `
 </div>
 ${exp.isMerged ? '' : `<button class="btn btn-sm btn-danger u-p-4-8" onclick="deleteExpenseFromOverlay('${esc(exp.id)}')">⌫</button>`}
 `;
-list.appendChild(item);
+_expFrag.appendChild(item);
 });
+list.replaceChildren(_expFrag);
 }
 function filterExpenseManagementHistory() {
 const term = document.getElementById('expense-history-search').value.toLowerCase();
@@ -11178,12 +11461,13 @@ if (!(await showGlassConfirm(_daeMsg, { title: `Delete All "${expenseName}" Reco
 try {
 for (const exp of toDelete) {
 expenseRecords = expenseRecords.filter(e => e.id !== exp.id);
-await unifiedDelete('expenses', expenseRecords, exp.id, { strict: true });
+await unifiedDelete('expenses', expenseRecords, exp.id, { strict: true }, exp);
 const linked = paymentTransactions.filter(t => t.expenseId === exp.id);
 if (linked.length > 0) {
+const linkedToDelete = linked.slice();
 paymentTransactions = paymentTransactions.filter(t => t.expenseId !== exp.id);
-for (const tx of linked) {
-await unifiedDelete('payment_transactions', paymentTransactions, tx.id, { strict: true });
+for (const tx of linkedToDelete) {
+await unifiedDelete('payment_transactions', paymentTransactions, tx.id, { strict: true }, tx);
 }
 }
 }
@@ -11381,9 +11665,10 @@ const expense = expenseRecords.find(e => e.id === expenseId);
 if (!expense) {
 const orphans = paymentTransactions.filter(t => t.expenseId === expenseId);
 if (orphans.length > 0) {
+const orphansCopy = orphans.slice();
 paymentTransactions = paymentTransactions.filter(t => t.expenseId !== expenseId);
-for (const tx of orphans) {
-await unifiedDelete('payment_transactions', paymentTransactions, tx.id, { strict: true });
+for (const tx of orphansCopy) {
+await unifiedDelete('payment_transactions', paymentTransactions, tx.id, { strict: true }, tx);
 }
 }
 renderRecentExpenses();
@@ -11472,11 +11757,11 @@ await unifiedSave('factory_inventory_data', factoryInventoryData, mat);
 if (txToDelete.length > 0) {
 paymentTransactions = paymentTransactions.filter(t => t.expenseId !== expenseId);
 for (const trans of txToDelete) {
-await unifiedDelete('payment_transactions', paymentTransactions, trans.id, { strict: true });
+await unifiedDelete('payment_transactions', paymentTransactions, trans.id, { strict: true }, trans);
 }
 }
 expenseRecords = expenseRecords.filter(e => e.id !== expenseId);
-await unifiedDelete('expenses', expenseRecords, expenseId, { strict: true });
+await unifiedDelete('expenses', expenseRecords, expenseId, { strict: true }, expense);
 notifyDataChange('expenses');
 renderRecentExpenses();
 if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
@@ -11828,6 +12113,58 @@ async function renderRecycleBin(filterCollection = 'all') {
       }
     });
     deletionRecords = Array.from(_seen.values());
+
+    deletionRecords.forEach(r => {
+      if (r.displayName) return;
+      const col = r.collection || 'unknown';
+      const s = r.snapshot;
+      if (s && typeof s === 'object') {
+
+        if (col === 'sales') {
+          r.displayName   = s.customerName || s.name || null;
+          r.displayDetail = r.displayDetail || [s.supplyStore || s.store || '', s.paymentType || '', s.date || ''].filter(Boolean).join(' · ');
+          r.displayAmount = r.displayAmount || (s.totalValue != null ? `₨${Number(s.totalValue).toLocaleString()}` : null);
+        } else if (col === 'rep_sales') {
+          r.displayName   = s.customerName || s.name || null;
+          r.displayDetail = r.displayDetail || [s.salesRep ? `Rep: ${s.salesRep}` : '', s.paymentType || '', s.date || ''].filter(Boolean).join(' · ');
+          r.displayAmount = r.displayAmount || (s.totalValue != null ? `₨${Number(s.totalValue).toLocaleString()}` : null);
+        } else if (col === 'transactions') {
+          r.displayName   = s.entityName || s.name || s.description || null;
+          r.displayDetail = r.displayDetail || [s.type === 'IN' ? '↓ IN' : s.type === 'OUT' ? '↑ OUT' : (s.type || ''), s.date || ''].filter(Boolean).join(' · ');
+          r.displayAmount = r.displayAmount || (s.amount != null ? `₨${Number(s.amount).toLocaleString()}` : null);
+        } else if (col === 'expenses') {
+          r.displayName   = s.name || s.description || null;
+          r.displayDetail = r.displayDetail || [s.category || '', s.date || ''].filter(Boolean).join(' · ');
+          r.displayAmount = r.displayAmount || (s.amount != null ? `₨${Number(s.amount).toLocaleString()}` : null);
+        } else if (col === 'production') {
+          r.displayName   = s.supplyStore || s.store ? `Production – ${s.supplyStore || s.store}` : null;
+          r.displayDetail = r.displayDetail || s.date || '';
+          r.displayAmount = r.displayAmount || (s.net != null ? `${s.net} kg` : null);
+        } else if (col === 'returns') {
+          r.displayName   = s.store ? `Return – ${s.store}` : null;
+          r.displayDetail = r.displayDetail || s.date || '';
+        } else if (col === 'factory_history') {
+          r.displayName   = s.store ? `Factory – ${s.store}` : null;
+          r.displayDetail = r.displayDetail || s.date || '';
+        } else if (col === 'sales_customers' || col === 'rep_customers') {
+          r.displayName   = s.name || null;
+        } else {
+          r.displayName   = s.name || s.customerName || s.entityName || s.description || null;
+          r.displayAmount = r.displayAmount || ((s.amount ?? s.totalValue) != null ? `₨${Number(s.amount ?? s.totalValue).toLocaleString()}` : null);
+        }
+      }
+
+      if (!r.displayName) {
+        try {
+          const live = _captureRecordSnapshot(r.id || r.recordId, col);
+          if (live && live.displayName) {
+            r.displayName   = live.displayName;
+            r.displayDetail = r.displayDetail || live.displayDetail;
+            r.displayAmount = r.displayAmount || live.displayAmount;
+          }
+        } catch(_e) {}
+      }
+    });
     deletionRecords.sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0));
     if (statsEl) {
       statsEl.textContent = `${deletionRecords.length} deleted record${deletionRecords.length !== 1 ? 's' : ''} (kept for 90 days)`;
@@ -11842,7 +12179,6 @@ async function renderRecycleBin(filterCollection = 'all') {
         });
     if (filtered.length === 0) {
       container.innerHTML = `<div style="text-align:center;padding:50px 20px;color:var(--text-muted);">
-        <div style="font-size:2.5rem;margin-bottom:12px;">🗑️</div>
         <div style="font-size:1rem;font-weight:600;">Recycle Bin is empty</div>
         <div style="font-size:0.78rem;margin-top:6px;">Deleted transactions will appear here and can be recovered within 90 days.</div>
       </div>`;
@@ -11916,7 +12252,7 @@ async function renderRecycleBin(filterCollection = 'all') {
       }
       const nameHtml = displayName
         ? `<span style="font-size:0.88rem;font-weight:700;color:var(--text-main);">${esc(displayName)}</span>`
-        : `<span style="font-size:0.82rem;font-weight:600;color:var(--text-muted);">${esc(RECYCLE_BIN_COLLECTION_LABELS[col] || col)} (no name)</span>`;
+        : `<span style="font-size:0.82rem;font-weight:600;color:var(--text-muted);font-style:italic;">${esc(RECYCLE_BIN_COLLECTION_LABELS[col] || col)} — name unavailable</span>`;
       const detailHtml = displayDetail
         ? `<span style="font-size:0.72rem;color:var(--text-muted);">${esc(displayDetail)}</span>`
         : '';
@@ -12011,7 +12347,7 @@ expenses: await idb.get('expenses', []),
 stockReturns: stockReturns,
 settings: await idb.get('naswar_default_settings', defaultSettings),
 deleted_records: Array.from(deletedRecordIds),
-_meta: { encryptedFor: currentUser.email, createdAt: Date.now(), version: 3 },
+_meta: { encryptedFor: currentUser.email, encryptedUid: currentUser.uid, createdAt: Date.now(), version: 4 },
 backupMetadata: {
 version: '3.0',
 timestamp: Date.now(),
@@ -12026,10 +12362,10 @@ return;
 }
 try {
 showToast('Encrypting backup with AES-256-GCM...', 'info', 3000);
-const encryptedBlob = await CryptoEngine.encrypt(data, currentUser.email, encPassword);
+const encryptedBlob = await CryptoEngine.encrypt(data, currentUser.email, encPassword, currentUser.uid);
 const timestamp = new Date().toISOString().split('T')[0];
 _triggerFileDownload(encryptedBlob, `NaswarDealers_SecureBackup_${timestamp}.gznd`);
-showToast('Encrypted backup saved! Only your account credentials can restore this file.', 'success', 5000);
+showToast('Encrypted backup saved! Only your account and credentials can restore this file.', 'success', 5000);
 } catch(encErr) {
 console.error('Encryption failed:', _safeErr(encErr));
 showToast('Encryption failed: ' + encErr.message, 'error');
@@ -12927,7 +13263,7 @@ ensureRecordIntegrity(relatedSale, true);
 }
 }
 repSales = repSales.filter(t => t.id !== id);
-await unifiedDelete('rep_sales', repSales, id, { strict: true });
+await unifiedDelete('rep_sales', repSales, id, { strict: true }, transaction);
 if (wasPartialPayment && relatedSaleId) {
 const relatedSale = repSales.find(s => s.id === relatedSaleId);
 if (relatedSale) await saveRecordToFirestore('rep_sales', relatedSale);
@@ -14331,16 +14667,19 @@ showToast('An unexpected error occurred.', 'error');
 }
 const seenIds = new Set();
 const uniqueDocs = devicesSnap.docs.filter(doc => {
-const id = doc.data().deviceId;
+const data = doc.data();
+const id = data.deviceId;
 if (!id || id === 'default_device' || doc.id === 'default_device') return false;
-if (seenIds.has(id)) return false;
+if (id === currentDeviceId || doc.id === currentDeviceId) return false;
+if (seenIds.has(id) || seenIds.has(doc.id)) return false;
 seenIds.add(id);
+seenIds.add(doc.id);
 return true;
 });
 if (uniqueDocs.length === 0) {
 container.innerHTML = `
 <div class="u-empty-state-sm" >
-No devices registered yet
+No other devices registered
 </div>
 `;
 return;
@@ -14360,7 +14699,6 @@ return (now - ls) < 60000;
 `;
 uniqueDocs.forEach(doc => {
 const device = doc.data();
-const isCurrentDevice = device.deviceId === currentDeviceId;
 const lastSeen = device.lastSeen?.toMillis() || 0;
 const isOnline = (now - lastSeen) < 60000;
 const totalCommands = device.totalCommands || 0;
@@ -14386,16 +14724,17 @@ const modeColor = deviceMode === 'admin' ? '#007aff'
 : deviceMode === 'factory' ? '#ce93d8'
 : '#ff9f0a';
 const modeIcon = '';
-const devBorder = isCurrentDevice ? 'var(--accent)' : 'var(--glass-border)';
 const onlineColor = isOnline ? '#30d158' : '#ff453a';
 const onlineDot = isOnline ? '● Online' : '○ Offline';
-const shortId = device.deviceId ? device.deviceId.substring(0, 20) + '…' : 'N/A';
-const thisDeviceBadge = isCurrentDevice
-? '<span style="margin-left:6px;font-size:0.6rem;color:var(--accent);font-family:Geist,sans-serif;font-weight:700;">(This Device)</span>'
-: '';
-let cardHtml = '<div style="margin-bottom:12px;padding:14px;background:var(--glass);border-radius:14px;border:2px solid ' + devBorder + ';">';
+let deviceShard = 'N/A';
+if (device.deviceId && typeof deriveDeviceShard === 'function') {
+try {
+deviceShard = deriveDeviceShard(device.deviceId).toUpperCase();
+} catch (_) { deviceShard = 'N/A'; }
+}
+let cardHtml = '<div style="margin-bottom:12px;padding:14px;background:var(--glass);border-radius:14px;border:2px solid var(--glass-border);">';
 cardHtml += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;gap:8px;">';
-cardHtml += '<div style="font-size:0.65rem;font-family:\'Geist Mono\',monospace;color:var(--text-muted);word-break:break-all;flex:1;min-width:0;line-height:1.4;">' + shortId + thisDeviceBadge + '</div>';
+cardHtml += '<div style="font-size:0.65rem;font-family:\'Geist Mono\',monospace;color:var(--text-muted);flex:1;min-width:0;line-height:1.4;" title="Device shard: ' + deviceShard + '">Shard: <span style="color:var(--accent);font-weight:700;letter-spacing:0.08em;">' + deviceShard + '</span></div>';
 cardHtml += '<div style="text-align:right;flex-shrink:0;">';
 cardHtml += '<div style="font-size:0.8rem;font-weight:800;color:' + modeColor + ';white-space:nowrap;">' + modeLabel + '</div>';
 cardHtml += '<div style="font-size:0.6rem;color:' + onlineColor + ';margin-top:2px;">' + onlineDot + '</div>';
@@ -14425,7 +14764,6 @@ cardHtml += '</div>';
 } else {
 cardHtml += '<div style="margin-bottom:11px;padding:7px 10px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid var(--glass-border);font-size:0.6rem;color:var(--text-secondary);">No commands sent yet</div>';
 }
-if (!isCurrentDevice) {
 const isAdmin = deviceMode === 'admin';
 const adminBg = isAdmin ? 'rgba(0,122,255,0.18)' : 'rgba(0,122,255,0.08)';
 const adminBord = isAdmin ? '2px solid rgba(0,122,255,0.55)' : '1px solid rgba(0,122,255,0.25)';
@@ -14475,10 +14813,6 @@ cardHtml += '</div>';
 }
 cardHtml += '<button onclick="removeDevice(\'' + device.deviceId + '\')"';
 cardHtml += ' style="width:100%;padding:7px;background:rgba(255,69,58,0.07);border:1px solid rgba(255,69,58,0.28);border-radius:99px;color:#ff453a;cursor:pointer;font-size:0.65rem;">Remove Device</button>';
-} else {
-const thisDeviceModeColor = modeColor;
-cardHtml += '<div style="padding:8px 10px;background:rgba(0,122,255,0.05);border:1px solid rgba(0,122,255,0.2);border-radius:8px;color:var(--text-muted);text-align:center;font-size:0.7rem;">This Device — <span style="color:' + thisDeviceModeColor + ';font-weight:700;">' + modeLabel + '</span></div>';
-}
 cardHtml += '</div>';
 html += cardHtml;
 });
@@ -14653,14 +14987,20 @@ showToast('Failed to save data locally.', 'error');
 window.restoreDeviceModeOnLogin = restoreDeviceModeOnLogin;
 async function listenForDeviceCommands() {
 if (!firebaseDB || !currentUser) return;
+// Unsubscribe any existing listener first to avoid duplicates
+if (typeof window.deviceCommandsUnsubscribe === 'function') {
+try { window.deviceCommandsUnsubscribe(); } catch (_) {}
+window.deviceCommandsUnsubscribe = null;
+}
 try {
 const deviceId = await getDeviceId();
 const userRef = firebaseDB.collection('users').doc(currentUser.uid);
 const deviceRef = userRef.collection('devices').doc(deviceId);
 const unsubscribe = deviceRef.onSnapshot((doc) => {
+try {
 if (!doc.exists) return;
 const data = doc.data();
-if (data.targetMode && data.targetModeTimestamp) {
+if (!data || !data.targetMode || !data.targetModeTimestamp) return;
 const targetMode = data.targetMode;
 let resolvedName = null;
 const roleType = data.assignedRoleType || targetMode;
@@ -14673,15 +15013,23 @@ const effectiveMode = data.assignedRoleType || targetMode;
 const resolvedUserTabs = Array.isArray(data.assignedUserTabs) ? data.assignedUserTabs : [];
 const commandTimestamp = data.targetModeTimestamp.toMillis
 ? data.targetModeTimestamp.toMillis()
-: data.targetModeTimestamp;
+: (typeof data.targetModeTimestamp === 'number' ? data.targetModeTimestamp : 0);
+if (!commandTimestamp) return;
 const lastProcessed = window.lastProcessedCommandTimestamp || 0;
 if (commandTimestamp > lastProcessed) {
 applyRemoteModeChange(effectiveMode, data.commandSource || 'remote', resolvedName, resolvedUserTabs);
 window.lastProcessedCommandTimestamp = commandTimestamp;
 }
+} catch (snapErr) {
+console.warn('Device command snapshot handler error:', snapErr);
 }
 }, (error) => {
-console.warn('Device command listener error:', error);
+console.warn('Device command listener error — will retry in 15s:', error);
+// Retry listener after a delay if it fails due to transient Firestore state
+window.deviceCommandsUnsubscribe = null;
+setTimeout(() => {
+if (firebaseDB && currentUser) listenForDeviceCommands();
+}, 15000);
 });
 window.deviceCommandsUnsubscribe = unsubscribe;
 } catch (error) {

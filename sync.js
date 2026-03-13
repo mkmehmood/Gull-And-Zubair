@@ -150,7 +150,7 @@ collection: collectionName,
 recordType: collectionName,
 deletedAt: firebase.firestore.FieldValue.serverTimestamp(),
 expiresAt: firebase.firestore.Timestamp.fromMillis(Date.now() + APP_CONFIG.TOMBSTONE_EXPIRY_MS)
-});
+}, { merge: true });
 await batch.commit();
 trackFirestoreWrite(2);
 return true;
@@ -216,7 +216,7 @@ if (specificRecord && specificRecord.id) {
 triggerAutoSync();
 return true;
 }
-async function unifiedDelete(idbKey, dataArray, deletedRecordId, opts = {}) {
+async function unifiedDelete(idbKey, dataArray, deletedRecordId, opts = {}, preDeletedRecord = null) {
 if (opts.strict !== true) {
   console.warn(`[RecycleBin] BLOCKED unifiedDelete on "${idbKey}" id=${deletedRecordId} — strict flag missing. Pass { strict: true } to confirm intentional deletion.`);
   if (typeof window.showToast === 'function') window.showToast('Delete blocked: missing strict confirmation flag.', 'warning');
@@ -227,7 +227,7 @@ const collectionName = getFirestoreCollection(idbKey);
 Promise.resolve().then(async () => {
   try {
     if (collectionName && typeof window.registerDeletion === 'function') {
-      await window.registerDeletion(deletedRecordId, collectionName);
+      await window.registerDeletion(deletedRecordId, collectionName, preDeletedRecord || null);
     }
     await deleteRecordFromFirestore(idbKey, deletedRecordId);
   } catch (e) {}
@@ -312,6 +312,9 @@ auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
 })
 .catch((error) => {
 });
+// Check for a pending Google redirect result (from signInWithRedirect on mobile/PWA).
+// Must run after auth + Firestore are initialised so the user-doc write succeeds.
+_checkGoogleRedirectResult();
 auth.onAuthStateChanged(async (user) => {
 if (user) {
 currentUser = {
@@ -1100,14 +1103,20 @@ function _makeSnapshotHandler(col) {
           const docData = { id: change.doc.id, ...change.doc.data() };
           if (change.type === 'added' || change.type === 'modified') {
             deletedRecordIds.delete(change.doc.id);
-
-            DeltaSync.markDownloaded(col.firestoreId, change.doc.id);
+            if (typeof UUIDSyncRegistry !== 'undefined') {
+              UUIDSyncRegistry.markDownloaded(col.firestoreId, change.doc.id);
+            } else {
+              DeltaSync.markDownloaded(col.firestoreId, change.doc.id);
+            }
             arr = _updateArray(arr, docData, col.firestoreId);
             hasChanges = true;
           } else if (change.type === 'removed') {
             deletedRecordIds.add(change.doc.id);
-            DeltaSync.markDownloaded(col.firestoreId, change.doc.id);
-
+            if (typeof UUIDSyncRegistry !== 'undefined') {
+              UUIDSyncRegistry.markDownloaded(col.firestoreId, change.doc.id);
+            } else {
+              DeltaSync.markDownloaded(col.firestoreId, change.doc.id);
+            }
             _ensureLocalTombstone(change.doc.id, col.firestoreId);
             arr = arr.filter(item => item.id !== change.doc.id);
             hasChanges = true;
@@ -1698,8 +1707,18 @@ async function subscribeToRealtime() {
                 String(item.id) === _docSid || String(item.recordId) === _docSid ||
                 String(item.id) === _docRid || String(item.recordId) === _docRid
               );
-              if (existingIndex === -1) deletionRecords.push(normalizedDoc);
-              else deletionRecords[existingIndex] = normalizedDoc;
+              if (existingIndex === -1) {
+                deletionRecords.push(normalizedDoc);
+              } else {
+                const existing = deletionRecords[existingIndex];
+                deletionRecords[existingIndex] = {
+                  ...normalizedDoc,
+                  displayName:   normalizedDoc.displayName   || existing.displayName   || null,
+                  displayDetail: normalizedDoc.displayDetail || existing.displayDetail || null,
+                  displayAmount: normalizedDoc.displayAmount || existing.displayAmount || null,
+                  snapshot:      normalizedDoc.snapshot      || existing.snapshot      || null,
+                };
+              }
 
               try {
                 const rt = docData.recordType;
@@ -1931,6 +1950,8 @@ function sanitizeForFirestore(obj, depth = 0, seen = new WeakSet()) {
         } else {
           sanitized[cleanKey] = sanitizedValue;
         }
+      } else if (cleanKey === 'gps') {
+        sanitized[cleanKey] = null;
       }
     }
   } catch (e) { return {}; }
@@ -2143,6 +2164,11 @@ async function _mergeAndPersist(cloudData) {
           collection: data.collection || data.recordType || 'unknown',
           deletedAt: data.deletedAt?.toMillis ? data.deletedAt.toMillis() : (data.deletedAt || Date.now()),
           syncedToCloud: true,
+          displayName:   data.displayName   || null,
+          displayDetail: data.displayDetail || null,
+          displayAmount: data.displayAmount || null,
+          snapshot:      data.snapshot      || null,
+          deleted_by:    data.deleted_by    || 'user',
         };
       })
       .filter(r => r.deletedAt > threeMonthsAgo);
@@ -2151,10 +2177,22 @@ async function _mergeAndPersist(cloudData) {
     if (!Array.isArray(localDels)) localDels = [];
     const mergedDels = [...localDels];
     cloudDels.forEach(cd => {
-      const dup = mergedDels.find(ld =>
+      const dupIdx = mergedDels.findIndex(ld =>
         String(ld.id) === String(cd.id) || String(ld.recordId) === String(cd.id)
       );
-      if (!dup) mergedDels.push(cd);
+      if (dupIdx === -1) {
+        mergedDels.push(cd);
+      } else {
+        const local = mergedDels[dupIdx];
+        mergedDels[dupIdx] = {
+          ...local,
+          syncedToCloud: true,
+          displayName:   local.displayName   || cd.displayName   || null,
+          displayDetail: local.displayDetail || cd.displayDetail || null,
+          displayAmount: local.displayAmount || cd.displayAmount || null,
+          snapshot:      local.snapshot      || cd.snapshot      || null,
+        };
+      }
     });
     const _rSet = typeof _recoveredThisSession !== 'undefined' ? _recoveredThisSession : null;
     const safeDels = (_rSet
@@ -2865,9 +2903,51 @@ GULL AND ZUBAIR NASWAR DEALER'S
 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1de9b6" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
 <span style="font-size:0.7rem;color:var(--accent);font-weight:700;letter-spacing:0.06em;text-transform:uppercase;">Login Required</span>
 </div>
-<p style="color: var(--text-muted); margin-bottom: 26px; font-size: 0.82rem; line-height: 1.5;">
+<p style="color: var(--text-muted); margin-bottom: 22px; font-size: 0.82rem; line-height: 1.5;">
 Your account protects your data with enterprise-grade encryption.<br><strong style="color:var(--text-main)"></strong>.
 </p>
+
+<!-- ── Google Sign-In Button ── -->
+<button id="auth-google-btn" type="button" style="
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1.5px solid var(--glass-border);
+  background: var(--input-bg);
+  color: var(--text-main);
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: box-shadow 0.18s, border-color 0.18s, opacity 0.18s;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+  margin-bottom: 18px;
+  -webkit-tap-highlight-color: transparent;
+" onmouseover="if(!this.disabled){this.style.borderColor='#4285F4';this.style.boxShadow='0 2px 10px rgba(66,133,244,0.22)';}"
+   onmouseout="this.style.borderColor='';this.style.boxShadow='0 1px 4px rgba(0,0,0,0.07)';">
+  <!-- Official Google G logo SVG -->
+  <svg width="20" height="20" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.36-8.16 2.36-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+    <path fill="none" d="M0 0h48v48H0z"/>
+  </svg>
+  Continue with Google
+</button>
+
+<!-- ── Divider ── -->
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;">
+  <div style="flex:1;height:1px;background:var(--glass-border);"></div>
+  <span style="font-size:0.72rem;color:var(--text-muted);font-weight:500;white-space:nowrap;">or sign in with email</span>
+  <div style="flex:1;height:1px;background:var(--glass-border);"></div>
+</div>
+
+<!-- ── Email / Password Form ── -->
 <form id="auth-form" style="display: flex; flex-direction: column; gap: 13px;">
 <input type="email" id="auth-email" placeholder="Email Address" required autocomplete="username"
 style="width: 100%; padding: 13px; background: var(--input-bg); border: 1px solid var(--glass-border); border-radius: 12px; box-sizing: border-box; color: var(--text-main); font-size:0.9rem;">
@@ -2905,6 +2985,11 @@ const signupBtn = document.getElementById('auth-signup-btn');
 if(signupBtn) signupBtn.addEventListener('click', (e) => {
 e.preventDefault();
 handleSignUp();
+});
+const googleBtn = document.getElementById('auth-google-btn');
+if(googleBtn) googleBtn.addEventListener('click', (e) => {
+e.preventDefault();
+handleGoogleSignIn();
 });
 OfflineAuth.getSavedEmail().then(email => {
 if (email) {
@@ -2971,6 +3056,146 @@ try { sessionStorage.removeItem(KEY_ATTEMPTS); sessionStorage.removeItem(KEY_LOC
 },
 };
 })();
+// ── Shared post-Google-auth setup (used by both popup and redirect paths) ──
+async function _applyGoogleUser(user) {
+const _googleKeyMaterial = user.uid;
+currentUser = {
+id: user.uid, uid: user.uid,
+email: user.email, displayName: user.displayName || '',
+photoURL: user.photoURL || null, googleAuth: true
+};
+idb.setUserPrefix(user.uid);
+await IDBCrypto.setSessionKey(user.email, _googleKeyMaterial, user.uid);
+await IDBCrypto.sessionSet('login', {
+uid: user.uid, email: user.email,
+displayName: user.displayName || '', googleAuth: true,
+lastLogin: new Date().toISOString()
+});
+try { localStorage.setItem('_gznd_session_active', '1'); sessionStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
+if (typeof database !== 'undefined' && database) {
+try {
+const userRef = firebaseDB.collection('users').doc(user.uid);
+const snap = await userRef.get();
+if (!snap.exists) {
+await userRef.set({ email: user.email, displayName: user.displayName || '', createdAt: Date.now(), role: 'admin', authProvider: 'google' });
+}
+} catch(e) { console.warn('Google auth: Firestore user-doc write failed', e); }
+}
+try { if (typeof loadAllData === 'function') await loadAllData(); } catch(e) { console.warn('Post-Google-login data load failed:', e); }
+setTimeout(() => {
+hideAuthOverlay();
+if (typeof refreshAllDisplays === 'function') refreshAllDisplays();
+if (typeof performOneClickSync === 'function') performOneClickSync();
+}, 350);
+}
+
+// ── Called once after Firebase is fully initialised to collect a redirect result ──
+async function _checkGoogleRedirectResult() {
+try {
+const _gAuth = (typeof auth !== 'undefined' && auth) ? auth : firebase.auth();
+const result = await _gAuth.getRedirectResult();
+if (result && result.user) {
+const messageDiv = document.getElementById('auth-message');
+if (messageDiv) { messageDiv.textContent = 'Completing Google sign-in…'; messageDiv.style.color = 'var(--accent)'; }
+await _applyGoogleUser(result.user);
+}
+} catch(err) {
+// auth/no-current-user is normal when there was no redirect — silence it
+if (err.code && err.code !== 'auth/no-current-user' && err.code !== 'auth/null-user') {
+console.warn('Google redirect result error:', err.code, err.message);
+const messageDiv = document.getElementById('auth-message');
+if (messageDiv) { messageDiv.textContent = _googleAuthErrorMsg(err); messageDiv.style.color = 'var(--danger)'; }
+}
+}
+}
+
+function _googleAuthErrorMsg(error) {
+switch (error.code) {
+case 'auth/popup-closed-by-user':
+case 'auth/cancelled-popup-request':
+  return 'Sign-in cancelled.';
+case 'auth/popup-blocked':
+  return 'Popup blocked. Retrying with redirect…';
+case 'auth/operation-not-allowed':
+  return 'Google sign-in is not enabled. Please contact the app administrator.';
+case 'auth/network-request-failed':
+  return 'Network error. Check your connection and try again.';
+case 'auth/account-exists-with-different-credential':
+  return 'An account already exists with this email. Use email/password sign-in instead.';
+case 'auth/invalid-action-code':
+  return 'Sign-in link expired or already used. Please try again.';
+case 'auth/unauthorized-domain':
+  return 'This domain is not authorised for Google sign-in. Contact the app administrator.';
+default:
+  return 'Google sign-in failed: ' + (error.message || error.code || 'unknown error');
+}
+}
+
+// ── Detect whether we are running as an installed PWA / standalone ──
+function _isStandalonePWA() {
+return (
+window.matchMedia('(display-mode: standalone)').matches ||
+window.matchMedia('(display-mode: fullscreen)').matches ||
+window.navigator.standalone === true // iOS Safari
+);
+}
+
+// ── Detect mobile browser (not just PWA) ──
+function _isMobileBrowser() {
+return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+}
+
+async function handleGoogleSignIn() {
+const messageDiv = document.getElementById('auth-message');
+const googleBtn  = document.getElementById('auth-google-btn');
+if (!navigator.onLine) {
+if (messageDiv) { messageDiv.textContent = 'Google sign-in requires an internet connection.'; messageDiv.style.color = 'var(--danger)'; }
+return;
+}
+if (typeof firebase === 'undefined') {
+if (messageDiv) { messageDiv.textContent = 'Firebase not loaded. Please refresh and try again.'; messageDiv.style.color = 'var(--danger)'; }
+return;
+}
+if (!firebase.apps.length) {
+try { firebase.initializeApp(firebaseConfig); } catch(e) {}
+}
+const _gAuth = (typeof auth !== 'undefined' && auth) ? auth : firebase.auth();
+const provider = new firebase.auth.GoogleAuthProvider();
+provider.addScope('email');
+provider.addScope('profile');
+// Always show the account picker so users can switch Google accounts
+provider.setCustomParameters({ prompt: 'select_account' });
+if (googleBtn) { googleBtn.disabled = true; googleBtn.style.opacity = '0.65'; }
+// Use redirect for PWA/mobile (popups are blocked or broken in those contexts),
+// popup for desktop browsers where it gives a smoother UX.
+const useRedirect = _isStandalonePWA() || _isMobileBrowser();
+try {
+if (useRedirect) {
+// signInWithRedirect navigates away — show a message before we leave
+if (messageDiv) { messageDiv.textContent = 'Redirecting to Google…'; messageDiv.style.color = 'var(--accent)'; }
+await _gAuth.signInWithRedirect(provider);
+// Execution stops here; _checkGoogleRedirectResult() handles the return
+return;
+}
+// Desktop popup path
+if (messageDiv) { messageDiv.textContent = 'Opening Google sign-in…'; messageDiv.style.color = 'var(--accent)'; }
+const result = await _gAuth.signInWithPopup(provider);
+await _applyGoogleUser(result.user);
+if (messageDiv) { messageDiv.textContent = 'Signed in! Loading…'; messageDiv.style.color = 'var(--accent-emerald)'; }
+} catch (error) {
+console.error('Google sign-in failed.', _safeErr(error));
+// If popup was blocked on desktop, fall back to redirect automatically
+if (error.code === 'auth/popup-blocked' && !useRedirect) {
+if (messageDiv) { messageDiv.textContent = 'Popup blocked — redirecting to Google…'; messageDiv.style.color = 'var(--accent)'; }
+try { await _gAuth.signInWithRedirect(provider); return; } catch(e2) {}
+}
+if (messageDiv) { messageDiv.textContent = _googleAuthErrorMsg(error); messageDiv.style.color = 'var(--danger)'; }
+} finally {
+// Only re-enable button if we didn't navigate away
+if (googleBtn && !useRedirect) { googleBtn.disabled = false; googleBtn.style.opacity = '1'; }
+}
+}
+
 async function handleSignIn(e) {
 if(e) e.preventDefault();
 const emailInput = document.getElementById('auth-email');
@@ -3026,7 +3251,7 @@ const firebaseAuth = auth || firebase.auth();
 const _signInCred = await firebaseAuth.signInWithEmailAndPassword(email, password);
 await OfflineAuth.saveCredentials(email, password);
 idb.setUserPrefix(_signInCred.user.uid);
-await IDBCrypto.setSessionKey(email, password);
+await IDBCrypto.setSessionKey(email, password, _signInCred.user.uid);
 await IDBCrypto.sessionSet('login', {
   uid: _signInCred.user.uid,
   email,
@@ -3065,7 +3290,7 @@ email: email,
 offlineMode: true
 };
 idb.setUserPrefix(currentUser.uid);
-await IDBCrypto.setSessionKey(email, password);
+await IDBCrypto.setSessionKey(email, password, currentUser.uid);
 try { localStorage.setItem('_gznd_session_active', '1'); sessionStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
 LoginRateLimiter.recordSuccess();
 messageDiv.textContent = '✓ Offline Login Successful';
@@ -3094,7 +3319,7 @@ const valid = await OfflineAuth.verifyCredentials(email, password).catch(() => f
 if (valid) {
 currentUser = { id: email.replace(/[^a-zA-Z0-9]/g, '_'), uid: email.replace(/[^a-zA-Z0-9]/g, '_'), email, offlineMode: true };
 idb.setUserPrefix(currentUser.uid);
-await IDBCrypto.setSessionKey(email, password);
+await IDBCrypto.setSessionKey(email, password, currentUser.uid);
 try { localStorage.setItem('_gznd_session_active', '1'); sessionStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
 try { if (typeof loadAllData === 'function') await loadAllData(); } catch(e) {}
 messageDiv.textContent = '✓ Offline Login (Network unavailable)';
@@ -3146,7 +3371,7 @@ displayName: userCredential.user.displayName
 };
 await OfflineAuth.saveCredentials(email, password);
 idb.setUserPrefix(currentUser.uid);
-await IDBCrypto.setSessionKey(email, password);
+await IDBCrypto.setSessionKey(email, password, userCredential.user.uid);
 try { localStorage.setItem('_gznd_session_active', '1'); sessionStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
 if (database) {
 await firebaseDB.collection('users').doc(currentUser.uid).set({
