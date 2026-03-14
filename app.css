@@ -5952,7 +5952,6 @@ thead { background: var(--glass-raised) !important; background-image: none !impo
   margin-left: 6px;
 }
 
-/* ── User creator badge ── */
 .creator-badge {
   display: inline-flex;
   align-items: center;
@@ -5983,7 +5982,6 @@ body.dark-mode .creator-badge {
   color: #22d3ee;
 }
 
-/* ── Auto-fit font-size for all tables ── */
 table {
   font-size: clamp(0.55rem, 1.4vw, 0.82rem);
   width: 100%;

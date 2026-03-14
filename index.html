@@ -6,17 +6,20 @@
   default-src 'none';
   script-src  'self' 'unsafe-inline'
               https://www.gstatic.com
+              https://accounts.google.com
               https://unpkg.com
               https://cdn.jsdelivr.net
               https://cdnjs.cloudflare.com
               https://apis.google.com;
   style-src   'self' 'unsafe-inline'
               https://fonts.googleapis.com
+              https://accounts.google.com
               https://unpkg.com;
   font-src    https://fonts.gstatic.com;
   img-src     'self' data:
               https://*.tile.openstreetmap.org
-              https://www.gstatic.com;
+              https://www.gstatic.com
+              https://*.googleusercontent.com;
   connect-src 'self'
               https://*.googleapis.com
               https://*.firebaseio.com
@@ -24,8 +27,10 @@
               https://*.firebaseapp.com
               https://nominatim.openstreetmap.org
               https://firestore.googleapis.com
+              https://accounts.google.com
               https://*.google.com;
   frame-src   https://apis.google.com
+              https://accounts.google.com
               https://*.firebaseapp.com
               https://*.google.com;
   worker-src  'self';
@@ -52,6 +57,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="anonymous"></script>
 <script>
 window._swConfirmed = false;
@@ -1953,6 +1959,7 @@ No records found
 <div style="display:flex; gap:6px; margin-bottom:18px; background:var(--glass-raised); border-radius:var(--radius-full); padding:4px;">
 <button id="team-tab-rep" class="toggle-opt active" onclick="switchManageTeamTab('rep')" style="flex:1; font-size:0.68rem; padding:7px 4px; border-radius:var(--radius-full);">Sales Rep</button>
 <button id="team-tab-userrole" class="toggle-opt" onclick="switchManageTeamTab('userrole')" style="flex:1; font-size:0.68rem; padding:7px 4px; border-radius:var(--radius-full);">User Roles</button>
+<button id="team-tab-accounts" class="toggle-opt" onclick="switchManageTeamTab('accounts')" style="flex:1; font-size:0.68rem; padding:7px 4px; border-radius:var(--radius-full);">App Accounts</button>
 </div>
 <div id="team-panel-rep">
 <div class="grid-inputs u-mb-20">
@@ -1993,6 +2000,40 @@ No records found
 <label style="font-size:0.72rem; color:var(--text-muted); font-weight:700; text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:10px;">Current Users</label>
 <div id="manage-userrole-list"></div>
 </div>
+</div>
+
+<div id="team-panel-accounts" style="display:none;">
+  <div style="margin-bottom:14px;">
+    <label style="font-size:0.72rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:10px;">Add New Account</label>
+    <div class="grid-inputs" style="margin-bottom:10px;">
+      <div class="field">
+        <label>Email</label>
+        <input type="email" id="acct-new-email" placeholder="user@example.com" autocomplete="off">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="acct-new-password" placeholder="min 8 characters" autocomplete="new-password">
+      </div>
+    </div>
+    <div style="margin-bottom:10px;">
+      <label style="font-size:0.72rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:8px;">Role</label>
+      <div style="display:flex;gap:6px;background:var(--glass-raised);border-radius:var(--radius-full);padding:4px;">
+        <button id="acct-role-user" class="toggle-opt active" onclick="setNewAccountRole('user')" style="flex:1;font-size:0.72rem;padding:7px 4px;border-radius:var(--radius-full);">User</button>
+        <button id="acct-role-admin" class="toggle-opt" onclick="setNewAccountRole('admin')" style="flex:1;font-size:0.72rem;padding:7px 4px;border-radius:var(--radius-full);">Admin</button>
+      </div>
+    </div>
+    <div id="acct-add-msg" style="font-size:0.75rem;min-height:18px;margin-bottom:8px;"></div>
+    <button class="btn btn-main u-h-42 u-fs-md2 u-fw-700" onclick="adminAddAccount()" id="acct-add-btn">Add Account</button>
+  </div>
+  <div style="border-top:1px solid var(--glass-border);padding-top:14px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <label style="font-size:0.72rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">Registered Accounts</label>
+      <button class="btn-theme" style="font-size:0.7rem;padding:4px 10px;" onclick="loadAccountsList()">↻ Refresh</button>
+    </div>
+    <div id="manage-accounts-list"><div style="color:var(--text-muted);font-size:0.8rem;text-align:center;padding:16px;">Loading...</div></div>
+  </div>
+</div>
+
 </div>
 </div>
 </div>

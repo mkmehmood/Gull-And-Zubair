@@ -1289,7 +1289,7 @@ try {
   if (encPassword) {
     try {
       updateCloseYearProgress('Encrypting backup file...', 14);
-      const encryptedBlob = await CryptoEngine.encrypt(backupData, currentUser.email, encPassword);
+      const encryptedBlob = await CryptoEngine.encrypt(backupData, currentUser.email, encPassword, currentUser.uid);
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       _triggerFileDownload(encryptedBlob, `NaswarDealers_YearClose_${timestamp}.gznd`);
       showToast('🔐 Encrypted year-end backup downloaded!', 'success', 4000);

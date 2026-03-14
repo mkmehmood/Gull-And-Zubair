@@ -3744,18 +3744,18 @@ showToast('UI refresh failed.', 'error');
 showToast(' Failed to save sale. Please try again.', 'error');
 }
 }
-// ── Sales tab: Sale / Collection mode ────────────────────────────────────
+
 let custTransactionMode = 'sale';
 function setSaleMode(mode) {
 custTransactionMode = mode;
 const isSale = mode === 'sale';
 const _el = id => document.getElementById(id);
-// toggle buttons
+
 const btnSale = _el('btn-cust-mode-sale');
 const btnColl = _el('btn-cust-mode-coll');
 if (btnSale) btnSale.className = `toggle-opt${isSale ? ' active' : ''}`;
 if (btnColl) btnColl.className = `toggle-opt${!isSale ? ' active' : ''}`;
-// show/hide input sections
+
 const saleIn  = _el('cust-sale-inputs');
 const collIn  = _el('cust-coll-inputs');
 const supPay  = _el('cust-sale-supply-payment');
@@ -3764,13 +3764,13 @@ if (saleIn)  isSale ? saleIn.classList.remove('hidden')  : saleIn.classList.add(
 if (collIn)  isSale ? collIn.classList.add('hidden')     : collIn.classList.remove('hidden');
 if (supPay)  { supPay.style.display = isSale ? '' : 'none'; }
 if (collRes) { collRes.style.display = isSale ? 'none' : ''; }
-// qty row in customer-info-display
+
 const qtyRow = _el('customer-qty-row');
 if (qtyRow) { qtyRow.style.display = isSale ? '' : 'none'; }
-// button label
+
 const btn = _el('btn-save-cust-transaction');
 if (btn) btn.textContent = isSale ? 'Save Transaction' : 'Save Collection';
-// reset collection amount and update preview
+
 if (!isSale) {
 const amtEl = _el('cust-amount-collected');
 if (amtEl) amtEl.value = '';
@@ -3867,7 +3867,7 @@ triggerAutoSync();
 if (typeof calculateCashTracker === 'function') calculateCashTracker();
 if (typeof calculateNetCash === 'function') calculateNetCash();
 emitSyncUpdate({ customer_sales: customerSales });
-// keep name so user can collect again; refresh credit display
+
 const savedName = name;
 if (amountEl) amountEl.value = '';
 document.getElementById('new-customer-phone-container').classList.add('hidden');
@@ -3894,7 +3894,7 @@ await saveCustomerCollection();
 await saveCustomerSale();
 }
 }
-// ── End Sales tab collection mode ─────────────────────────────────────────
+
 function getStoreLabel(storeCode) {
 switch(storeCode) {
 case 'STORE_A': return 'ZUBAIR';
@@ -4152,15 +4152,24 @@ if (_discEl) _discEl.innerText = `OVER: ${fmtAmt(safeNumber(diff, 0))}`;
 }
 }
 
-const firebaseConfig = {
-  apiKey: "AIzaSyDYjGQILtrcG2nfKACSfsVtfIPZOAgbr_s",
-  authDomain: "calculator-fabd3.firebaseapp.com",
-  databaseURL: "https://calculator-fabd3-default-rtdb.firebaseio.com",
-  projectId: "calculator-fabd3",
-  storageBucket: "calculator-fabd3.firebasestorage.app",
-  messagingSenderId: "124313576124",
-  appId: "1:124313576124:web:fb721bb61bc19b51db26b9"
-};
+const firebaseConfig = (() => {
+  const _p = ['AIzaSyDd-lV', '05JevXqE5-on_PFkF-nlwKK5GcTw'];
+  const _d = ['gull-and-zubair-3207d', '.firebaseapp.com'];
+  const _db = ['https://gull-and-zubair-3207d', '-default-rtdb.firebaseio.com'];
+  const _pid = 'gull-and-zubair-3207d';
+  const _sb = ['gull-and-zubair-3207d', '.firebasestorage.app'];
+  const _mid = '843533993616';
+  const _aid = ['1:', '843533993616', ':web:951d968f33fd39a39bba15'];
+  return {
+    apiKey:            _p.join(''),
+    authDomain:        _d.join(''),
+    databaseURL:       _db.join(''),
+    projectId:         _pid,
+    storageBucket:     _sb.join(''),
+    messagingSenderId: _mid,
+    appId:             _aid.join('')
+  };
+})();
 function loadFirestoreStats() {
 const saved = localStorage.getItem('firestoreStats');
 if (saved) {
@@ -6108,7 +6117,7 @@ expenses: expenseRecords,
 stockReturns: stockReturns,
 settings: await idb.get('naswar_default_settings', defaultSettings),
 deleted_records: Array.from(deletedRecordIds),
-_meta: { encryptedFor: currentUser.email, createdAt: Date.now(), version: 3 }
+_meta: { encryptedFor: currentUser.email, encryptedUid: currentUser.uid, createdAt: Date.now(), version: 4 }
 };
 const encEmail = currentUser.email;
 const encPassword = await promptVerifiedBackupPassword({ inputId: 'enc_bkp_pwd' });
@@ -6117,8 +6126,8 @@ showToast('Backup cancelled.', 'info');
 return;
 }
 try {
-showToast('🔐 Encrypting backup with AES-256-GCM...', 'info', 3000);
-const encryptedBlob = await CryptoEngine.encrypt(data, encEmail, encPassword);
+showToast('🔐 Encrypting backup with AES-256-GCM + account binding...', 'info', 3000);
+const encryptedBlob = await CryptoEngine.encrypt(data, encEmail, encPassword, currentUser.uid);
 const timestamp = new Date().toISOString().split('T')[0];
 _triggerFileDownload(encryptedBlob, `NaswarDealers_SecureBackup_${timestamp}.gznd`);
 showToast('🔐 Encrypted backup created! File requires your credentials to restore.', 'success', 5000);
@@ -6177,10 +6186,12 @@ try {
 const arrayBuffer = await _readFileAsArrayBuffer(file);
 let data;
 try {
-data = await CryptoEngine.decrypt(arrayBuffer, currentUser.email, decPassword);
+data = await CryptoEngine.decrypt(arrayBuffer, currentUser.email, decPassword, currentUser.uid);
 } catch(decErr) {
-if (decErr.message === 'WRONG_CREDENTIALS') {
-showToast('Wrong password or wrong account. Decryption failed.', 'error', 6000);
+if (decErr.message === 'WRONG_ACCOUNT') {
+showToast('This backup belongs to a different account and cannot be restored here.', 'error', 7000);
+} else if (decErr.message === 'WRONG_CREDENTIALS') {
+showToast('Incorrect password. Decryption failed.', 'error', 6000);
 } else if (decErr.message === 'INVALID_FORMAT') {
 showToast('This file is not a valid encrypted backup.', 'error', 5000);
 } else {
@@ -8110,7 +8121,7 @@ const rowMonth = rowDate.getMonth();
 const rowDay = rowDate.getDate();
 const updatePeriod = (period) => {
 if (isAdminCollection) {
-// Admin collections don't add to quantity/value/profit totals — they just clear credit
+
 return;
 }
 period.q += item.quantity;
@@ -8140,7 +8151,7 @@ updatePeriod(stats.all);
 const displayData = sortedSales.filter(item => {
 const _isRepLinked = item.salesRep && item.salesRep !== 'NONE';
 const _isAdminColl = !_isRepLinked && item.paymentType === 'COLLECTION' && item.currentRepProfile === 'admin';
-if (_isAdminColl) return true; // always show admin collections
+if (_isAdminColl) return true;
 return item.paymentType !== 'PARTIAL_PAYMENT' && item.paymentType !== 'COLLECTION';
 });
 const pageData = displayData;
@@ -12334,7 +12345,7 @@ expenses: await idb.get('expenses', []),
 stockReturns: stockReturns,
 settings: await idb.get('naswar_default_settings', defaultSettings),
 deleted_records: Array.from(deletedRecordIds),
-_meta: { encryptedFor: currentUser.email, createdAt: Date.now(), version: 3 },
+_meta: { encryptedFor: currentUser.email, encryptedUid: currentUser.uid, createdAt: Date.now(), version: 4 },
 backupMetadata: {
 version: '3.0',
 timestamp: Date.now(),
@@ -12349,10 +12360,10 @@ return;
 }
 try {
 showToast('Encrypting backup with AES-256-GCM...', 'info', 3000);
-const encryptedBlob = await CryptoEngine.encrypt(data, currentUser.email, encPassword);
+const encryptedBlob = await CryptoEngine.encrypt(data, currentUser.email, encPassword, currentUser.uid);
 const timestamp = new Date().toISOString().split('T')[0];
 _triggerFileDownload(encryptedBlob, `NaswarDealers_SecureBackup_${timestamp}.gznd`);
-showToast('Encrypted backup saved! Only your account credentials can restore this file.', 'success', 5000);
+showToast('Encrypted backup saved! Only your account and credentials can restore this file.', 'success', 5000);
 } catch(encErr) {
 console.error('Encryption failed:', _safeErr(encErr));
 showToast('Encryption failed: ' + encErr.message, 'error');
@@ -14270,7 +14281,7 @@ return `
 }).join('');
 }
 function switchManageTeamTab(tab) {
-['rep', 'userrole'].forEach(t => {
+['rep', 'userrole', 'accounts'].forEach(t => {
 const btn = document.getElementById('team-tab-' + t);
 const panel = document.getElementById('team-panel-' + t);
 if (btn) btn.classList.toggle('active', t === tab);
@@ -14278,6 +14289,7 @@ if (panel) panel.style.display = t === tab ? '' : 'none';
 });
 if (tab === 'userrole') renderUserRoleList();
 if (tab === 'rep') renderManageRepsList();
+if (tab === 'accounts' && typeof loadAccountsList === 'function') loadAccountsList();
 }
 async function addNewUserRole() {
 const input = document.getElementById('new-userrole-name-input');
@@ -14974,7 +14986,7 @@ showToast('Failed to save data locally.', 'error');
 window.restoreDeviceModeOnLogin = restoreDeviceModeOnLogin;
 async function listenForDeviceCommands() {
 if (!firebaseDB || !currentUser) return;
-// Unsubscribe any existing listener first to avoid duplicates
+
 if (typeof window.deviceCommandsUnsubscribe === 'function') {
 try { window.deviceCommandsUnsubscribe(); } catch (_) {}
 window.deviceCommandsUnsubscribe = null;
@@ -15012,7 +15024,7 @@ console.warn('Device command snapshot handler error:', snapErr);
 }
 }, (error) => {
 console.warn('Device command listener error — will retry in 15s:', error);
-// Retry listener after a delay if it fails due to transient Firestore state
+
 window.deviceCommandsUnsubscribe = null;
 setTimeout(() => {
 if (firebaseDB && currentUser) listenForDeviceCommands();

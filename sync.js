@@ -1,8 +1,3 @@
-// ─── SHARED FIXED UID ────────────────────────────────────────────────────────
-// All users (new or existing) read/write to this single Firestore document.
-const FIXED_UID = 'whGJCpQBIkb0LTxebI1H3j5Gzk83';
-// ─────────────────────────────────────────────────────────────────────────────
-
 async function saveWithTracking(key, data, specificRecord = null, specificIds = null) {
 const result = await idb.set(key, data);
 const collectionEntry = IndexedDBToFirestoreMap[key];
@@ -86,7 +81,7 @@ data: queuedRecord
 return true;
 }
 try {
-const userRef = firebaseDB.collection('users').doc(FIXED_UID);
+const userRef = firebaseDB.collection('users').doc(currentUser.uid);
 const docRef = userRef.collection(collectionName).doc(String(record.id));
 const now = Date.now();
 const sanitized = sanitizeForFirestore({ ...record, syncedAt: new Date().toISOString() });
@@ -145,7 +140,7 @@ data: null
 return true;
 }
 try {
-const userRef = firebaseDB.collection('users').doc(FIXED_UID);
+const userRef = firebaseDB.collection('users').doc(currentUser.uid);
 const batch = firebaseDB.batch();
 batch.delete(userRef.collection(collectionName).doc(String(recordId)));
 batch.set(userRef.collection('deletions').doc(String(recordId)), {
@@ -317,6 +312,8 @@ auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
 })
 .catch((error) => {
 });
+
+_checkGoogleRedirectResult();
 auth.onAuthStateChanged(async (user) => {
 if (user) {
 currentUser = {
@@ -346,8 +343,15 @@ hideAuthOverlay();
 showToast(`Welcome back, ${user.email.split('@')[0]}`, 'success');
 idb.setUserPrefix(user.uid);
 await IDBCrypto.initialize();
+const _isGoogleProvider = Array.isArray(user.providerData) &&
+  user.providerData.some(p => p && p.providerId === 'google.com');
+if (_isGoogleProvider) {
+await IDBCrypto.setSessionKey(user.email, user.uid, user.uid).catch(() => {});
+}
 const keyRestored = await IDBCrypto.restoreSessionKeyFromStorage();
 if (!keyRestored) {
+if (_isGoogleProvider) {
+} else {
 const hasStoredCreds = await OfflineAuth.hasStoredCredentials();
 if (hasStoredCreds) {
 const savedEmail = await OfflineAuth.getSavedEmail();
@@ -369,6 +373,7 @@ return;
 }
 console.warn('Auth: Could not restore encryption key - user may need to log in again');
 showToast('Session restored but encryption key missing. Some features may be limited.', 'warning');
+}
 } else {
 const isKeyValid = await IDBCrypto.validateKey();
 if (!isKeyValid) {
@@ -471,7 +476,7 @@ if (!this.firebaseDB || !this.currentUser) {
 throw new Error('Firebase DB and Current User are required');
 }
 if (!silent) showToast('Setting up complete cloud database...', 'info');
-this.userRef = this.firebaseDB.collection('users').doc(FIXED_UID);
+this.userRef = this.firebaseDB.collection('users').doc(this.currentUser.uid);
 try {
 await this.createUserDocument();
 await this.createDevicesCollection();
@@ -509,7 +514,7 @@ results: this.results
 async createUserDocument() {
 try {
 await this.userRef.set({
-uid: FIXED_UID,
+uid: this.currentUser.uid,
 email: this.currentUser.email || 'unknown@example.com',
 displayName: this.currentUser.displayName || '',
 createdAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -853,7 +858,7 @@ return await initializer.initialize(silent);
 async function isCompleteDatabaseInitialized() {
 if (!firebaseDB || !currentUser) return false;
 try {
-const userRef = firebaseDB.collection('users').doc(FIXED_UID);
+const userRef = firebaseDB.collection('users').doc(currentUser.uid);
 const requiredCollections = [
 'devices', 'account', 'activityLog', 'production', 'sales',
 'rep_sales', 'rep_customers',
@@ -894,7 +899,7 @@ return await initializeCompleteFirestoreDatabase(silent);
 async function cleanupPlaceholders() {
 if (!firebaseDB || !currentUser) return false;
 try {
-const userRef = firebaseDB.collection('users').doc(FIXED_UID);
+const userRef = firebaseDB.collection('users').doc(currentUser.uid);
 const batch = firebaseDB.batch();
 const collections = [
 'devices', 'account', 'activityLog',
@@ -1378,7 +1383,7 @@ function startSyncUpdatesCleanup() {
     if (!firebaseDB || !currentUser) return;
     try {
       const syncSnapshot = await firebaseDB
-        .collection('users').doc(FIXED_UID)
+        .collection('users').doc(currentUser.uid)
         .collection('sync_updates')
         .orderBy('timestamp', 'desc')
         .get();
@@ -1430,7 +1435,7 @@ async function subscribeToRealtime() {
   }
   if (pendingFirestoreYearClose && !closeYearInProgress) {
     try {
-      const userRef = firebaseDB.collection('users').doc(FIXED_UID);
+      const userRef = firebaseDB.collection('users').doc(currentUser.uid);
       const yearCloseCollections = [
         { name: 'production',         data: db,                      filter: d => !d.isMerged },
         { name: 'sales',              data: customerSales,                   filter: d => !d.isMerged },
@@ -1464,7 +1469,7 @@ async function subscribeToRealtime() {
   });
   realtimeRefs = [];
 
-  const userRef = firebaseDB.collection('users').doc(FIXED_UID);
+  const userRef = firebaseDB.collection('users').doc(currentUser.uid);
 
   try {
 
@@ -2153,7 +2158,7 @@ async function _mergeAndPersist(cloudData) {
 
   try {
     const deletionsSnap = await firebaseDB
-      .collection('users').doc(FIXED_UID)
+      .collection('users').doc(currentUser.uid)
       .collection('deletions').get();
     const threeMonthsAgo = Date.now() - APP_CONFIG.TOMBSTONE_EXPIRY_MS;
     const cloudDels = deletionsSnap.docs
@@ -2481,7 +2486,7 @@ async function _doOneClickSync(silent = false) {
   if (!silent) showToast('Syncing....', 'info');
 
   try {
-    const userRef = firebaseDB.collection('users').doc(FIXED_UID);
+    const userRef = firebaseDB.collection('users').doc(currentUser.uid);
 
     const userType = await _detectUserType(userRef);
 
@@ -2617,7 +2622,7 @@ async function _doPushDataToCloud(silent = false) {
     if (freshDataMap.get('naswar_default_settings'))    defaultSettings         = freshDataMap.get('naswar_default_settings');
     if (freshDataMap.get('deleted_records'))            deletedRecordIds        = new Set(freshDataMap.get('deleted_records'));
 
-    const userRef = firebaseDB.collection('users').doc(FIXED_UID);
+    const userRef = firebaseDB.collection('users').doc(currentUser.uid);
     const operationCount = await _uploadChanges(userRef);
 
     const deletionRecordsLocal = await idb.get('deletion_records', []);
@@ -2684,7 +2689,7 @@ async function _doPullDataFromCloud(silent = false, forceDownload = false) {
     if (!silent) showToast('Downloading cloud data...', 'info');
     await idb.init();
 
-    const userRef = firebaseDB.collection('users').doc(FIXED_UID);
+    const userRef = firebaseDB.collection('users').doc(currentUser.uid);
     const cloudData = await _downloadDeltas(userRef, 'returning');
 
     const hasData = Object.values(cloudData.data).some(a => a.length > 0)
@@ -2831,7 +2836,7 @@ autoSaveTimer = null;
 async function wakeUpDatabase() {
 if (!firebaseDB || !currentUser) return false;
 try {
-const wakeUpPromise = firebaseDB.collection('users').doc(FIXED_UID)
+const wakeUpPromise = firebaseDB.collection('users').doc(currentUser.uid)
 .collection('settings').doc('config').get();
 const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 45000));
 await Promise.race([wakeUpPromise, timeoutPromise]);
@@ -2892,7 +2897,18 @@ overlay.style.cssText = `
 position: fixed; inset: 0;
 background: linear-gradient(135deg, rgba(240, 248, 255, 0.95) 0%, rgba(230, 240, 255, 0.95) 100%);
 z-index: 99999; display: flex; align-items: center; justify-content: center;
+animation: auth-fade-in 0.25s ease;
 `;
+
+if (!document.getElementById('auth-overlay-style')) {
+const s = document.createElement('style');
+s.id = 'auth-overlay-style';
+s.textContent = '@keyframes auth-fade-in{from{opacity:0;transform:scale(1.015)}to{opacity:1;transform:scale(1)}}@keyframes auth-fade-out{from{opacity:1;transform:scale(1)}to{opacity:0;transform:scale(0.97)}}' +
+'body.dark-mode #auth-google-btn{background:#303030!important;border-color:#555!important;color:#e8eaed!important;}' +
+'body.dark-mode #auth-google-btn:hover{border-color:#8ab4f8!important;box-shadow:0 2px 8px rgba(138,180,248,0.22)!important;}' +
+'#auth-google-btn:disabled{cursor:not-allowed;}';
+document.head.appendChild(s);
+}
 if (document.body.classList.contains('dark-mode')) {
 overlay.style.background = 'linear-gradient(135deg, rgba(15, 23, 42, 0.98) 0%, rgba(30, 41, 59, 0.98) 100%)';
 }
@@ -2905,17 +2921,48 @@ GULL AND ZUBAIR NASWAR DEALER'S
 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1de9b6" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
 <span style="font-size:0.7rem;color:var(--accent);font-weight:700;letter-spacing:0.06em;text-transform:uppercase;">Login Required</span>
 </div>
-<p style="color: var(--text-muted); margin-bottom: 26px; font-size: 0.82rem; line-height: 1.5;">
-Your account protects your data with enterprise-grade encryption.<br><strong style="color:var(--text-main)"></strong>.
+<p style="color: var(--text-muted); margin-bottom: 22px; font-size: 0.82rem; line-height: 1.5;">
+Your account protects your data with enterprise-grade encryption.
 </p>
+
+<button id="auth-google-btn" type="button" onclick="_handleGoogleBtnClick()" aria-label="Sign in with Google" style="
+  display:inline-flex;align-items:center;justify-content:center;
+  width:52px;height:52px;border-radius:50%;
+  border:1.5px solid #dadce0;
+  background:#fff;
+  cursor:pointer;
+  box-shadow:0 1px 3px rgba(0,0,0,0.10);
+  margin-bottom:16px;
+  transition:box-shadow 0.15s,border-color 0.15s,transform 0.12s,opacity 0.15s;
+  -webkit-tap-highlight-color:transparent;
+  padding:0;
+" onmouseover="this.style.boxShadow='0 3px 10px rgba(66,133,244,0.28)';this.style.borderColor='#4285F4';this.style.transform='scale(1.08)';"
+   onmouseout="this.style.boxShadow='0 1px 3px rgba(0,0,0,0.10)';this.style.borderColor='#dadce0';this.style.transform='scale(1)';">
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="26" height="26">
+    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.36-8.16 2.36-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+  </svg>
+</button>
+<div id="gsi-btn-container" style="display:none;"></div>
+
+<!-- ── Divider ── -->
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;">
+  <div style="flex:1;height:1px;background:var(--glass-border);"></div>
+  <span style="font-size:0.72rem;color:var(--text-muted);font-weight:500;white-space:nowrap;">or sign in with email</span>
+  <div style="flex:1;height:1px;background:var(--glass-border);"></div>
+</div>
+
+<!-- ── Email / Password Form ── -->
 <form id="auth-form" style="display: flex; flex-direction: column; gap: 13px;">
 <input type="email" id="auth-email" placeholder="Email Address" required autocomplete="username"
 style="width: 100%; padding: 13px; background: var(--input-bg); border: 1px solid var(--glass-border); border-radius: 12px; box-sizing: border-box; color: var(--text-main); font-size:0.9rem;">
 <input type="password" id="auth-password" placeholder="Password" required autocomplete="current-password"
 style="width: 100%; padding: 13px; background: var(--input-bg); border: 1px solid var(--glass-border); border-radius: 12px; box-sizing: border-box; color: var(--text-main); font-size:0.9rem;">
-<div style="display: flex; gap: 10px; margin-top: 8px;">
+<div style="margin-top: 8px;">
 <button type="submit" class="btn btn-main" style="
-flex: 1; padding: 13px; font-size: 1rem; border-radius: 12px;
+width:100%; padding: 13px; font-size: 1rem; border-radius: 12px;
 background-color: #1de9b6 !important;
 background-image: none !important;
 color: #003d2e !important;
@@ -2923,29 +2970,33 @@ font-weight:700;
 ">
 Sign In
 </button>
-<button type="button" id="auth-signup-btn" class="btn" style="flex: 1; padding: 13px; font-size: 1rem; border-radius: 12px; background: var(--input-bg); border: 1px solid var(--glass-border); color: var(--text-main);">
-Sign Up
-</button>
 </div>
+<p style="font-size:0.72rem;color:var(--text-muted);margin-top:14px;line-height:1.5;">
+Don\'t have access? <strong style="color:var(--text-main);">Contact the administrator</strong> to have your account added.
+</p>
 </form>
 <div id="auth-message" style="font-size: 0.8rem; margin-top: 15px; min-height: 20px;"></div>
-<div style="margin-top:18px;padding:10px 14px;background:var(--input-bg);border-radius:10px;border:1px solid var(--glass-border);">
-<div style="font-size:0.65rem;color:var(--text-muted);line-height:1.6;">
-<strong style="color:var(--text-main)">AES-256-GCM</strong> encrypted backups &nbsp;·&nbsp;
-<strong style="color:var(--text-main)"></strong> &nbsp;·&nbsp;
-<strong style="color:var(--text-main)"></strong>
+<div style="margin-top:16px;padding:10px 14px;background:var(--input-bg);border-radius:10px;border:1px solid var(--glass-border);">
+<div style="font-size:0.63rem;color:var(--text-muted);line-height:1.8;display:flex;flex-wrap:wrap;justify-content:center;gap:0 10px;">
+  <span><strong style="color:var(--text-main)">AES-256-GCM</strong> encryption</span>
+  <span style="opacity:0.35;">·</span>
+  <span><strong style="color:var(--text-main)">PBKDF2-SHA-512</strong> · 210 000 iters</span>
+  <span style="opacity:0.35;">·</span>
+  <span><strong style="color:var(--text-main)">UID-bound</strong> keys</span>
+  <span style="opacity:0.35;">·</span>
+  <span><strong style="color:var(--text-main)">Per-user</strong> random salt</span>
+  <span style="opacity:0.35;">·</span>
+  <span>Crypto <strong style="color:var(--text-main)">v4</strong></span>
 </div>
 </div>
 </div>
 `;
 document.body.appendChild(overlay);
+
+_initGSIInOverlay();
 const form = document.getElementById('auth-form');
 if(form) form.addEventListener('submit', handleSignIn);
-const signupBtn = document.getElementById('auth-signup-btn');
-if(signupBtn) signupBtn.addEventListener('click', (e) => {
-e.preventDefault();
-handleSignUp();
-});
+
 OfflineAuth.getSavedEmail().then(email => {
 if (email) {
 const emailInput = document.getElementById('auth-email');
@@ -2954,19 +3005,18 @@ if (emailInput) { emailInput.value = email; }
 }).catch(() => {});
 }
 function showAuthOverlay() {
-let overlay = document.getElementById('auth-overlay');
-if (!overlay) {
+const existing = document.getElementById('auth-overlay');
+if (existing) existing.remove();
 createAuthOverlay();
-} else {
-overlay.style.display = 'flex';
-}
 document.body.style.overflow = 'hidden';
 }
 function hideAuthOverlay() {
-if (!currentUser) return;
 const overlay = document.getElementById('auth-overlay');
 if (overlay) {
-overlay.style.display = 'none';
+overlay.style.animation = 'auth-fade-out 0.22s ease forwards';
+setTimeout(() => {
+  if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+}, 230);
 }
 document.body.style.overflow = '';
 }
@@ -3011,6 +3061,220 @@ try { sessionStorage.removeItem(KEY_ATTEMPTS); sessionStorage.removeItem(KEY_LOC
 },
 };
 })();
+
+const GOOGLE_CLIENT_ID = window._GOOGLE_CLIENT_ID || '';
+
+async function _checkUserApproved(uid, email) {
+if (!navigator.onLine) return { denied: false };
+try {
+const db = (typeof firebaseDB !== 'undefined' && firebaseDB) ? firebaseDB : firebase.firestore();
+const snap = await db.collection('users').doc(uid).get();
+if (!snap.exists) {
+await firebase.auth().signOut().catch(() => {});
+return { denied: true, reason: `Access denied. Your account (${email}) is not registered in this system. Contact the administrator.` };
+}
+const data = snap.data() || {};
+if (data.approved === false) {
+await firebase.auth().signOut().catch(() => {});
+return { denied: true, reason: `Access denied. Your account has been suspended. Contact the administrator.` };
+}
+return { denied: false, role: data.role || 'user', displayName: data.displayName || '' };
+} catch(e) {
+if (e.code === 'permission-denied') {
+await firebase.auth().signOut().catch(() => {});
+return { denied: true, reason: 'Access denied. You do not have permission to use this app.' };
+}
+return { denied: false };
+}
+}
+
+async function _applyGoogleUser(user) {
+const check = await _checkUserApproved(user.uid, user.email);
+if (check.denied) {
+const messageDiv = document.getElementById('auth-message');
+const btn = document.getElementById('auth-google-btn');
+if (messageDiv) { messageDiv.textContent = check.reason; messageDiv.style.color = 'var(--danger)'; }
+if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+return;
+}
+const _googleKeyMaterial = user.uid;
+currentUser = {
+id: user.uid, uid: user.uid,
+email: user.email, displayName: check.displayName || user.displayName || '',
+photoURL: user.photoURL || null, googleAuth: true,
+role: check.role || 'user'
+};
+idb.setUserPrefix(user.uid);
+await IDBCrypto.setSessionKey(user.email, _googleKeyMaterial, user.uid);
+await IDBCrypto.sessionSet('login', {
+uid: user.uid, email: user.email,
+displayName: user.displayName || '', googleAuth: true,
+lastLogin: new Date().toISOString()
+});
+try { localStorage.setItem('_gznd_session_active', '1'); sessionStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
+if (typeof database !== 'undefined' && database) {
+try {
+const userRef = firebaseDB.collection('users').doc(user.uid);
+const snap = await userRef.get();
+if (!snap.exists) {
+await userRef.set({ email: user.email, displayName: user.displayName || '', createdAt: Date.now(), role: 'user', authProvider: 'google' });
+} else {
+const providers = (user.providerData || []).map(p => p.providerId).filter(Boolean);
+await userRef.set({ authProviders: providers, lastLoginAt: Date.now() }, { merge: true });
+}
+} catch(e) { console.warn('Google auth: Firestore user-doc write failed', e); }
+}
+await _linkPasswordAfterGoogleSignIn(user);
+try { if (typeof loadAllData === 'function') await loadAllData(); } catch(e) { console.warn('Post-Google-login data load failed:', e); }
+
+hideAuthOverlay();
+setTimeout(() => {
+if (typeof refreshAllDisplays === 'function') refreshAllDisplays();
+if (typeof performOneClickSync === 'function') performOneClickSync();
+}, 300);
+}
+
+async function _checkGoogleRedirectResult() {}
+
+let _pendingLinkEmail    = null;
+let _pendingLinkPassword = null;
+
+async function _linkPasswordAfterGoogleSignIn(user) {
+if (!_pendingLinkEmail || !_pendingLinkPassword) return;
+if (_pendingLinkEmail.toLowerCase() !== (user.email || '').toLowerCase()) {
+_pendingLinkEmail = null;
+_pendingLinkPassword = null;
+return;
+}
+const pendingEmail    = _pendingLinkEmail;
+const pendingPassword = _pendingLinkPassword;
+_pendingLinkEmail    = null;
+_pendingLinkPassword = null;
+try {
+const emailCred = firebase.auth.EmailAuthProvider.credential(pendingEmail, pendingPassword);
+await user.linkWithCredential(emailCred);
+await OfflineAuth.saveCredentials(pendingEmail, pendingPassword);
+showToast('Password linked — you can now sign in with either method.', 'success', 4000);
+} catch(e) {
+if (e.code === 'auth/credential-already-in-use' || e.code === 'auth/email-already-in-use') {
+showToast('Password already linked to this account.', 'info', 3000);
+} else if (e.code === 'auth/weak-password') {
+showToast('Password too weak to link — use a stronger password next time.', 'warning', 4000);
+} else {
+console.warn('Password link failed (non-critical):', e.code, e.message);
+}
+}
+}
+
+async function _onGoogleCredential(response) {
+const messageDiv = document.getElementById('auth-message');
+if (!response || !response.credential) {
+if (messageDiv) { messageDiv.textContent = 'Google sign-in cancelled.'; messageDiv.style.color = 'var(--danger)'; }
+return;
+}
+
+if (messageDiv) { messageDiv.textContent = 'Signing in…'; messageDiv.style.color = 'var(--accent)'; }
+
+const container = document.getElementById('gsi-btn-container');
+if (container) container.style.pointerEvents = 'none';
+try {
+if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+const _gAuth = (typeof auth !== 'undefined' && auth) ? auth : firebase.auth();
+const credential = firebase.auth.GoogleAuthProvider.credential(response.credential);
+const result = await _gAuth.signInWithCredential(credential);
+if (messageDiv) { messageDiv.textContent = 'Signed in! Opening app…'; messageDiv.style.color = 'var(--accent-emerald)'; }
+await _applyGoogleUser(result.user);
+} catch(error) {
+console.error('Google credential sign-in failed:', _safeErr(error));
+if (error.code === 'auth/account-exists-with-different-credential') {
+const _existingEmail = error.email || (error.customData && error.customData.email) || '';
+const _pendingGCred  = error.credential || firebase.auth.GoogleAuthProvider.credential(response.credential);
+if (_existingEmail) {
+if (messageDiv) {
+messageDiv.textContent = 'This Google account\'s email already has a password account. Enter your password below first — Google will link automatically on sign-in.';
+messageDiv.style.color = 'var(--warning)';
+const emailInput = document.getElementById('auth-email');
+if (emailInput) emailInput.value = _existingEmail;
+}
+if (container) container.style.pointerEvents = '';
+const btn = document.getElementById('auth-google-btn');
+if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+return;
+}
+}
+let msg = 'Google sign-in failed.';
+if (error.code === 'auth/invalid-credential' || error.code === 'auth/invalid-id-token')
+  msg = 'Google token invalid. Please try again.';
+else if (error.code === 'auth/operation-not-allowed')
+  msg = 'Google sign-in is not enabled. Contact the administrator.';
+else if (error.code === 'auth/account-exists-with-different-credential')
+  msg = 'This email is registered with a different sign-in method.';
+else if (error.code === 'auth/network-request-failed')
+  msg = 'Network error. Check your connection and try again.';
+else msg = 'Google sign-in failed: ' + (error.message || error.code || '');
+if (messageDiv) { messageDiv.textContent = msg; messageDiv.style.color = 'var(--danger)'; }
+if (container) container.style.pointerEvents = '';
+const btn = document.getElementById('auth-google-btn');
+if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+}
+}
+
+window._onGoogleCredential = _onGoogleCredential;
+
+let _gsiInitialized = false;
+
+function _initGSIInOverlay() {
+if (_gsiInitialized) return;
+if (typeof google === 'undefined' || !google.accounts || !google.accounts.id) {
+setTimeout(_initGSIInOverlay, 300);
+return;
+}
+if (!GOOGLE_CLIENT_ID) return;
+google.accounts.id.initialize({
+client_id:             GOOGLE_CLIENT_ID,
+callback:              window._onGoogleCredential,
+auto_select:           false,
+cancel_on_tap_outside: true,
+use_fedcm_for_prompt:  true,
+itp_support:           true,
+});
+_gsiInitialized = true;
+}
+
+function _handleGoogleBtnClick() {
+const btn = document.getElementById('auth-google-btn');
+const msg = document.getElementById('auth-message');
+if (!navigator.onLine) {
+if (msg) { msg.textContent = 'Google sign-in requires internet.'; msg.style.color = 'var(--danger)'; }
+return;
+}
+if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+if (msg) { msg.textContent = ''; }
+
+function doPrompt() {
+if (typeof google === 'undefined' || !google.accounts || !google.accounts.id) {
+  setTimeout(doPrompt, 300);
+  return;
+}
+if (!_gsiInitialized) _initGSIInOverlay();
+google.accounts.id.prompt(notification => {
+  const mom = notification.getMomentType ? notification.getMomentType() : '';
+  if (notification.isSkippedMoment && notification.isSkippedMoment()) {
+    if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+    if (msg) {
+      msg.style.color = 'var(--text-muted)';
+      msg.textContent = 'No Google accounts detected. Sign into Google in your browser first, then try again.';
+    }
+  } else if (notification.isDismissedMoment && notification.isDismissedMoment()) {
+    if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+    if (msg) { msg.textContent = ''; }
+  }
+});
+}
+doPrompt();
+}
+window._handleGoogleBtnClick = _handleGoogleBtnClick;
+
 async function handleSignIn(e) {
 if(e) e.preventDefault();
 const emailInput = document.getElementById('auth-email');
@@ -3064,9 +3328,18 @@ try {
 if (typeof firebase !== 'undefined' && firebase.apps.length && navigator.onLine) {
 const firebaseAuth = auth || firebase.auth();
 const _signInCred = await firebaseAuth.signInWithEmailAndPassword(email, password);
+const _wlCheck = await _checkUserApproved(_signInCred.user.uid, email);
+if (_wlCheck.denied) {
+messageDiv.textContent = _wlCheck.reason;
+messageDiv.style.color = 'var(--danger)';
+return;
+}
 await OfflineAuth.saveCredentials(email, password);
 idb.setUserPrefix(_signInCred.user.uid);
-await IDBCrypto.setSessionKey(email, password);
+const _linkedProviders = (_signInCred.user.providerData || []).map(p => p && p.providerId).filter(Boolean);
+const _hasGoogleLinked = _linkedProviders.includes('google.com');
+const _encKeyMaterial  = _hasGoogleLinked ? _signInCred.user.uid : password;
+await IDBCrypto.setSessionKey(email, _encKeyMaterial, _signInCred.user.uid);
 await IDBCrypto.sessionSet('login', {
   uid: _signInCred.user.uid,
   email,
@@ -3105,7 +3378,7 @@ email: email,
 offlineMode: true
 };
 idb.setUserPrefix(currentUser.uid);
-await IDBCrypto.setSessionKey(email, password);
+await IDBCrypto.setSessionKey(email, password, currentUser.uid);
 try { localStorage.setItem('_gznd_session_active', '1'); sessionStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
 LoginRateLimiter.recordSuccess();
 messageDiv.textContent = '✓ Offline Login Successful';
@@ -3114,32 +3387,42 @@ try {
   if (typeof loadAllData === 'function') await loadAllData();
 } catch(e) { console.warn('Post-offline-login data reload failed:', e); }
 setTimeout(() => {
-if (currentUser) {
-const overlay = document.getElementById('auth-overlay');
-if (overlay) { overlay.style.display = 'none'; }
-document.body.style.overflow = '';
+hideAuthOverlay();
 if (typeof refreshAllDisplays === 'function') refreshAllDisplays();
-}
 }, 300);
 }
 } catch (error) {
 console.error('Sign in failed.', _safeErr(error));
 let errorMessage = 'Sign in failed. ';
 if (error.code === 'auth/invalid-email') errorMessage = 'Invalid email address.';
-else if (error.code === 'auth/user-disabled') errorMessage = 'Account disabled.';
-else if (error.code === 'auth/user-not-found') errorMessage = 'No account found.';
+else if (error.code === 'auth/user-disabled') errorMessage = 'Account disabled. Contact the administrator.';
+else if (error.code === 'auth/user-not-found') errorMessage = 'No account found for this email.';
 else if (error.code === 'auth/wrong-password') errorMessage = 'Incorrect password.';
+else if (error.code === 'auth/invalid-credential' || error.code === 'auth/invalid-login-credentials') {
+const _methods = await firebase.auth().fetchSignInMethodsForEmail(email).catch(() => []);
+if (_methods.includes('google.com') && !_methods.includes('password')) {
+messageDiv.textContent = 'This account uses Google sign-in. Tap the Google button above to sign in — your password will also be linked.';
+messageDiv.style.color = 'var(--warning)';
+_pendingLinkEmail    = email;
+_pendingLinkPassword = password;
+LoginRateLimiter.recordSuccess();
+return;
+} else {
+errorMessage = 'Incorrect email or password.';
+}
+}
+else if (error.code === 'auth/too-many-requests') errorMessage = 'Too many attempts. Please wait a moment and try again.';
 else if (error.code === 'auth/network-request-failed') {
 const valid = await OfflineAuth.verifyCredentials(email, password).catch(() => false);
 if (valid) {
 currentUser = { id: email.replace(/[^a-zA-Z0-9]/g, '_'), uid: email.replace(/[^a-zA-Z0-9]/g, '_'), email, offlineMode: true };
 idb.setUserPrefix(currentUser.uid);
-await IDBCrypto.setSessionKey(email, password);
+await IDBCrypto.setSessionKey(email, password, currentUser.uid);
 try { localStorage.setItem('_gznd_session_active', '1'); sessionStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
 try { if (typeof loadAllData === 'function') await loadAllData(); } catch(e) {}
 messageDiv.textContent = '✓ Offline Login (Network unavailable)';
 messageDiv.style.color = 'var(--accent-emerald)';
-setTimeout(() => { if(currentUser){const o=document.getElementById('auth-overlay');if(o)o.style.display='none';document.body.style.overflow='';if(typeof refreshAllDisplays==='function')refreshAllDisplays();} }, 300);
+setTimeout(() => { hideAuthOverlay(); if(typeof refreshAllDisplays==='function')refreshAllDisplays(); }, 300);
 return;
 }
 errorMessage = 'Network error. If you have logged in before, ensure correct credentials for offline access.';
@@ -3156,66 +3439,179 @@ messageDiv.textContent = errorMessage;
 messageDiv.style.color = 'var(--danger)';
 }
 }
-async function handleSignUp() {
-const emailInput = document.getElementById('auth-email');
-const passwordInput = document.getElementById('auth-password');
-const messageDiv = document.getElementById('auth-message');
-if (!emailInput || !passwordInput || !messageDiv) return;
-const email = emailInput.value.trim();
-const password = passwordInput.value;
-if (!email || !password) {
-messageDiv.textContent = 'Please enter email and password';
-messageDiv.style.color = 'var(--danger)';
-return;
-}
-if (password.length < 8) {
-messageDiv.textContent = 'Password must be at least 8 characters';
-messageDiv.style.color = 'var(--danger)';
-return;
-}
-messageDiv.textContent = 'Creating account...';
-messageDiv.style.color = 'var(--accent)';
+async function _isAdminUser() {
+if (!currentUser || !firebaseDB) return false;
 try {
-if (typeof firebase !== 'undefined' && firebase.auth) {
-const userCredential = await firebase.auth().createUserWithEmailAndPassword(email, password);
-currentUser = {
-id: userCredential.user.uid,
-uid: userCredential.user.uid,
-email: userCredential.user.email,
-displayName: userCredential.user.displayName
-};
-await OfflineAuth.saveCredentials(email, password);
-idb.setUserPrefix(currentUser.uid);
-await IDBCrypto.setSessionKey(email, password);
-try { localStorage.setItem('_gznd_session_active', '1'); sessionStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
-if (database) {
-await firebaseDB.collection('users').doc(FIXED_UID).set({
-email: email,
-createdAt: Date.now(),
-role: 'admin'
+const snap = await firebaseDB.collection('users').doc(currentUser.uid).get();
+return snap.exists && snap.data().role === 'admin';
+} catch(_) { return false; }
+}
+
+function _accountsIndexRef() {
+return firebaseDB.collection('users').doc(currentUser.uid)
+  .collection('settings').doc('accounts_index');
+}
+
+async function _readAccountsIndex() {
+const snap = await _accountsIndexRef().get();
+if (!snap.exists) return [];
+const data = snap.data() || {};
+return Array.isArray(data.accounts) ? data.accounts : [];
+}
+
+async function _writeAccountsIndex(accounts) {
+await _accountsIndexRef().set({ accounts, updatedAt: Date.now() }, { merge: false });
+}
+
+let _newAccountRole = 'user';
+function setNewAccountRole(role) {
+_newAccountRole = role;
+const userBtn  = document.getElementById('acct-role-user');
+const adminBtn = document.getElementById('acct-role-admin');
+if (userBtn)  userBtn.classList.toggle('active',  role === 'user');
+if (adminBtn) adminBtn.classList.toggle('active', role === 'admin');
+}
+
+async function adminAddAccount() {
+const emailEl = document.getElementById('acct-new-email');
+const passEl  = document.getElementById('acct-new-password');
+const msgEl   = document.getElementById('acct-add-msg');
+const btn     = document.getElementById('acct-add-btn');
+if (!emailEl || !passEl || !msgEl) return;
+const email    = emailEl.value.trim();
+const password = passEl.value;
+const role     = _newAccountRole || 'user';
+const setMsg = (txt, color) => { if (msgEl) { msgEl.textContent = txt; msgEl.style.color = color || 'var(--text-muted)'; } };
+if (!email)              { setMsg('Enter an email address.', 'var(--danger)'); return; }
+if (password.length < 8) { setMsg('Password must be at least 8 characters.', 'var(--danger)'); return; }
+if (!navigator.onLine)   { setMsg('Internet required to create accounts.', 'var(--danger)'); return; }
+if (btn) { btn.disabled = true; btn.textContent = 'Creating...'; }
+setMsg('Creating account...', 'var(--accent)');
+try {
+const secondaryApp = firebase.apps.find(a => a.name === '_adminCreate') ||
+  firebase.initializeApp(firebaseConfig, '_adminCreate');
+const secondaryAuth = secondaryApp.auth();
+const cred = await secondaryAuth.createUserWithEmailAndPassword(email, password);
+const newUid = cred.user.uid;
+await secondaryAuth.signOut();
+await firebaseDB.collection('users').doc(newUid).set({
+  email, role, approved: true,
+  createdAt: Date.now(), createdBy: currentUser.email
 });
+const entry = { uid: newUid, email, role, approved: true, createdAt: Date.now(), createdBy: currentUser.email };
+const existing = await _readAccountsIndex();
+await _writeAccountsIndex([...existing.filter(a => a.uid !== newUid), entry]);
+emailEl.value = '';
+passEl.value  = '';
+_newAccountRole = 'user';
+setNewAccountRole('user');
+setMsg('Account created successfully.', 'var(--accent-emerald)');
+showToast('Account created: ' + email, 'success');
+await loadAccountsList();
+} catch (err) {
+const code = err.code || '';
+if (code === 'auth/email-already-in-use') setMsg('This email is already registered.', 'var(--danger)');
+else if (code === 'auth/invalid-email')   setMsg('Invalid email address.', 'var(--danger)');
+else if (code === 'auth/weak-password')   setMsg('Password too weak.', 'var(--danger)');
+else setMsg('Failed: ' + (err.message || code), 'var(--danger)');
+console.error('adminAddAccount error:', _safeErr(err));
+} finally {
+if (btn) { btn.disabled = false; btn.textContent = 'Add Account'; }
 }
-messageDiv.textContent = 'Account created successfully!';
-messageDiv.style.color = 'var(--accent-emerald)';
-setTimeout(() => {
-hideAuthOverlay();
-performOneClickSync();
-}, 1500);
-} else {
-messageDiv.textContent = 'Internet required to create a new account.';
-messageDiv.style.color = 'var(--danger)';
 }
-} catch (error) {
-console.error('Sign up failed.', _safeErr(error));
-let errorMessage = 'Sign up failed. ';
-if (error.code === 'auth/email-already-in-use') errorMessage += 'Email already registered.';
-else if (error.code === 'auth/invalid-email') errorMessage += 'Invalid email address.';
-else if (error.code === 'auth/weak-password') errorMessage += 'Password too weak (min 8 chars).';
-else errorMessage += error.message || 'Try again.';
-messageDiv.textContent = '' + errorMessage;
-messageDiv.style.color = 'var(--danger)';
+
+async function loadAccountsList() {
+const listEl = document.getElementById('manage-accounts-list');
+if (!listEl) return;
+if (!navigator.onLine) {
+listEl.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;text-align:center;padding:16px;">Internet required to load accounts.</div>';
+return;
+}
+listEl.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;text-align:center;padding:16px;">Loading...</div>';
+try {
+const meSnap = await firebaseDB.collection('users').doc(currentUser.uid).get();
+const meData = meSnap.exists ? meSnap.data() : {};
+const meEntry = { uid: currentUser.uid, email: currentUser.email, approved: meData.approved !== false, ...meData };
+const others = await _readAccountsIndex().catch(() => []);
+const allAccounts = [meEntry, ...others.filter(a => a.uid !== currentUser.uid)];
+allAccounts.sort((a, b) => (a.email || '').localeCompare(b.email || ''));
+if (allAccounts.length === 0) {
+listEl.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;text-align:center;padding:16px;">No accounts found.</div>';
+return;
+}
+listEl.innerHTML = allAccounts.map(acct => {
+const isMe     = acct.uid === currentUser.uid;
+const approved = acct.approved !== false;
+const dot = approved
+  ? '<span style="width:7px;height:7px;border-radius:50%;background:var(--accent-emerald);display:inline-block;flex-shrink:0;"></span>'
+  : '<span style="width:7px;height:7px;border-radius:50%;background:var(--danger);display:inline-block;flex-shrink:0;"></span>';
+const actions = isMe
+  ? '<span style="font-size:0.65rem;color:var(--text-muted);font-style:italic;">(you)</span>'
+  : [
+      '<button class="btn-theme" data-uid="' + acct.uid + '" data-approved="' + approved + '" data-email="' + esc(acct.email||'') + '" onclick="adminToggleApproval(this.dataset.uid,this.dataset.email,this.dataset.approved===\'true\')" style="font-size:0.72rem;padding:4px 9px;color:' + (approved ? 'var(--accent-gold)' : 'var(--accent-emerald)') + ';border-color:' + (approved ? 'rgba(251,191,36,0.3)' : 'rgba(29,233,182,0.3)') + ';">' + (approved ? 'Suspend' : 'Reinstate') + '</button>',
+      '<button class="btn-theme" data-uid="' + acct.uid + '" data-email="' + esc(acct.email||'') + '" onclick="adminRemoveAccount(this.dataset.uid,this.dataset.email)" style="font-size:0.72rem;padding:4px 9px;color:var(--danger);border-color:rgba(239,68,68,0.3);">Remove</button>'
+    ].join('');
+return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;background:var(--glass-raised);border:1px solid var(--glass-border);border-radius:var(--radius-lg);margin-bottom:8px;">' +
+  '<div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1;">' + dot +
+  '<div style="min-width:0;"><div style="font-size:0.82rem;font-weight:700;color:var(--text-main);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
+  esc(acct.email||acct.uid) + (isMe ? ' <em style=\"color:var(--text-muted);font-size:0.65rem;\">(you)</em>' : '') + '</div>' +
+  '<div style="display:flex;gap:4px;align-items:center;margin-top:3px;">' +
+  (acct.role === 'admin'
+    ? '<span style="font-size:0.58rem;padding:2px 7px;border-radius:9999px;background:rgba(29,233,182,0.12);color:var(--accent-emerald);border:1px solid rgba(29,233,182,0.3);font-weight:700;text-transform:uppercase;">admin</span>'
+    : '<span style="font-size:0.58rem;padding:2px 7px;border-radius:9999px;background:var(--glass-raised);color:var(--text-muted);border:1px solid var(--glass-border);font-weight:700;text-transform:uppercase;">user</span>') +
+  (!approved ? '<span style="font-size:0.58rem;color:var(--danger);font-weight:700;">· Suspended</span>' : '') +
+  '</div>' +
+  '</div></div><div style="display:flex;gap:5px;flex-shrink:0;">' + actions + '</div></div>';
+}).join('');
+} catch(err) {
+listEl.innerHTML = '<div style="color:var(--danger);font-size:0.8rem;text-align:center;padding:16px;">Failed to load: ' + esc(err.message||'') + '</div>';
+console.error('loadAccountsList:', _safeErr(err));
 }
 }
+
+async function adminToggleApproval(uid, email, currentlyApproved) {
+const confirmed = await showGlassConfirm(
+(currentlyApproved ? 'Suspend' : 'Reinstate') + ' the account for ' + email + '?' +
+(currentlyApproved ? '\n\nThey will be blocked on their next login attempt.' : '\n\nThey will be able to sign in again.'),
+{ title: currentlyApproved ? 'Suspend Account' : 'Reinstate Account',
+  confirmText: currentlyApproved ? 'Suspend' : 'Reinstate',
+  cancelText: 'Cancel', danger: currentlyApproved }
+);
+if (!confirmed) return;
+try {
+await firebaseDB.collection('users').doc(uid).update({ approved: !currentlyApproved }).catch(() => {});
+const accounts = await _readAccountsIndex();
+const updated = accounts.map(a => a.uid === uid ? { ...a, approved: !currentlyApproved } : a);
+await _writeAccountsIndex(updated);
+showToast('Account ' + (currentlyApproved ? 'suspended' : 'reinstated') + ': ' + email, currentlyApproved ? 'warning' : 'success');
+await loadAccountsList();
+} catch(err) {
+showToast('Failed to update account.', 'error');
+console.error('adminToggleApproval:', _safeErr(err));
+}
+}
+
+async function adminRemoveAccount(uid, email) {
+if (uid === currentUser.uid) { showToast('You cannot remove your own account.', 'warning'); return; }
+const confirmed = await showGlassConfirm(
+'Remove access for ' + email + '?\n\nThey will be blocked immediately. Their stored data is preserved.\n\nTo fully delete the Firebase Auth account, use Firebase Console.',
+{ title: 'Remove Account', confirmText: 'Remove', cancelText: 'Cancel', danger: true }
+);
+if (!confirmed) return;
+try {
+await firebaseDB.collection('users').doc(uid).update({ approved: false, removedAt: Date.now(), removedBy: currentUser.email }).catch(() => {});
+const accounts = await _readAccountsIndex();
+const updated = accounts.map(a => a.uid === uid ? { ...a, approved: false } : a);
+await _writeAccountsIndex(updated);
+showToast('Access removed: ' + email, 'success');
+await loadAccountsList();
+} catch(err) {
+showToast('Failed to remove account.', 'error');
+console.error('adminRemoveAccount:', _safeErr(err));
+}
+}
+
+async function handleSignUp() {}
 async function signOut() {
 try {
 stopDatabaseHeartbeat();

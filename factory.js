@@ -202,7 +202,7 @@ if (container) container.style.opacity = '1';
 async function refreshFactorySettingsOverlay() {
 const overlay = document.getElementById('factorySettingsOverlay');
 if (overlay && overlay.style.display === 'flex') {
-// Snapshot any unsaved live selections so a sync re-render doesn't wipe them
+
 const container = document.getElementById('factoryRawMaterialsContainer');
 const liveRows = container ? Array.from(container.querySelectorAll('.factory-formula-grid')) : [];
 const liveState = liveRows.map(row => ({
@@ -211,7 +211,7 @@ qty: row.querySelector('.factory-mat-qty')?.value || ''
 }));
 const hasUnsavedWork = liveState.some(r => r.id !== '');
 await renderFactorySettingsRows();
-// Restore live selections if the user had unsaved work in progress
+
 if (hasUnsavedWork) {
 const newRows = container ? Array.from(container.querySelectorAll('.factory-formula-grid')) : [];
 liveState.forEach((state, idx) => {

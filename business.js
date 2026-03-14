@@ -210,80 +210,126 @@ if (window.trustedTypes && window.trustedTypes.createPolicy) {
   window.setHTML = (el, html) => { el.innerHTML = html; };
 }
 const CryptoEngine = (() => {
-const MAGIC = new Uint8Array([0x47,0x5A,0x4E,0x44,0x5F,0x45,0x4E,0x43,0x5F,0x56,0x32]);
+
+const MAGIC_V2 = new Uint8Array([0x47,0x5A,0x4E,0x44,0x5F,0x45,0x4E,0x43,0x5F,0x56,0x32]);
+
+const MAGIC_V4 = new Uint8Array([0x47,0x5A,0x4E,0x44,0x5F,0x45,0x4E,0x43,0x5F,0x56,0x34]);
 const SALT_LEN = 32;
 const IV_LEN = 12;
-const PBKDF2_ITERS = 100000;
-async function deriveKey(email, password, salt) {
-const enc = new TextEncoder();
-const keyMaterial = await crypto.subtle.importKey(
-'raw',
-enc.encode(email.toLowerCase().trim() + ':' + password),
-'PBKDF2',
-false,
-['deriveKey']
-);
-return crypto.subtle.deriveKey(
-{ name: 'PBKDF2', salt: salt, iterations: PBKDF2_ITERS, hash: 'SHA-256' },
-keyMaterial,
-{ name: 'AES-GCM', length: 256 },
-false,
-['encrypt', 'decrypt']
-);
+const UID_HASH_LEN = 32;
+const PBKDF2_ITERS_V4 = 210000;
+const PBKDF2_ITERS_V2 = 100000;
+
+async function deriveKeyV4(email, password, uid, salt) {
+  const enc = new TextEncoder();
+
+  const ikm = enc.encode(email.toLowerCase().trim() + ':' + password + ':' + (uid || ''));
+  const keyMaterial = await crypto.subtle.importKey('raw', ikm, 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: PBKDF2_ITERS_V4, hash: 'SHA-512' },
+    keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+  );
 }
-async function deriveKeyHash(email, password) {
-const enc = new TextEncoder();
-const keyMaterial = await crypto.subtle.importKey(
-'raw', enc.encode(email.toLowerCase().trim() + ':' + password),
-'PBKDF2', false, ['deriveKey']
-);
-const fixedSalt = enc.encode('GZND_LOCAL_AUTH_SALT_v2_' + email.toLowerCase().trim());
-const key = await crypto.subtle.deriveKey(
-{ name: 'PBKDF2', salt: fixedSalt, iterations: PBKDF2_ITERS, hash: 'SHA-256' },
-keyMaterial, { name: 'AES-GCM', length: 256 }, true, ['encrypt']
-);
-const raw = await crypto.subtle.exportKey('raw', key);
-const hashBuf = await crypto.subtle.digest('SHA-256', raw);
-return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2,'0')).join('');
+
+async function deriveKeyV2(email, password, salt) {
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw', enc.encode(email.toLowerCase().trim() + ':' + password), 'PBKDF2', false, ['deriveKey']
+  );
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: PBKDF2_ITERS_V2, hash: 'SHA-256' },
+    keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+  );
 }
+
+async function _hashUID(uid) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(uid || ''));
+  return new Uint8Array(buf);
+}
+
+async function deriveKeyHashV4(email, password, salt) {
+  const enc = new TextEncoder();
+  const ikm = enc.encode(email.toLowerCase().trim() + ':' + password);
+  const keyMaterial = await crypto.subtle.importKey('raw', ikm, 'PBKDF2', false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: PBKDF2_ITERS_V4, hash: 'SHA-512' },
+    keyMaterial, { name: 'AES-GCM', length: 256 }, true, ['encrypt']
+  );
+  const raw = await crypto.subtle.exportKey('raw', key);
+  const hashBuf = await crypto.subtle.digest('SHA-512', raw);
+  return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
 return {
-async encrypt(dataObj, email, password) {
-const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
-const iv = crypto.getRandomValues(new Uint8Array(IV_LEN));
-const key = await deriveKey(email, password, salt);
-const plaintext = new TextEncoder().encode(JSON.stringify(dataObj));
-const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
-const ctBytes = new Uint8Array(ciphertext);
-const out = new Uint8Array(MAGIC.length + SALT_LEN + IV_LEN + ctBytes.length);
-let offset = 0;
-out.set(MAGIC, offset); offset += MAGIC.length;
-out.set(salt, offset); offset += SALT_LEN;
-out.set(iv, offset); offset += IV_LEN;
-out.set(ctBytes, offset);
-return new Blob([out], { type: 'application/octet-stream' });
-},
-async decrypt(arrayBuffer, email, password) {
-const bytes = new Uint8Array(arrayBuffer);
-const magic = bytes.slice(0, MAGIC.length);
-for (let i = 0; i < MAGIC.length; i++) {
-if (magic[i] !== MAGIC[i]) throw new Error('INVALID_FORMAT');
-}
-let offset = MAGIC.length;
-const salt = bytes.slice(offset, offset + SALT_LEN); offset += SALT_LEN;
-const iv = bytes.slice(offset, offset + IV_LEN); offset += IV_LEN;
-const ciphertext = bytes.slice(offset);
-const key = await deriveKey(email, password, salt);
-let plaintext;
-try {
-plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
-} catch(e) {
-throw new Error('WRONG_CREDENTIALS');
-}
-return JSON.parse(new TextDecoder().decode(plaintext));
-},
-async hashCredentials(email, password) {
-return deriveKeyHash(email, password);
-}
+
+  async encrypt(dataObj, email, password, uid) {
+    const _uid = uid || (typeof currentUser !== 'undefined' && currentUser ? (currentUser.uid || currentUser.email || '') : '');
+    const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
+    const iv = crypto.getRandomValues(new Uint8Array(IV_LEN));
+    const uidHash = await _hashUID(_uid);
+    const key = await deriveKeyV4(email, password, _uid, salt);
+    const plaintext = new TextEncoder().encode(JSON.stringify(dataObj));
+    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
+    const ctBytes = new Uint8Array(ciphertext);
+
+    const out = new Uint8Array(MAGIC_V4.length + UID_HASH_LEN + SALT_LEN + IV_LEN + ctBytes.length);
+    let offset = 0;
+    out.set(MAGIC_V4, offset); offset += MAGIC_V4.length;
+    out.set(uidHash, offset); offset += UID_HASH_LEN;
+    out.set(salt, offset);    offset += SALT_LEN;
+    out.set(iv, offset);      offset += IV_LEN;
+    out.set(ctBytes, offset);
+    return new Blob([out], { type: 'application/octet-stream' });
+  },
+
+  async decrypt(arrayBuffer, email, password, uid) {
+    const bytes = new Uint8Array(arrayBuffer);
+    const magicLen = MAGIC_V4.length;
+
+    const isV4 = bytes.length >= magicLen && MAGIC_V4.every((b, i) => bytes[i] === b);
+    const isV2 = !isV4 && bytes.length >= magicLen && MAGIC_V2.every((b, i) => bytes[i] === b);
+    if (!isV4 && !isV2) throw new Error('INVALID_FORMAT');
+
+    let offset = magicLen;
+    if (isV4) {
+
+      const storedUidHash = bytes.slice(offset, offset + UID_HASH_LEN); offset += UID_HASH_LEN;
+      const _uid = uid || (typeof currentUser !== 'undefined' && currentUser ? (currentUser.uid || currentUser.email || '') : '');
+      const actualUidHash = await _hashUID(_uid);
+      const uidMatch = storedUidHash.every((b, i) => b === actualUidHash[i]);
+      if (!uidMatch) throw new Error('WRONG_ACCOUNT');
+      const salt = bytes.slice(offset, offset + SALT_LEN); offset += SALT_LEN;
+      const iv  = bytes.slice(offset, offset + IV_LEN);   offset += IV_LEN;
+      const ciphertext = bytes.slice(offset);
+      const key = await deriveKeyV4(email, password, _uid, salt);
+      try {
+        const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+        return JSON.parse(new TextDecoder().decode(plaintext));
+      } catch(e) { throw new Error('WRONG_CREDENTIALS'); }
+    } else {
+
+      const salt = bytes.slice(offset, offset + SALT_LEN); offset += SALT_LEN;
+      const iv  = bytes.slice(offset, offset + IV_LEN);   offset += IV_LEN;
+      const ciphertext = bytes.slice(offset);
+      const key = await deriveKeyV2(email, password, salt);
+      try {
+        const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+        return JSON.parse(new TextDecoder().decode(plaintext));
+      } catch(e) { throw new Error('WRONG_CREDENTIALS'); }
+    }
+  },
+
+  async hashCredentials(email, password, existingSaltHex) {
+    let salt;
+    if (existingSaltHex) {
+      salt = new Uint8Array(existingSaltHex.match(/.{2}/g).map(h => parseInt(h, 16)));
+    } else {
+      salt = crypto.getRandomValues(new Uint8Array(32));
+    }
+    const hash = await deriveKeyHashV4(email, password, salt);
+    const saltHex = Array.from(salt).map(b => b.toString(16).padStart(2,'0')).join('');
+    return { hash, saltHex };
+  }
 };
 })();
 const OfflineAuth = {
@@ -300,11 +346,13 @@ req.onerror = e => rej(e.target.error || new Error('OfflineAuth: IDB open failed
 });
 },
 async saveCredentials(email, password) {
-const hash = await CryptoEngine.hashCredentials(email, password);
+
+const { hash, saltHex } = await CryptoEngine.hashCredentials(email, password);
 const db = await this._getDB();
 return new Promise((res, rej) => {
 const tx = db.transaction(this.STORE, 'readwrite');
-tx.objectStore(this.STORE).put({ hash, email, savedAt: Date.now() }, 'active');
+
+tx.objectStore(this.STORE).put({ hash, saltHex, email, savedAt: Date.now(), version: 4 }, 'active');
 tx.oncomplete = () => res(true);
 tx.onerror = e => rej(e.target.error || new Error('OfflineAuth: saveCredentials failed'));
 });
@@ -319,7 +367,13 @@ req.onerror = e => rej(e.target.error || new Error('OfflineAuth: verifyCredentia
 });
 if (!record) return false;
 if (record.email.toLowerCase().trim() !== email.toLowerCase().trim()) return false;
-const hash = await CryptoEngine.hashCredentials(email, password);
+if (!record.saltHex) {
+
+console.warn('OfflineAuth: legacy credential record found, re-authentication required');
+return false;
+}
+
+const { hash } = await CryptoEngine.hashCredentials(email, password, record.saltHex);
 return hash === record.hash;
 },
 async getSavedEmail() {
@@ -405,25 +459,23 @@ req.onerror = () => resolve(false);
 const IDBCrypto = (() => {
   let _sessionKey = null;
   let _keyEmail = null;
+  let _keyUid = null;
   let _db = null;
   let _initPromise = null;
   let _preWarmPromise = null;
-  const PBKDF2_ITERS = 100000;
+
+  const _wrapKeyMemCache = new Map();
+  const PBKDF2_ITERS = 210000;
+  const PBKDF2_HASH  = 'SHA-512';
   const DB_NAME = 'GZND_SecureStorage';
-  const DB_VERSION = 3;
+  const DB_VERSION = 4;
   const KEY_STORE = 'encryptedKeys';
   const ENTROPY_STORE = 'deviceEntropy';
   const SESSION_STORE = 'userSession';
-  const WRAPKEY_CACHE_STORE = 'wrapKeyCache';
-  const IDB_KDF_SALT = new Uint8Array([
-    0x47,0x5A,0x4E,0x44,0x49,0x44,0x42,0x4B,
-    0x45,0x59,0x53,0x41,0x4C,0x54,0x76,0x31,
-    0x32,0x30,0x32,0x34,0x41,0x45,0x53,0x32,
-    0x35,0x36,0x47,0x43,0x4D,0x45,0x4E,0x43
-  ]);
+
   const IV_LEN = 12;
   const ENC_PREFIX = 'GZND_ENC_';
-  const KEY_VERSION = '3';
+  const KEY_VERSION = '4';
   const LEGACY_LS_KEY = '_gznd_idbk_v2';
   const LEGACY_LS_SECRET = '_gznd_wksec_v2';
   const LEGACY_LS_EMAIL = '_gznd_key_email';
@@ -442,6 +494,7 @@ const IDBCrypto = (() => {
       };
       request.onupgradeneeded = (event) => {
         const db = event.target.result;
+
         if (!db.objectStoreNames.contains(KEY_STORE)) {
           const keyStore = db.createObjectStore(KEY_STORE, { keyPath: 'id' });
           keyStore.createIndex('email', 'email', { unique: false });
@@ -453,8 +506,9 @@ const IDBCrypto = (() => {
         if (!db.objectStoreNames.contains(SESSION_STORE)) {
           db.createObjectStore(SESSION_STORE, { keyPath: 'id' });
         }
-        if (!db.objectStoreNames.contains(WRAPKEY_CACHE_STORE)) {
-          db.createObjectStore(WRAPKEY_CACHE_STORE, { keyPath: 'id' });
+
+        if (db.objectStoreNames.contains('wrapKeyCache')) {
+          db.deleteObjectStore('wrapKeyCache');
         }
       };
     });
@@ -491,25 +545,12 @@ const IDBCrypto = (() => {
       request.onerror = () => reject(request.error || new Error("IDB request failed"));
     });
   }
-  async function _getCachedWrapKeyBytes(saltHex) {
-    try {
-      const db = await _initDB();
-      const result = await new Promise((res, rej) => {
-        const tx = db.transaction(WRAPKEY_CACHE_STORE, 'readonly');
-        const req = tx.objectStore(WRAPKEY_CACHE_STORE).get('primary');
-        req.onsuccess = () => res(req.result);
-        req.onerror = () => res(null);
-      });
-      if (result && result.saltHex === saltHex && result.keyBytes) return result.keyBytes;
-    } catch (e) {}
-    return null;
+
+  function _getCachedWrapKey(saltHex) {
+    return _wrapKeyMemCache.get(saltHex) || null;
   }
-  async function _setCachedWrapKeyBytes(saltHex, keyBytes) {
-    try {
-      const db = await _initDB();
-      const tx = db.transaction(WRAPKEY_CACHE_STORE, 'readwrite');
-      tx.objectStore(WRAPKEY_CACHE_STORE).put({ id: 'primary', saltHex, keyBytes, ts: Date.now() });
-    } catch (e) {}
+  function _setCachedWrapKey(saltHex, cryptoKey) {
+    _wrapKeyMemCache.set(saltHex, cryptoKey);
   }
   async function _idbSessionSet(id, value) {
     try {
@@ -550,96 +591,73 @@ const IDBCrypto = (() => {
       });
     } catch(e) {}
   }
-  async function deriveSessionKey(email, password) {
+
+  async function deriveSessionKey(email, password, kdfSalt) {
     const enc = new TextEncoder();
-    const keyMaterial = await crypto.subtle.importKey(
-      'raw',
-      enc.encode(email.toLowerCase().trim() + ':' + password),
-      'PBKDF2',
-      false,
-      ['deriveKey']
-    );
+
+    const ikm = enc.encode(email.toLowerCase().trim() + ':' + password);
+    const keyMaterial = await crypto.subtle.importKey('raw', ikm, 'PBKDF2', false, ['deriveKey']);
     return crypto.subtle.deriveKey(
-      {
-        name: 'PBKDF2',
-        salt: IDB_KDF_SALT,
-        iterations: PBKDF2_ITERS,
-        hash: 'SHA-256'
-      },
+      { name: 'PBKDF2', salt: kdfSalt, iterations: PBKDF2_ITERS, hash: PBKDF2_HASH },
       keyMaterial,
       { name: 'AES-GCM', length: 256 },
       true,
       ['encrypt', 'decrypt']
     );
   }
-  async function deriveWrappingKey(wrapSalt) {
+
+  async function deriveWrappingKey(wrapSalt, uid) {
     const saltHex = Array.from(wrapSalt).map(b => b.toString(16).padStart(2, '0')).join('');
-    const cachedBytes = await _getCachedWrapKeyBytes(saltHex);
-    if (cachedBytes) {
-      try {
-        return await crypto.subtle.importKey(
-          'raw',
-          new Uint8Array(cachedBytes),
-          { name: 'AES-KW' },
-          false,
-          ['wrapKey', 'unwrapKey']
-        );
-      } catch (e) {
-      }
-    }
+    const cacheKey = saltHex + ':' + (uid || '');
+
+    const cached = _getCachedWrapKey(cacheKey);
+    if (cached) return cached;
+
     const deviceEntropy = await _getDeviceEntropy();
-    const combined = new Uint8Array(deviceEntropy.length + wrapSalt.length);
+    const enc = new TextEncoder();
+    const uidBytes = enc.encode(uid || '');
+
+    const combined = new Uint8Array(deviceEntropy.length + wrapSalt.length + uidBytes.length);
     combined.set(deviceEntropy, 0);
     combined.set(wrapSalt, deviceEntropy.length);
-    const keyMaterial = await crypto.subtle.importKey(
-      'raw',
-      combined,
-      'PBKDF2',
-      false,
-      ['deriveKey']
-    );
+    combined.set(uidBytes, deviceEntropy.length + wrapSalt.length);
+
+    const wkSalt = enc.encode('GZND_WK_SALT_v4:' + (uid || 'anon'));
+    const keyMaterial = await crypto.subtle.importKey('raw', combined, 'PBKDF2', false, ['deriveKey']);
     const wrapKey = await crypto.subtle.deriveKey(
-      {
-        name: 'PBKDF2',
-        salt: IDB_KDF_SALT,
-        iterations: PBKDF2_ITERS,
-        hash: 'SHA-256'
-      },
+      { name: 'PBKDF2', salt: wkSalt, iterations: PBKDF2_ITERS, hash: PBKDF2_HASH },
       keyMaterial,
       { name: 'AES-KW', length: 256 },
-      true,
+      false,
       ['wrapKey', 'unwrapKey']
     );
-    try {
-      const rawBuf = await crypto.subtle.exportKey('raw', wrapKey);
-      await _setCachedWrapKeyBytes(saltHex, Array.from(new Uint8Array(rawBuf)));
-      return await crypto.subtle.importKey(
-        'raw',
-        new Uint8Array(rawBuf),
-        { name: 'AES-KW' },
-        false,
-        ['wrapKey', 'unwrapKey']
-      );
-    } catch (e) {
-      return wrapKey;
-    }
+
+    _setCachedWrapKey(cacheKey, wrapKey);
+    return wrapKey;
   }
-  async function _persistKey(key, email) {
+
+  async function _persistKey(key, email, uid, kdfSalt) {
     try {
       const db = await _initDB();
       const wrapSalt = crypto.getRandomValues(new Uint8Array(16));
-      const wrapKey = await deriveWrappingKey(wrapSalt);
+      const wrapKey = await deriveWrappingKey(wrapSalt, uid);
       const wrapped = await crypto.subtle.wrapKey('raw', key, wrapKey, 'AES-KW');
       const wrappedBytes = new Uint8Array(wrapped);
-      const saltHex = Array.from(wrapSalt).map(b => b.toString(16).padStart(2, '0')).join('');
+      const wrapSaltHex = Array.from(wrapSalt).map(b => b.toString(16).padStart(2, '0')).join('');
       const keyHex = Array.from(wrappedBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+
+      const kdfSaltHex = kdfSalt
+        ? Array.from(kdfSalt).map(b => b.toString(16).padStart(2, '0')).join('')
+        : null;
       await new Promise((resolve, reject) => {
         const tx = db.transaction(KEY_STORE, 'readwrite');
         const store = tx.objectStore(KEY_STORE);
         const request = store.put({
           id: 'primary',
-          email: email,
-          salt: saltHex,
+          email,
+          uid: uid || null,
+          salt: wrapSaltHex,
+          kdfSalt: kdfSaltHex,
           wrappedKey: keyHex,
           version: KEY_VERSION,
           createdAt: Date.now()
@@ -647,13 +665,14 @@ const IDBCrypto = (() => {
         request.onsuccess = () => resolve();
         request.onerror = () => reject(request.error || new Error("IDB request failed"));
       });
+
       try {
-        const keyBackup = { email, salt: saltHex, wrappedKey: keyHex, version: KEY_VERSION, ts: Date.now() };
+        const keyBackup = { email, uid: uid || null, salt: wrapSaltHex, kdfSalt: kdfSaltHex, wrappedKey: keyHex, version: KEY_VERSION, provider: provider || 'password', ts: Date.now() };
         await _idbSessionSet('keyBackup', keyBackup);
-        localStorage.setItem('_gznd_session_key_backup', JSON.stringify(keyBackup));
-        sessionStorage.setItem('_gznd_session_key_backup', JSON.stringify(keyBackup));
+
       } catch (e) {}
       _keyEmail = email;
+      _keyUid   = uid || null;
       _clearLegacyStorage();
     } catch (e) {
       console.error('IDBCrypto: Failed to persist key:', _safeErr(e));
@@ -671,53 +690,44 @@ const IDBCrypto = (() => {
         request.onerror = () => reject(request.error || new Error("IDB request failed"));
       });
       if (stored && stored.salt && stored.wrappedKey) {
-        const wrapSalt = new Uint8Array(stored.salt.match(/.{2}/g).map(h => parseInt(h, 16)));
+        const wrapSalt    = new Uint8Array(stored.salt.match(/.{2}/g).map(h => parseInt(h, 16)));
         const wrappedBytes = new Uint8Array(stored.wrappedKey.match(/.{2}/g).map(h => parseInt(h, 16)));
-        const wrapKey = await deriveWrappingKey(wrapSalt);
-        const key = await crypto.subtle.unwrapKey(
-          'raw',
-          wrappedBytes,
-          wrapKey,
-          'AES-KW',
-          { name: 'AES-GCM', length: 256 },
-          false,
-          ['encrypt', 'decrypt']
-        );
-        _keyEmail = stored.email;
-        return key;
+        const uid = stored.uid || null;
+        const wrapKey = await deriveWrappingKey(wrapSalt, uid);
+        try {
+          const key = await crypto.subtle.unwrapKey(
+            'raw', wrappedBytes, wrapKey, 'AES-KW',
+            { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+          );
+          _keyEmail = stored.email;
+          _keyUid   = uid;
+          return key;
+        } catch(unwrapErr) {
+
+          console.warn('IDBCrypto: Primary key unwrap failed, trying backup', unwrapErr);
+        }
       }
+
       const idbBackup = await _idbSessionGet('keyBackup');
       if (idbBackup && idbBackup.salt && idbBackup.wrappedKey) {
-        const wrapSalt = new Uint8Array(idbBackup.salt.match(/.{2}/g).map(h => parseInt(h, 16)));
+        const wrapSalt     = new Uint8Array(idbBackup.salt.match(/.{2}/g).map(h => parseInt(h, 16)));
         const wrappedBytes = new Uint8Array(idbBackup.wrappedKey.match(/.{2}/g).map(h => parseInt(h, 16)));
-        const wrapKey = await deriveWrappingKey(wrapSalt);
-        const key = await crypto.subtle.unwrapKey(
-          'raw', wrappedBytes, wrapKey, 'AES-KW',
-          { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
-        );
-        _keyEmail = idbBackup.email;
-        await _persistKey(key, idbBackup.email);
-        return key;
-      }
-      const sessionBackup = sessionStorage.getItem('_gznd_session_key_backup') || localStorage.getItem('_gznd_session_key_backup');
-      if (sessionBackup) {
-        const backup = JSON.parse(sessionBackup);
-        if (backup.salt && backup.wrappedKey) {
-          const wrapSalt = new Uint8Array(backup.salt.match(/.{2}/g).map(h => parseInt(h, 16)));
-          const wrappedBytes = new Uint8Array(backup.wrappedKey.match(/.{2}/g).map(h => parseInt(h, 16)));
-          const wrapKey = await deriveWrappingKey(wrapSalt);
+        const uid = idbBackup.uid || null;
+        const wrapKey = await deriveWrappingKey(wrapSalt, uid);
+        try {
           const key = await crypto.subtle.unwrapKey(
-            'raw',
-            wrappedBytes,
-            wrapKey,
-            'AES-KW',
-            { name: 'AES-GCM', length: 256 },
-            false,
-            ['encrypt', 'decrypt']
+            'raw', wrappedBytes, wrapKey, 'AES-KW',
+            { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
           );
-          _keyEmail = backup.email;
-          await _persistKey(key, backup.email);
+          _keyEmail = idbBackup.email;
+          _keyUid   = uid;
+          const kdfSalt = idbBackup.kdfSalt
+            ? new Uint8Array(idbBackup.kdfSalt.match(/.{2}/g).map(h => parseInt(h, 16)))
+            : null;
+          await _persistKey(key, idbBackup.email, uid, kdfSalt);
           return key;
+        } catch(e) {
+          console.warn('IDBCrypto: Backup key unwrap failed', e);
         }
       }
       return await _migrateFromLegacy();
@@ -754,8 +764,9 @@ const IDBCrypto = (() => {
         false,
         ['encrypt', 'decrypt']
       );
-      await _persistKey(key, email);
+      await _persistKey(key, email, null, null);
       _keyEmail = email;
+      _keyUid = null;
       return key;
     } catch (e) {
       console.error('IDBCrypto: Legacy migration failed:', _safeErr(e));
@@ -791,12 +802,17 @@ const IDBCrypto = (() => {
       }
       return _preWarmPromise;
     },
-    async setSessionKey(email, password) {
-      _sessionKey = await deriveSessionKey(email, password);
-      await _persistKey(_sessionKey, email);
+
+    async setSessionKey(email, password, uid) {
+      const _uid = uid || null;
+
+      const kdfSalt = crypto.getRandomValues(new Uint8Array(32));
+      _sessionKey = await deriveSessionKey(email, password, kdfSalt);
+      await _persistKey(_sessionKey, email, _uid, kdfSalt);
       _keyEmail = email;
+      _keyUid   = _uid;
       await _idbSessionSet('login', {
-        uid: null,
+        uid: _uid,
         email,
         lastLogin: new Date().toISOString()
       });
@@ -817,36 +833,56 @@ const IDBCrypto = (() => {
       }
       return this._restorePromise;
     },
-    async rederiveKey(email, password) {
+
+    async rederiveKey(email, password, uid) {
       try {
-        _sessionKey = await deriveSessionKey(email, password);
-        await _persistKey(_sessionKey, email);
+        const _uid = uid || _keyUid || null;
+
+        let kdfSalt = null;
+        try {
+          const db = await _initDB();
+          const stored = await new Promise((res) => {
+            const tx = db.transaction(KEY_STORE, 'readonly');
+            const req = tx.objectStore(KEY_STORE).get('primary');
+            req.onsuccess = () => res(req.result);
+            req.onerror  = () => res(null);
+          });
+          if (stored && stored.kdfSalt) {
+            kdfSalt = new Uint8Array(stored.kdfSalt.match(/.{2}/g).map(h => parseInt(h, 16)));
+          }
+        } catch(e) {}
+
+        if (!kdfSalt) kdfSalt = crypto.getRandomValues(new Uint8Array(32));
+        _sessionKey = await deriveSessionKey(email, password, kdfSalt);
+        await _persistKey(_sessionKey, email, _uid, kdfSalt);
         _keyEmail = email;
+        _keyUid   = _uid;
         return true;
       } catch (e) {
         console.error('IDBCrypto: Failed to re-derive key:', _safeErr(e));
         return false;
       }
     },
-    getStoredEmail() {
-      return _keyEmail;
-    },
+    getStoredEmail() { return _keyEmail; },
+    getStoredUid()   { return _keyUid; },
     clearSessionKey() {
       _sessionKey = null;
-      _keyEmail = null;
+      _keyEmail   = null;
+      _keyUid     = null;
+      _wrapKeyMemCache.clear();
       _initDB().then(db => {
-        const tx = db.transaction([KEY_STORE, ENTROPY_STORE, SESSION_STORE, WRAPKEY_CACHE_STORE], 'readwrite');
+        const stores = [KEY_STORE, ENTROPY_STORE, SESSION_STORE].filter(s => db.objectStoreNames.contains(s));
+        if (stores.length === 0) return;
+        const tx = db.transaction(stores, 'readwrite');
         tx.objectStore(KEY_STORE).delete('primary');
         tx.objectStore(ENTROPY_STORE).delete('primary');
         tx.objectStore(SESSION_STORE).clear();
-        tx.objectStore(WRAPKEY_CACHE_STORE).clear();
       }).catch(() => {});
       try {
-        sessionStorage.removeItem('_gznd_session_key_backup');
         sessionStorage.removeItem('_gznd_session_active');
-        localStorage.removeItem('_gznd_session_key_backup');
         localStorage.removeItem('_gznd_session_active');
         localStorage.removeItem('persistentLogin');
+
       } catch (e) {}
       _clearLegacyStorage();
     },
@@ -1130,7 +1166,7 @@ try {
 const isPlaintext = this._PLAINTEXT_KEYS && this._PLAINTEXT_KEYS.has(key);
 if (isPlaintext) {
 if (typeof rawData === 'string' && rawData.startsWith('GZND_ENC_')) {
-// Stale encrypted value for a now-plaintext key — clear it and return default
+
 this.remove(key).catch(() => {});
 resolve(defaultValue);
 return;
@@ -1309,12 +1345,10 @@ if (rawData === null || rawData === undefined) { results.set(key, null); return;
 try {
 const isPlaintext = this._PLAINTEXT_KEYS && this._PLAINTEXT_KEYS.has(key);
 if (isPlaintext) {
-// Plaintext keys: parse directly, no decryption needed.
-// If a stale encrypted value exists (GZND_ENC_ prefix), treat as missing
-// so it gets written fresh (unencrypted) on next save.
+
 if (typeof rawData === 'string' && rawData.startsWith('GZND_ENC_')) {
 results.set(key, null);
-// Schedule async deletion of stale encrypted value
+
 this.remove(key).catch(() => {});
 return;
 }
@@ -1958,9 +1992,7 @@ language: navigator.language || 'en',
 theme: document.documentElement.getAttribute('data-theme') || 'dark'
 }, { merge: true });
 startDeviceHeartbeat(deviceRef);
-// Defer the device command listener by one tick to ensure the Firestore SDK
-// has fully settled after the preceding .set() writes — avoids the
-// "INTERNAL ASSERTION FAILED: Unexpected state" error on cold start.
+
 setTimeout(() => {
 listenForDeviceCommands().catch(e => console.warn('Device command listener failed.', e));
 }, 2000);
