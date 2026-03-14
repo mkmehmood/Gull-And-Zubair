@@ -1,4 +1,4 @@
-const BUILD_HASH = 'naswar-dealer-v2';
+const BUILD_HASH = 'naswar-dealer-v1';
 const CACHE_NAME = 'app-' + BUILD_HASH;
 
 const ASSETS_TO_CACHE = [
@@ -20,8 +20,7 @@ const ASSETS_TO_CACHE = [
 const FIREBASE_CDN_URLS = [
   'https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js',
   'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js',
-  'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js',
-  'https://accounts.google.com/gsi/client'
+  'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js'
 ];
 
 self.addEventListener('install', (event) => {
