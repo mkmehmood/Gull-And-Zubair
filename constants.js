@@ -1,5 +1,5 @@
 
-window._GOOGLE_CLIENT_ID = '843533993616-REPLACE_WITH_YOUR_OAUTH_CLIENT_ID.apps.googleusercontent.com';
+window._GOOGLE_CLIENT_ID = '738042747408-sflql9g75ocinhabu13rf45p0q112p64.apps.googleusercontent.com';
 
 const APP_CONFIG = Object.freeze({
   CACHE_VERSION: 'naswar-dealer-v13',
