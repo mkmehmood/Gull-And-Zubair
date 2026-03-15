@@ -2,9 +2,9 @@
   "name": "Gull and Zubair Naswar Dealers",
   "short_name": "Gull & Zubair",
   "description": "Comprehensive management system for production, sales, inventory, and credits.",
-  "id": "/naswar-dealer/",
-  "start_url": "/naswar-dealer/",
-  "scope": "/naswar-dealer/",
+  "id": "/sarim/",
+  "start_url": "/sarim/",
+  "scope": "/sarim/",
   "display": "standalone",
   "display_override": [
     "standalone",
@@ -69,7 +69,7 @@
     }
   ],
   "share_target": {
-    "action": "/naswar-dealer/",
+    "action": "/sarim/",
     "method": "GET",
     "enctype": "application/x-www-form-urlencoded",
     "params": {
