@@ -1,4 +1,4 @@
-/** Saves data to SQLite and registers the change for delta sync tracking. */
+
 async function saveWithTracking(key, data, specificRecord = null, specificIds = null) {
 const result = await sqliteStore.set(key, data);
 const collectionEntry = SQLiteToFirestoreMap[key];
@@ -48,7 +48,7 @@ return SQLiteToFirestoreMap[sqliteKey]?.collection || sqliteKey;
 function getSQLiteKey(firestoreCollection) {
 return FirestoreToSQLiteMap[firestoreCollection] || firestoreCollection;
 }
-/** Uploads a single record to Firestore, queuing it offline if unavailable. */
+
 async function saveRecordToFirestore(sqliteKey, record, silent = true) {
 if (!firebaseDB || !currentUser) {
 return false;
@@ -89,6 +89,11 @@ const now = Date.now();
 const sanitized = sanitizeForFirestore({ ...record, syncedAt: new Date().toISOString() });
 if (!sanitized.createdAt) sanitized.createdAt = now;
 if (!record.isMerged) sanitized.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
+
+if (collectionName === 'inventory') {
+  const _supplierFields = ['supplierId', 'supplierName', 'supplierContact', 'supplierType', 'totalPayable', 'paidDate'];
+  _supplierFields.forEach(f => { if (!(f in record)) sanitized[f] = firebase.firestore.FieldValue.delete(); });
+}
 await docRef.set(sanitized, { merge: true });
 trackFirestoreWrite(1);
 await DeltaSync.setLastSyncTimestamp(collectionName);
@@ -119,7 +124,7 @@ showToast('Failed to sync to cloud — will retry when online', 'warning');
 return false;
 }
 }
-/** Deletes a record from Firestore and writes a tombstone, or queues offline. */
+
 async function deleteRecordFromFirestore(sqliteKey, recordId, silent = true) {
 if (!firebaseDB || !currentUser) {
 return false;
@@ -175,28 +180,15 @@ showToast('Failed to delete from cloud — will retry when online', 'warning');
 return false;
 }
 }
-/** Saves to SQLite immediately and pushes to Firestore in the background. */
+
 async function unifiedSave(sqliteKey, dataArray, specificRecord = null) {
 if (specificRecord && specificRecord.id) {
   await saveWithTracking(sqliteKey, dataArray, specificRecord);
-  const collectionName = getFirestoreCollection(sqliteKey);
-  (async () => {
+  _syncQueue.run(async () => {
     try {
-      const saved = await saveRecordToFirestore(sqliteKey, specificRecord);
-      if (!saved && typeof OfflineQueue !== 'undefined') {
-        const now = Date.now();
-        const fallback = sanitizeForFirestore({ ...specificRecord, syncedAt: new Date().toISOString() });
-        if (!fallback.createdAt) fallback.createdAt = now;
-        if (!specificRecord.isMerged) fallback.updatedAt = new Date(now).toISOString();
-        await OfflineQueue.add({
-          action: 'set',
-          collection: collectionName,
-          docId: String(specificRecord.id),
-          data: fallback
-        });
-        DeltaSync.markUploaded(collectionName, specificRecord.id);
-      }
+      await saveRecordToFirestore(sqliteKey, specificRecord);
     } catch (e) {
+      const collectionName = getFirestoreCollection(sqliteKey);
       if (typeof OfflineQueue !== 'undefined' && collectionName) {
         const now = Date.now();
         const fallback = sanitizeForFirestore({ ...specificRecord, syncedAt: new Date().toISOString() });
@@ -204,21 +196,20 @@ if (specificRecord && specificRecord.id) {
         if (!specificRecord.isMerged) fallback.updatedAt = new Date(now).toISOString();
         await OfflineQueue.add({
           action: 'set',
-          collection: collectionName,
+          collection: getFirestoreCollection(sqliteKey),
           docId: String(specificRecord.id),
           data: fallback
         });
-        DeltaSync.markUploaded(collectionName, specificRecord.id);
       }
     }
-  })();
+  });
 } else {
   await saveWithTracking(sqliteKey, dataArray);
 }
 triggerAutoSync();
 return true;
 }
-/** Deletes from SQLite and schedules Firestore deletion and tombstone registration. */
+
 async function unifiedDelete(sqliteKey, dataArray, deletedRecordId, opts = {}, preDeletedRecord = null) {
 if (opts.strict !== true) {
   console.warn(`[RecycleBin] BLOCKED unifiedDelete on "${sqliteKey}" id=${deletedRecordId} — strict flag missing. Pass { strict: true } to confirm intentional deletion.`);
@@ -227,14 +218,14 @@ if (opts.strict !== true) {
 }
 await saveWithTracking(sqliteKey, dataArray);
 const collectionName = getFirestoreCollection(sqliteKey);
-Promise.resolve().then(async () => {
+_syncQueue.run(async () => {
   try {
     if (collectionName && typeof window.registerDeletion === 'function') {
       await window.registerDeletion(deletedRecordId, collectionName, preDeletedRecord || null);
     }
     await deleteRecordFromFirestore(sqliteKey, deletedRecordId);
   } catch (e) {}
-}).catch(() => {});
+});
 triggerAutoSync();
 return true;
 }
@@ -309,7 +300,7 @@ experimentalAutoDetectLongPolling: true,
 experimentalForceLongPolling: false,
 merge: true
 });
-} catch (_fsPre) { /* already configured — safe to ignore */ }
+} catch (_fsPre) {  }
 database = firebase.firestore();
 firebaseDB = database;
 try { database.disableNetwork().catch(() => {}); } catch(_dnErr) {}
@@ -401,7 +392,7 @@ if (typeof firebaseDB !== 'undefined' && firebaseDB && window._firestoreNetworkD
     if (typeof OfflineQueue !== 'undefined' && navigator.onLine) {
       OfflineQueue.processQueue().catch(() => {});
     }
-  } catch (_enErr) { /* non-critical */ }
+  } catch (_enErr) {  }
 }
 try {
   if (typeof loadAllData === 'function') await loadAllData();
@@ -987,6 +978,7 @@ const _syncQueue = (() => {
     }
   };
 })();
+window._syncQueue = _syncQueue;
 
 const SYNC_COLLECTIONS = [
   {
@@ -1016,7 +1008,7 @@ const SYNC_COLLECTIONS = [
   {
     firestoreId:  'sales_customers',
     sqliteKey:       'sales_customers',
-    tabSyncFn:    null,
+    tabSyncFn:    'renderCustomersTable',
     lockOnClose:  false,
   },
   {
@@ -1079,42 +1071,47 @@ if (col.lockOnClose && closeYearInProgress) return;
 const changes = snapshot.docChanges();
 trackFirestoreRead(changes.length);
 if (changes.length === 0) return;
-let arr = await _getColData(col.sqliteKey);
-let hasChanges = false;
+const addedOrModified = [];
+const removedIds = [];
 for (const change of changes) {
 try {
 const docData = { id: change.doc.id, ...change.doc.data() };
 if (change.type === 'added' || change.type === 'modified') {
-const deletedArr = ensureArray(await sqliteStore.get('deleted_records'));
-const deletedSet = new Set(deletedArr);
-deletedSet.delete(change.doc.id);
-await sqliteStore.set('deleted_records', Array.from(deletedSet));
 if (typeof UUIDSyncRegistry !== 'undefined') {
 UUIDSyncRegistry.markDownloaded(col.firestoreId, change.doc.id);
 } else {
 DeltaSync.markDownloaded(col.firestoreId, change.doc.id);
 }
-arr = _updateArray(arr, docData, col.firestoreId);
-hasChanges = true;
+addedOrModified.push(docData);
 } else if (change.type === 'removed') {
-const deletedArr2 = ensureArray(await sqliteStore.get('deleted_records'));
-const deletedSet2 = new Set(deletedArr2);
-deletedSet2.add(change.doc.id);
-await sqliteStore.set('deleted_records', Array.from(deletedSet2));
 if (typeof UUIDSyncRegistry !== 'undefined') {
 UUIDSyncRegistry.markDownloaded(col.firestoreId, change.doc.id);
 } else {
 DeltaSync.markDownloaded(col.firestoreId, change.doc.id);
 }
 _ensureLocalTombstone(change.doc.id, col.firestoreId);
-arr = arr.filter(item => item.id !== change.doc.id);
-hasChanges = true;
+removedIds.push(change.doc.id);
 }
 } catch (docErr) {
 console.warn(`[Snapshot:${col.firestoreId}] doc error`, _safeErr(docErr));
 }
 }
-if (hasChanges) {
+const hasChanges = addedOrModified.length > 0 || removedIds.length > 0;
+if (!hasChanges) { recordSuccessfulConnection(); return; }
+{
+const deletedArr = ensureArray(await sqliteStore.get('deleted_records'));
+const deletedSet = new Set(deletedArr);
+addedOrModified.forEach(d => deletedSet.delete(d.id));
+removedIds.forEach(id => deletedSet.add(id));
+await sqliteStore.set('deleted_records', Array.from(deletedSet));
+}
+let arr = await _getColData(col.sqliteKey);
+for (const docData of addedOrModified) {
+arr = _updateArray(arr, docData, col.firestoreId);
+}
+for (const rid of removedIds) {
+arr = arr.filter(item => item.id !== rid);
+}
 await _setColData(col.sqliteKey, arr);
 await DeltaSync.setLastSyncTimestamp(col.firestoreId);
 emitSyncUpdate({ [col.sqliteKey]: null});
@@ -1126,7 +1123,6 @@ renderUnifiedTable();
 window[col.tabSyncFn]();
 }
 flashLivePulse();
-}
 recordSuccessfulConnection();
 } catch (err) {
 console.error(`[Snapshot:${col.firestoreId}] error`, _safeErr(err));
@@ -1137,19 +1133,20 @@ showToast('Failed to save data locally.', 'error');
 
 function _ensureLocalTombstone(recordId, collectionName) {
 const sid = String(recordId);
-sqliteStore.get('deletion_records').then(existing => {
-const arr = ensureArray(existing);
-const already = arr.some(r => String(r.id) === sid || String(r.recordId) === sid);
-if (!already) {
-arr.push({ id: sid, recordId: sid, collection: collectionName, recordType: collectionName, deletedAt: Date.now(), syncedToCloud: true });
-sqliteStore.set('deletion_records', arr).catch(() => {});
-}
-}).catch(() => {});
-sqliteStore.get('deleted_records').then(existing => {
-const set = new Set(ensureArray(existing));
-set.add(sid);
-sqliteStore.set('deleted_records', Array.from(set)).catch(() => {});
-}).catch(() => {});
+_syncQueue.run(async () => {
+  try {
+    const existing = ensureArray(await sqliteStore.get('deletion_records'));
+    const already = existing.some(r => String(r.id) === sid || String(r.recordId) === sid);
+    if (!already) {
+      existing.push({ id: sid, recordId: sid, collection: collectionName, recordType: collectionName, deletedAt: Date.now(), syncedToCloud: true });
+      await sqliteStore.set('deletion_records', existing);
+    }
+    const deletedArr = ensureArray(await sqliteStore.get('deleted_records'));
+    const set = new Set(deletedArr);
+    set.add(sid);
+    await sqliteStore.set('deleted_records', Array.from(set));
+  } catch (e) {}
+});
 }
 
 function _updateArray(array, docData, collectionName) {
@@ -1358,7 +1355,7 @@ async function subscribeToRealtime() {
       const storedFlag = await sqliteStore.get('pendingFirestoreYearClose');
       if (storedFlag === true) pendingFirestoreYearClose = true;
     }
-  } catch (_flagErr) { /* non-critical — continue with current flag value */ }
+  } catch (_flagErr) {  }
   if (pendingFirestoreYearClose && !closeYearInProgress) {
     try {
       const userRef = firebaseDB.collection('users').doc(currentUser.uid);
@@ -1408,7 +1405,7 @@ async function subscribeToRealtime() {
       if (!snap.exists) return;
       const data = snap.data() || {};
       if (data.forceLogout && data.forceLogout.at) {
-        const sessionStart = parseInt(localStorage.getItem('_gznd_session_start') || '0', 10);
+        const sessionStart = parseInt((await sqliteStore.get('session_start', 0)) || '0', 10);
         if (data.forceLogout.at > sessionStart) {
           showToast('Your account access has been revoked. Signing out…', 'error', 5000);
           setTimeout(async () => {
@@ -1595,12 +1592,17 @@ async function subscribeToRealtime() {
         trackFirestoreRead(1);
         const cloud = doc.data();
         if (!cloud || !Array.isArray(cloud.categories)) return;
-        const local = await sqliteStore.get('expense_categories') || [];
 
+        const cloudTs = cloud.categories_timestamp || cloud.updated_at || 0;
+        const localTs = (await sqliteStore.get('expense_categories_timestamp')) || 0;
+        if (cloudTs && localTs && cloudTs <= localTs) { recordSuccessfulConnection(); return; }
+
+        const local = await sqliteStore.get('expense_categories') || [];
         const cloudSorted = [...cloud.categories].sort((a, b) => (a.id || '').localeCompare(b.id || ''));
         const localSorted = [...local].sort((a, b) => (a.id || '').localeCompare(b.id || ''));
         if (JSON.stringify(cloudSorted) !== JSON.stringify(localSorted)) {
           await sqliteStore.set('expense_categories', cloud.categories);
+          if (cloudTs) await sqliteStore.set('expense_categories_timestamp', cloudTs);
           emitSyncUpdate({ expenseCategories: null});
           flashLivePulse();
         }
@@ -1701,9 +1703,11 @@ async function subscribeToRealtime() {
               } catch (collectionError) { console.warn('Failed to apply deletion to collection', _safeErr(collectionError)); }
               hasChanges = true;
             } else if (change.type === 'removed') {
-              const _removedRecordId = change.doc.data()?.recordId || change.doc.id;
-              deletedSet.delete(_removedRecordId);
-              deletedSet.delete(change.doc.id);
+
+              const _docRid = String(change.doc.data()?.recordId || change.doc.id);
+              deletionRecords = deletionRecords.filter(r =>
+                String(r.id) !== _docRid && String(r.recordId) !== _docRid
+              );
               hasChanges = true;
             }
           } catch (docError) { console.warn('Failed to save data locally.', _safeErr(docError)); }
@@ -2216,9 +2220,9 @@ async function _mergeAndPersist(cloudData) {
   _mark('inventory', data.factory_inventory_data); _mark('factory_history', data.factory_production_history);
   _mark('returns', data.stock_returns);         _mark('expenses', data.expenses);
 
-  await Promise.all([
-  ...Object.entries(_merged).map(([k, v]) => sqliteStore.set(k, v)),
-  sqliteStore.set('last_synced', new Date().toISOString()),
+  await sqliteStore.setBatch([
+  ...Object.entries(_merged).map(([k, v]) => [k, v]),
+  ['last_synced', new Date().toISOString()],
   ]);
 
   const _colMap = {
@@ -2473,7 +2477,7 @@ async function _doOneClickSync(silent = false) {
 
       const totalItemsToWrite = await _uploadChanges(userRef);
 
-      setTimeout(() => { if (typeof refreshAllDisplays === 'function') refreshAllDisplays(); }, 100);
+      if (typeof refreshAllDisplays === 'function') await refreshAllDisplays().catch(() => {});
       if (!silent) {
         const msg = totalItemsToWrite > 0
           ? `Restored ${totalCloudChanges} records, uploaded ${totalItemsToWrite} local changes`
@@ -2481,16 +2485,18 @@ async function _doOneClickSync(silent = false) {
         showToast(msg, 'success');
         if (typeof closeDataMenu === 'function') closeDataMenu();
       }
-      setTimeout(async () => {
-        try { if (typeof validateAllDataOnStartup === 'function') await validateAllDataOnStartup(); }
-        catch (e) { console.error('Data validation error:', _safeErr(e)); }
+      setTimeout(() => {
+        _syncQueue.run(async () => {
+          try { if (typeof validateAllDataOnStartup === 'function') await validateAllDataOnStartup(); }
+          catch (e) { console.error('Data validation error:', _safeErr(e)); }
+        });
       }, 2000);
       return;
     }
 
     const totalItemsToWrite = await _uploadChanges(userRef);
 
-    setTimeout(() => { if (typeof refreshAllDisplays === 'function') refreshAllDisplays(); }, 100);
+    if (typeof refreshAllDisplays === 'function') await refreshAllDisplays().catch(() => {});
 
     if (!silent) {
       if (totalCloudChanges === 0 && totalItemsToWrite === 0) {
@@ -2505,9 +2511,11 @@ async function _doOneClickSync(silent = false) {
       if (typeof closeDataMenu === 'function') closeDataMenu();
     }
 
-    setTimeout(async () => {
-      try { if (typeof validateAllDataOnStartup === 'function') await validateAllDataOnStartup(); }
-      catch (e) { console.error('Data validation error:', _safeErr(e)); }
+    setTimeout(() => {
+      _syncQueue.run(async () => {
+        try { if (typeof validateAllDataOnStartup === 'function') await validateAllDataOnStartup(); }
+        catch (e) { console.error('Data validation error:', _safeErr(e)); }
+      });
     }, 2000);
 
     return { down: totalCloudChanges, up: totalItemsToWrite };
@@ -2648,22 +2656,24 @@ async function _doPullDataFromCloud(silent = false, forceDownload = false) {
       }
     }
 
-    const [_fdf, _fac, _fcaf, _fsp, _fut] = await Promise.all([
-      sqliteStore.get('factory_default_formulas'),
-      sqliteStore.get('factory_additional_costs'),
-      sqliteStore.get('factory_cost_adjustment_factor'),
-      sqliteStore.get('factory_sale_prices'),
-      sqliteStore.get('factory_unit_tracking'),
+    const _settingsBatch = await sqliteStore.getBatch([
+      'factory_default_formulas', 'factory_additional_costs',
+      'factory_cost_adjustment_factor', 'factory_sale_prices', 'factory_unit_tracking',
     ]);
-    await Promise.all([
-      sqliteStore.set('factory_default_formulas', (_fdf && 'standard' in _fdf) ? _fdf : { standard: [], asaan: [] }),
-      sqliteStore.set('factory_additional_costs', (_fac && 'standard' in _fac) ? _fac : { standard: 0, asaan: 0 }),
-      sqliteStore.set('factory_cost_adjustment_factor', (_fcaf && 'standard' in _fcaf) ? _fcaf : { standard: 1, asaan: 1 }),
-      sqliteStore.set('factory_sale_prices', (_fsp && 'standard' in _fsp) ? _fsp : { standard: 0, asaan: 0 }),
-      sqliteStore.set('factory_unit_tracking', (_fut && 'standard' in _fut) ? _fut : { standard: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] }, asaan: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] } }),
-      sqliteStore.set('naswar_default_settings', defaultSettings),
-      sqliteStore.set('appMode', appMode),
-      sqliteStore.set('current_rep_profile', currentRepProfile),
+    const _fdf  = _settingsBatch.get('factory_default_formulas');
+    const _fac  = _settingsBatch.get('factory_additional_costs');
+    const _fcaf = _settingsBatch.get('factory_cost_adjustment_factor');
+    const _fsp  = _settingsBatch.get('factory_sale_prices');
+    const _fut  = _settingsBatch.get('factory_unit_tracking');
+    await sqliteStore.setBatch([
+      ['factory_default_formulas',       (_fdf  && 'standard' in _fdf)  ? _fdf  : { standard: [], asaan: [] }],
+      ['factory_additional_costs',       (_fac  && 'standard' in _fac)  ? _fac  : { standard: 0, asaan: 0 }],
+      ['factory_cost_adjustment_factor', (_fcaf && 'standard' in _fcaf) ? _fcaf : { standard: 1, asaan: 1 }],
+      ['factory_sale_prices',            (_fsp  && 'standard' in _fsp)  ? _fsp  : { standard: 0, asaan: 0 }],
+      ['factory_unit_tracking',          (_fut  && 'standard' in _fut)  ? _fut  : { standard: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] }, asaan: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] } }],
+      ['naswar_default_settings', defaultSettings],
+      ['appMode', appMode],
+      ['current_rep_profile', currentRepProfile],
     ]);
 
     const statsCols = ['production','sales','rep_sales','rep_customers','calculator_history',
@@ -2682,9 +2692,9 @@ async function _doPullDataFromCloud(silent = false, forceDownload = false) {
   }
 }
 
-function showSyncHealthPanel() {
-  verifyDeltaSyncSystem().then(results => {
-    const lastSync = localStorage.getItem('lastSync') || 'Unknown';
+async function showSyncHealthPanel() {
+  verifyDeltaSyncSystem().then(async results => {
+    const lastSync = (await sqliteStore.get('last_synced', null)) || 'Unknown';
     const pending = results.issues.length;
     const ok = results.valid.length;
 
@@ -3046,6 +3056,7 @@ displayName: user.displayName || '', googleAuth: true,
 lastLogin: new Date().toISOString()
 });
 try { localStorage.setItem('_gznd_session_active', '1'); sessionStorage.setItem('_gznd_session_active', '1'); localStorage.setItem('_gznd_session_start', String(Date.now())); } catch(e) {}
+sqliteStore.set('session_start', Date.now()).catch(() => {});
 if (typeof database !== 'undefined' && database) {
 try {
 const userRef = firebaseDB.collection('users').doc(user.uid);
@@ -3282,6 +3293,7 @@ await SQLiteCrypto.sessionSet('login', {
   lastLogin: new Date().toISOString()
 });
 try { localStorage.setItem('_gznd_session_active', '1'); sessionStorage.setItem('_gznd_session_active', '1'); localStorage.setItem('_gznd_session_start', String(Date.now())); } catch(e) {}
+sqliteStore.set('session_start', Date.now()).catch(() => {});
 LoginRateLimiter.recordSuccess();
 messageDiv.textContent = 'Success! Loading...';
 messageDiv.style.color = 'var(--accent-emerald)';
@@ -3577,7 +3589,7 @@ await sqliteStore.clearUserData().catch(() => {});
 await OfflineAuth.clearCredentials().catch(() => {});
 try {
 const keysToRemove = ['_gznd_session_active','_gznd_session_start','_gznd_session_key_backup',
-'persistentLogin','firestoreStats','_gznd_login_attempts','_gznd_login_lockout'];
+'persistentLogin','_gznd_login_attempts','_gznd_login_lockout'];
 keysToRemove.forEach(k => { try { localStorage.removeItem(k); } catch(_) {} });
 sessionStorage.clear();
 } catch(e) {}
@@ -3617,7 +3629,7 @@ await sqliteStore.clearUserData().catch(() => {});
 await OfflineAuth.clearCredentials().catch(() => {});
 try {
 const keysToRemove = ['_gznd_session_active','_gznd_session_start','_gznd_session_key_backup',
-'persistentLogin','firestoreStats','_gznd_login_attempts','_gznd_login_lockout'];
+'persistentLogin','_gznd_login_attempts','_gznd_login_lockout'];
 keysToRemove.forEach(k => { try { localStorage.removeItem(k); } catch(_) {} });
 sessionStorage.clear();
 } catch(e) {}

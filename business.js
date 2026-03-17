@@ -820,8 +820,6 @@ const sqliteStore = (() => {
   let _lastPersistAt   = 0;
   let _hasOPFS         = false;
   let _persistChannel  = null;
-  let _readCache       = new Map();
-  const READ_CACHE_TTL = 50;
 
   const _DEVICE_GLOBAL = new Set([
     'device_id', 'device_name', 'theme',
@@ -834,9 +832,9 @@ const sqliteStore = (() => {
     'appMode', 'appMode_timestamp',
     'repProfile', 'repProfile_timestamp',
     'assignedManager', 'assignedUserTabs',
-    'device_name', 'theme',
+    'device_name', 'theme', 'app_theme',
     'last_synced', 'firestore_initialized', 'firestore_init_timestamp',
-    'ui_state',
+    'ui_state', 'firestore_stats', 'session_start',
   ]);
 
   const _IDB_KEY_TO_COLLECTION = {
@@ -862,7 +860,7 @@ const sqliteStore = (() => {
     'factory_unit_tracking', 'naswar_default_settings',
     'expense_categories', 'sales_reps_list', 'user_roles_list',
     'offline_operation_queue', 'offline_dead_letter_queue',
-    'ui_state',
+    'ui_state', 'app_theme', 'firestore_stats', 'session_start',
   ]);
 
   function _rowType(key) {
@@ -961,8 +959,11 @@ const sqliteStore = (() => {
 
   async function _lsBlobWrite(lsKey, data) {
     try {
+      const CHUNK = 0x8000;
       let binary = '';
-      data.forEach(b => { binary += String.fromCharCode(b); });
+      for (let i = 0; i < data.length; i += CHUNK) {
+        binary += String.fromCharCode.apply(null, data.subarray(i, i + CHUNK));
+      }
       localStorage.setItem(lsKey, btoa(binary));
     } catch(e) {
       console.warn('[SQLite] localStorage blob write failed (storage full?):', _safeErr(e));
@@ -1135,7 +1136,10 @@ const sqliteStore = (() => {
     }
   }
 
-  function _clearStmtCache() {   }
+  let _stmtGet = null;
+  function _clearStmtCache() {
+    if (_stmtGet) { try { _stmtGet.free(); } catch {} _stmtGet = null; }
+  }
 
   function _bootstrapSchema(db) {
 
@@ -1200,15 +1204,22 @@ const sqliteStore = (() => {
   }
 
   function _rawGet(fullKey) {
-
-    const stmt = _sqlDB.prepare(
-      'SELECT value, encrypted FROM kv_store WHERE full_key = ?'
-    );
-    stmt.bind([fullKey]);
-    let row = null;
-    if (stmt.step()) row = stmt.getAsObject();
-    stmt.free();
-    return row;
+    try {
+      if (!_stmtGet) _stmtGet = _sqlDB.prepare('SELECT value, encrypted FROM kv_store WHERE full_key = ?');
+      _stmtGet.bind([fullKey]);
+      let row = null;
+      if (_stmtGet.step()) row = _stmtGet.getAsObject();
+      _stmtGet.reset();
+      return row;
+    } catch (e) {
+      _stmtGet = null;
+      const stmt = _sqlDB.prepare('SELECT value, encrypted FROM kv_store WHERE full_key = ?');
+      stmt.bind([fullKey]);
+      let row = null;
+      if (stmt.step()) row = stmt.getAsObject();
+      stmt.free();
+      return row;
+    }
   }
 
   function _rawSet(key, serialized, isEncrypted) {
@@ -1228,23 +1239,15 @@ const sqliteStore = (() => {
         row_type   = excluded.row_type,
         collection = excluded.collection
     `, [fk, key, uid, collection, rowType, isEncrypted ? 1 : 0, serialized, now, now]);
-
-    _readCache.delete(fk);
-    _schedulePersist(_persistUrgencyFor(key));
   }
 
   function _rawDelete(fullKey) {
     _sqlDB.run('DELETE FROM kv_store WHERE full_key = ?', [fullKey]);
-    _readCache.delete(fullKey);
     _schedulePersist(PERSIST_NORMAL_MS);
   }
 
   function _cachedGet(fullKey) {
-    const entry = _readCache.get(fullKey);
-    if (entry && (Date.now() - entry.ts) < READ_CACHE_TTL) return entry.row;
-    const row = _rawGet(fullKey);
-    _readCache.set(fullKey, { row, ts: Date.now() });
-    return row;
+    return _rawGet(fullKey);
   }
 
   async function _decrypt(key, rawData) {
@@ -1339,7 +1342,6 @@ const sqliteStore = (() => {
       if (_prefix !== newPrefix) {
         _prefix = newPrefix;
         _uid    = uid || '';
-        _readCache.clear();
         if (typeof DeltaSync !== 'undefined') {
           DeltaSync._cache = {};
           DeltaSync._dirty = new Map();
@@ -1355,7 +1357,6 @@ const sqliteStore = (() => {
     clearUserPrefix() {
       _prefix = '';
       _uid    = '';
-      _readCache.clear();
       if (typeof DeltaSync !== 'undefined') {
         DeltaSync._cache = {};
         DeltaSync._dirty = new Map();
@@ -1367,7 +1368,6 @@ const sqliteStore = (() => {
       if (_initPromise) return _initPromise;
       _initPromise = (async () => {
         try {
-          _readCache.clear();
 
           _hasOPFS = typeof navigator !== 'undefined' &&
                      !!navigator.storage &&
@@ -1375,6 +1375,7 @@ const sqliteStore = (() => {
 
           _SQL = await _loadSqlJs();
           const existing = await _loadBestDB();
+          _clearStmtCache();
           _sqlDB = existing ? new _SQL.Database(existing) : new _SQL.Database();
           _bootstrapSchema(_sqlDB);
 
@@ -1466,6 +1467,7 @@ const sqliteStore = (() => {
         }
       }
       _rawSet(key, stored, isEncrypted);
+      _schedulePersist(_persistUrgencyFor(key));
     },
 
     async setBatch(entries) {
@@ -1499,11 +1501,11 @@ const sqliteStore = (() => {
       try {
         for (const [key, stored, isEnc] of prepared) _rawSet(key, stored, isEnc);
         _sqlDB.run('COMMIT');
-        _schedulePersist(batchUrgency);
       } catch (e) {
         try { _sqlDB.run('ROLLBACK'); } catch {}
         throw e;
       }
+      _schedulePersist(batchUrgency);
     },
 
     async getBatch(keys) {
@@ -1554,7 +1556,6 @@ const sqliteStore = (() => {
     async clearUserData() {
       await this.init();
       _clearStmtCache();
-      _readCache.clear();
       if (!_uid) {
         _sqlDB.run(`DELETE FROM kv_store WHERE row_type != 'device'`);
         _sqlDB.run('DELETE FROM ndapp_outbox');
@@ -1563,14 +1564,12 @@ const sqliteStore = (() => {
         _sqlDB.run('DELETE FROM ndapp_outbox WHERE uid=?', [_uid]);
       }
       _sqlDB.run('PRAGMA wal_checkpoint(TRUNCATE)');
-      _sqlDB.run('VACUUM');
       await _flushPersist();
     },
 
     async clearAll() {
       await this.init();
       _clearStmtCache();
-      _readCache.clear();
       _sqlDB.run('DELETE FROM kv_store');
       _sqlDB.run('DELETE FROM ndapp_outbox');
       _sqlDB.run('PRAGMA wal_checkpoint(TRUNCATE)');
@@ -1670,7 +1669,6 @@ const sqliteStore = (() => {
       if (!_isValidSQLite(bytes)) throw new Error('[SQLite] importDB: invalid SQLite file');
       await this.init();
       _clearStmtCache();
-      _readCache.clear();
       _sqlDB = new _SQL.Database(bytes);
       _bootstrapSchema(_sqlDB);
       if (!_integrityCheck(_sqlDB)) throw new Error('[SQLite] importDB: integrity check failed');
@@ -1712,7 +1710,7 @@ const sqliteStore = (() => {
       } catch {}
 
       const dbBytes  = _sqlDB.export().byteLength;
-      const cacheHit = _readCache.size;
+      const cacheHit = 0;
 
       return {
         sqlite: {

@@ -121,11 +121,11 @@ updateSummary('payments-year', summaries.year);
 }
 
 async function openFactorySettings() {
-const factoryDefaultFormulas = (await sqliteStore.get('factory_default_formulas')) || {};
-const factoryAdditionalCosts = (await sqliteStore.get('factory_additional_costs')) || {};
-const factoryCostAdjustmentFactor = (await sqliteStore.get('factory_cost_adjustment_factor')) || {};
-const factorySalePrices = (await sqliteStore.get('factory_sale_prices')) || {};
-const factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {};
+let factoryDefaultFormulas = { standard: [], asaan: [] };
+let factoryAdditionalCosts = { standard: 0, asaan: 0 };
+let factoryCostAdjustmentFactor = { standard: 1, asaan: 1 };
+let factorySalePrices = { standard: 0, asaan: 0 };
+let factoryUnitTracking = { standard: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] }, asaan: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] } };
 try {
 const [loadedFormulas, loadedCosts, loadedFactor, loadedPrices, loadedTracking] = await Promise.all([
 sqliteStore.get('factory_default_formulas'),
@@ -134,18 +134,13 @@ sqliteStore.get('factory_cost_adjustment_factor'),
 sqliteStore.get('factory_sale_prices'),
 sqliteStore.get('factory_unit_tracking')
 ]);
-const factoryDefaultFormulas = (loadedFormulas && 'standard' in loadedFormulas && 'asaan' in loadedFormulas) ? loadedFormulas : { standard: [], asaan: [] };
-const factoryAdditionalCosts = (loadedCosts && 'standard' in loadedCosts && 'asaan' in loadedCosts) ? loadedCosts : { standard: 0, asaan: 0 };
-const factoryCostAdjustmentFactor = (loadedFactor && 'standard' in loadedFactor && 'asaan' in loadedFactor) ? loadedFactor : { standard: 1, asaan: 1 };
-const factorySalePrices = (loadedPrices && 'standard' in loadedPrices && 'asaan' in loadedPrices) ? loadedPrices : { standard: 0, asaan: 0 };
-const factoryUnitTracking = (loadedTracking && 'standard' in loadedTracking && 'asaan' in loadedTracking) ? loadedTracking : { standard: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] }, asaan: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] } };
+if (loadedFormulas && 'standard' in loadedFormulas && 'asaan' in loadedFormulas) factoryDefaultFormulas = loadedFormulas;
+if (loadedCosts && 'standard' in loadedCosts && 'asaan' in loadedCosts) factoryAdditionalCosts = loadedCosts;
+if (loadedFactor && 'standard' in loadedFactor && 'asaan' in loadedFactor) factoryCostAdjustmentFactor = loadedFactor;
+if (loadedPrices && 'standard' in loadedPrices && 'asaan' in loadedPrices) factorySalePrices = loadedPrices;
+if (loadedTracking && 'standard' in loadedTracking && 'asaan' in loadedTracking) factoryUnitTracking = loadedTracking;
 } catch (error) {
 showToast('Error loading factory settings. Using defaults.', 'warning');
-const factoryDefaultFormulas = { standard: [], asaan: [] };
-const factoryAdditionalCosts = { standard: 0, asaan: 0 };
-const factoryCostAdjustmentFactor = { standard: 1, asaan: 1 };
-const factorySalePrices = { standard: 0, asaan: 0 };
-const factoryUnitTracking = { standard: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] }, asaan: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] } };
 }
 requestAnimationFrame(() => {
 document.body.style.overflow = 'hidden';
@@ -213,30 +208,17 @@ const factorySalePrices = (await sqliteStore.get('factory_sale_prices')) || {};
 const factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {};
 const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
 const container = document.getElementById('factoryRawMaterialsContainer');
-try {
-const [savedFormulas, savedAdditionalCosts, savedCostAdjustmentFactor, savedSalePrices, savedUnitTracking] = await Promise.all([
-sqliteStore.get('factory_default_formulas'),
-sqliteStore.get('factory_additional_costs'),
-sqliteStore.get('factory_cost_adjustment_factor'),
-sqliteStore.get('factory_sale_prices'),
-sqliteStore.get('factory_unit_tracking')
-]);
-} catch (e) {
-console.error('An unexpected error occurred.', _safeErr(e));
-showToast('An unexpected error occurred.', 'error');
-}
 if (!factoryDefaultFormulas[currentFactorySettingsStore]) factoryDefaultFormulas[currentFactorySettingsStore] = [];
 let totalRawCost = 0, totalWeight = 0;
-const _fsFrag = document.createDocumentFragment();
+container.replaceChildren();
 const safeFormula = factoryDefaultFormulas[currentFactorySettingsStore] || [];
 if (safeFormula.length > 0) {
-safeFormula.forEach(ing => {
+for (const ing of safeFormula) {
 totalRawCost += (ing.cost * ing.quantity);
 totalWeight += ing.quantity;
-createFactorySettingRow(_fsFrag, ing.id, ing.quantity);
-});
+await createFactorySettingRow(container, ing.id, ing.quantity, ing.cost, ing.name, factoryInventoryData);
 }
-container.replaceChildren(_fsFrag);
+}
 const available = factoryUnitTracking[currentFactorySettingsStore]?.available || 0;
 const additionalCost = factoryAdditionalCosts[currentFactorySettingsStore] || 0;
 document.getElementById('additional-cost-per-unit').value = additionalCost;
@@ -255,33 +237,84 @@ _setFS1('factorySettingsAvailableUnits', available);
 _setFS1('factorySettingsSalesCostPerKg', await formatCurrency(salesCostPerKg));
 }
 
-async function createFactorySettingRow(container, selectedId = '', qtyVal = '') {
-const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
+async function createFactorySettingRow(container, selectedId = '', qtyVal = '', costVal = null, savedName = '', inventoryData = null) {
+const factoryInventoryData = inventoryData !== null ? inventoryData : ensureArray(await sqliteStore.get('factory_inventory_data'));
+let currentCost = costVal !== null ? costVal : 0;
 const div = document.createElement('div');
 div.className = 'factory-formula-grid';
-let options = '<option value="">Select Material</option>';
+const col1 = document.createElement('div'); col1.className = 'u-flex-col';
+const lbl1 = document.createElement('label');
+lbl1.style.cssText = 'font-size:0.6rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em;';
+lbl1.textContent = 'Material';
+const sel = document.createElement('select');
+sel.className = 'factory-mat-select';
+sel.onchange = function() { updateFactoryRowCost(this); };
+const defaultOpt = document.createElement('option');
+defaultOpt.value = '';
+defaultOpt.textContent = 'Select Material';
+sel.appendChild(defaultOpt);
+let foundInInventory = false;
 factoryInventoryData.forEach(i => {
-options += `<option value="${esc(String(i.id))}" ${String(i.id) === String(selectedId) ? 'selected' : ''} data-cost="${i.cost}">${esc(i.name)}</option>`;
-});
-let currentCost = 0;
-if (selectedId) {
-const m = factoryInventoryData.find(i => i.id == selectedId);
-if (m) currentCost = m.cost;
+const opt = document.createElement('option');
+opt.value = String(i.id);
+opt.dataset.cost = String(i.cost);
+opt.textContent = i.name;
+sel.appendChild(opt);
+if (String(i.id) === String(selectedId)) {
+foundInInventory = true;
+if (costVal === null) currentCost = i.cost;
 }
-div.innerHTML = `
-<div class="u-flex-col">
-<label style="font-size:0.6rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em;">Material</label>
-<select class="factory-mat-select" onchange="updateFactoryRowCost(this)">${options}</select>
-</div>
-<div class="u-flex-col">
-<label style="font-size:0.6rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em;">Cost (Per Unit)</label>
-<input type="number" class="factory-mat-cost" value="${currentCost}" readonly style="background:rgba(0,0,0,0.05);color:var(--text-muted);">
-</div>
-<div class="u-flex-col">
-<label style="font-size:0.6rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em;">Qty (kg)</label>
-<input type="number" class="factory-mat-qty" value="${esc(String(qtyVal))}" placeholder="0">
-</div>`;
+});
+
+col1.appendChild(lbl1);
+col1.appendChild(sel);
+const col2 = document.createElement('div'); col2.className = 'u-flex-col';
+const lbl2 = document.createElement('label');
+lbl2.style.cssText = 'font-size:0.6rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em;';
+lbl2.textContent = 'Cost (Per Unit)';
+const costInput = document.createElement('input');
+costInput.type = 'number';
+costInput.className = 'factory-mat-cost';
+costInput.value = currentCost;
+costInput.readOnly = true;
+costInput.style.cssText = 'background:rgba(0,0,0,0.05);color:var(--text-muted);';
+col2.appendChild(lbl2);
+col2.appendChild(costInput);
+const col3 = document.createElement('div'); col3.className = 'u-flex-col';
+const lbl3 = document.createElement('label');
+lbl3.style.cssText = 'font-size:0.6rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em;';
+lbl3.textContent = 'Qty (kg)';
+const qtyInput = document.createElement('input');
+qtyInput.type = 'number';
+qtyInput.className = 'factory-mat-qty';
+qtyInput.value = qtyVal;
+qtyInput.placeholder = '0';
+col3.appendChild(lbl3);
+col3.appendChild(qtyInput);
+div.appendChild(col1);
+div.appendChild(col2);
+div.appendChild(col3);
 container.appendChild(div);
+if (selectedId) {
+const targetId = String(selectedId).trim();
+let matched = false;
+for (const opt of sel.options) {
+if (opt.value.trim() === targetId) {
+opt.selected = true;
+matched = true;
+break;
+}
+}
+if (!matched && savedName) {
+const ghostOpt = document.createElement('option');
+ghostOpt.value = targetId;
+ghostOpt.dataset.cost = String(currentCost);
+ghostOpt.textContent = savedName;
+ghostOpt.selected = true;
+sel.appendChild(ghostOpt);
+}
+costInput.value = currentCost;
+}
 }
 
 function getColumnLabel(index) {
@@ -296,7 +329,7 @@ return label;
 
 function addFactoryMaterialRow() {
 const container = document.getElementById('factoryRawMaterialsContainer');
-createFactorySettingRow(container);
+createFactorySettingRow(container, '', '', null, '', null);
 }
 
 function updateFactoryRowCost(selectEl) {
@@ -335,12 +368,16 @@ _setFS('factorySettingsSalesCostPerKg', await formatCurrency(salesCostPerKg));
 }
 
 async function saveFactoryFormulas() {
-const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
-const factoryDefaultFormulas = (await sqliteStore.get('factory_default_formulas')) || {};
-const factoryAdditionalCosts = (await sqliteStore.get('factory_additional_costs')) || {};
-const factoryCostAdjustmentFactor = (await sqliteStore.get('factory_cost_adjustment_factor')) || {};
-const factorySalePrices = (await sqliteStore.get('factory_sale_prices')) || {};
-const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
+const _sffBatch = await sqliteStore.getBatch([
+'factory_inventory_data','factory_default_formulas','factory_additional_costs',
+'factory_cost_adjustment_factor','factory_sale_prices','payment_transactions',
+]);
+const factoryInventoryData = ensureArray(_sffBatch.get('factory_inventory_data'));
+const factoryDefaultFormulas = _sffBatch.get('factory_default_formulas') || {};
+const factoryAdditionalCosts = _sffBatch.get('factory_additional_costs') || {};
+const factoryCostAdjustmentFactor = _sffBatch.get('factory_cost_adjustment_factor') || {};
+const factorySalePrices = _sffBatch.get('factory_sale_prices') || {};
+const paymentTransactions = ensureArray(_sffBatch.get('payment_transactions'));
 const container = document.getElementById('factoryRawMaterialsContainer');
 const rows = container.querySelectorAll('.factory-formula-grid');
 const newFormula = [];
@@ -595,27 +632,25 @@ if (idx !== -1) {
 const existingMaterial = factoryInventoryData[idx];
 const oldSupplierId = existingMaterial.supplierId;
 const supplierInput = document.getElementById('factoryExistingSupplier');
-const newSupplierId = (supplierInput && (supplierInput.getAttribute('data-supplier-id') || supplierInput.value)) || '';
+
+const newSupplierId = (supplierInput && supplierInput.getAttribute('data-supplier-id')) || '';
 const isSupplierSame = supplierType === 'existing' && oldSupplierId && newSupplierId && String(oldSupplierId) === String(newSupplierId);
 const isSupplierChanging = !isSupplierSame && (
 (supplierType === 'none' && oldSupplierId) ||
 (supplierType === 'existing' && oldSupplierId && newSupplierId && String(oldSupplierId) !== String(newSupplierId))
 );
 if (isSupplierChanging) await unlinkSupplierFromMaterial(existingMaterial, false, true);
+
+const _supplierUnchanged = !!(editingFactoryInventoryId && isSupplierSame);
 factoryInventoryData[idx] = ensureRecordIntegrity({ ...factoryInventoryData[idx], name, quantity: quantityInKg, cost: costPerKg, unit: 'kg', totalValue, purchaseQuantity: qty, purchaseCost: cost, conversionFactor, purchaseUnitName: unitName, updatedAt: getTimestamp() }, true);
 }
 }
-const _supplierUnchanged = editingFactoryInventoryId && supplierType === 'existing' && (() => {
-const _m = factoryInventoryData.find(m => m.id === materialId);
-const _inp = document.getElementById('factoryExistingSupplier');
-const _newId = _inp && (_inp.getAttribute('data-supplier-id') || _inp.value);
-return _m && _m.supplierId && _newId && String(_m.supplierId) === String(_newId);
-})();
 if (!editingFactoryInventoryId) {
 const _matNow = getTimestamp();
 let _newMaterial = { id: materialId, name, quantity: quantityInKg, cost: costPerKg, unit: 'kg', totalValue, paymentStatus: 'pending', syncedAt: new Date().toISOString(), purchaseQuantity: qty, purchaseCost: cost, conversionFactor, purchaseUnitName: unitName, createdAt: _matNow, updatedAt: _matNow, timestamp: _matNow };
 _newMaterial = ensureRecordIntegrity(_newMaterial, false);
 factoryInventoryData.push(_newMaterial);
+await sqliteStore.set('factory_inventory_data', factoryInventoryData);
 }
 if (supplierType === 'none') {
 const material = factoryInventoryData.find(m => m.id === materialId);
@@ -631,14 +666,14 @@ delete material.totalPayable;
 if (!_supplierUnchanged) {
 const supplierInput = document.getElementById('factoryExistingSupplier');
 const existingSupplierId = supplierInput.getAttribute('data-supplier-id') || supplierInput.value;
-if (existingSupplierId) await linkMaterialToSupplier(materialId, existingSupplierId, totalValue, true);
+if (existingSupplierId) await linkMaterialToSupplier(materialId, existingSupplierId, totalValue, true, factoryInventoryData);
 }
 } else if (supplierType === 'new') {
 const supplierName = document.getElementById('factorySupplierName').value.trim();
 const supplierPhone = document.getElementById('factorySupplierPhone').value.trim();
 if (supplierName) {
 const newSupplier = await createSupplierFromMaterial({ name: supplierName, phone: supplierPhone, materialId, materialName: name, materialTotal: totalValue });
-if (newSupplier && newSupplier.id) await linkMaterialToSupplier(materialId, newSupplier.id, totalValue, true);
+if (newSupplier && newSupplier.id) await linkMaterialToSupplier(materialId, newSupplier.id, totalValue, true, factoryInventoryData);
 }
 }
 const savedMaterial = factoryInventoryData.find(m => m.id === materialId);
@@ -646,6 +681,7 @@ await unifiedSave('factory_inventory_data', factoryInventoryData, savedMaterial)
 notifyDataChange('inventory');
 emitSyncUpdate({ factory_inventory_data: null});
 if (typeof renderFactoryInventory === 'function') renderFactoryInventory();
+if (typeof renderUnifiedTable === 'function') renderUnifiedTable(1);
 closeFactoryInventoryModal();
 if (typeof calculateNetCash === 'function') calculateNetCash();
 showToast('Material saved successfully!', 'success');
@@ -706,8 +742,6 @@ await unifiedSave('payment_entities', paymentEntities, supplierEntity);
 saveRecordToFirestore('payment_entities', supplierEntity).catch(() => {});
 notifyDataChange('entities');
 triggerAutoSync();
-if (typeof renderFactoryInventory === 'function') await renderFactoryInventory();
-if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
 return supplierEntity;
 }
 
@@ -760,6 +794,7 @@ tr.innerHTML = `<td style="padding:8px 2px;"><div style="font-weight:600;font-si
 prebuiltRows.push(tr);
 }
 GNDVirtualScroll.mount('vs-scroller-factory-inventory', prebuiltRows, function(el) { return el; }, tbody);
+
 const _invEl = document.getElementById('factoryTotalInventoryValue');
 if (_invEl) _invEl.innerText = await formatCurrency(totalVal);
 }
@@ -819,15 +854,15 @@ selectElement.appendChild(option);
 }
 }
 
-async function linkMaterialToSupplier(materialId, supplierId, totalCost, skipSideEffects = false) {
-const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
+async function linkMaterialToSupplier(materialId, supplierId, totalCost, skipSideEffects = false, sharedInventory = null) {
+const factoryInventoryData = sharedInventory || ensureArray(await sqliteStore.get('factory_inventory_data'));
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
 let material = factoryInventoryData.find(m => m.id === materialId);
 if (!material) {
 const reloadedData = await sqliteStore.get('factory_inventory_data');
 if (Array.isArray(reloadedData)) {
-material = factoryInventoryData.find(m => m.id === materialId);
+material = reloadedData.find(m => m.id === materialId);
 }
 }
 if (!material) { showToast('Material not found. Try refreshing.', 'error'); return; }
@@ -946,10 +981,14 @@ if (_prodCostEl) _prodCostEl.innerText = await formatCurrency(baseCost);
 }
 
 async function saveFactoryProductionEntry() {
-const factoryDefaultFormulas = (await sqliteStore.get('factory_default_formulas')) || {};
-const factoryAdditionalCosts = (await sqliteStore.get('factory_additional_costs')) || {};
-const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
-const factoryProductionHistory = ensureArray(await sqliteStore.get('factory_production_history'));
+const _sfpeBatch = await sqliteStore.getBatch([
+'factory_default_formulas','factory_additional_costs',
+'factory_inventory_data','factory_production_history',
+]);
+const factoryDefaultFormulas = _sfpeBatch.get('factory_default_formulas') || {};
+const factoryAdditionalCosts = _sfpeBatch.get('factory_additional_costs') || {};
+const factoryInventoryData = ensureArray(_sfpeBatch.get('factory_inventory_data'));
+const factoryProductionHistory = ensureArray(_sfpeBatch.get('factory_production_history'));
 if (appMode === 'userrole' && !(window._userRoleAllowedTabs || []).includes('factory')) {
 showToast('Access Denied — Factory not in your assigned tabs', 'warning', 3000);
 return;
@@ -1243,7 +1282,8 @@ if (entry.formulaUnits) tracking[formulaStore].consumed += entry.formulaUnits;
 tracking.standard.available = Math.max(0, tracking.standard.produced - tracking.standard.consumed);
 tracking.asaan.available = Math.max(0, tracking.asaan.produced - tracking.asaan.consumed);
 const timestamp = Date.now();
-await sqliteStore.set('factory_unit_tracking', factoryUnitTracking);
+
+await sqliteStore.set('factory_unit_tracking', tracking);
 await sqliteStore.set('factory_unit_tracking_timestamp', timestamp);
 return tracking;
 }

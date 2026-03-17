@@ -304,7 +304,12 @@ const setData = (data && typeof data === 'object') ? { ...data } : data;
 if (setData && !setData.isMerged) {
 setData.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
 }
-await userRef.collection(collection).doc(docId).set(setData, { merge: true });
+
+if (collection === 'inventory') {
+  await userRef.collection(collection).doc(docId).set(setData);
+} else {
+  await userRef.collection(collection).doc(docId).set(setData, { merge: true });
+}
 trackFirestoreWrite(1);
 
 if (typeof DeltaSync !== 'undefined') {
@@ -1167,6 +1172,7 @@ function _dedupDeletionRecordsLocal(arr) {
   return Array.from(seen.values());
 }
 async function registerDeletion(id, collectionName = 'unknown', preDeletedRecord = null) {
+return (window._syncQueue || { run: f => f() }).run(async () => {
 const deletionRecords = ensureArray(await sqliteStore.get('deletion_records'));
 const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
 if (!id) {
@@ -1282,6 +1288,7 @@ await sqliteStore.set('deleted_records', Array.from(deletedRecordIds));
 triggerAutoSync();
 await uploadDeletionToCloud(deletionRecord);
 await cleanupOldDeletions();
+});
 }
 async function _captureRecordSnapshot(id, collectionName) {
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
@@ -1893,7 +1900,7 @@ if (!(await showGlassConfirm(msg, { title: `Delete Entity Permanently`, confirmT
 try {
 const txsToDelete = _entityTxs.slice();
 const txIdsToDelete = new Set(txsToDelete.map(t => t.id));
-await sqliteStore.set('payment_transactions', filteredTx);
+const filteredTx = paymentTransactions.filter(t => !txIdsToDelete.has(t.id));
 await saveWithTracking('payment_transactions', filteredTx);
 await Promise.all(txsToDelete.map(tx => registerDeletion(tx.id, 'transactions', tx)));
 void Promise.all(txsToDelete.map(tx => deleteRecordFromFirestore('payment_transactions', tx.id).catch(() => {})));
@@ -2943,7 +2950,7 @@ document.documentElement.style.overflow = '';
 document.getElementById('entityTransactionsOverlay').style.display = 'none';
 });
 }
-/** Saves a payment IN or OUT transaction and updates entity balances. */
+
 async function savePaymentTransaction() {
 const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
@@ -3084,7 +3091,7 @@ return;
 }
 showToast(message, 'success');
 }
-/** Deletes a payment transaction and refreshes all balance displays. */
+
 async function deletePaymentTransaction(id) {
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
@@ -3145,18 +3152,24 @@ card.style.display = 'none';
 });
 }
 async function calculateNetCash() {
-const salesHistory = ensureArray(await sqliteStore.get('noman_history'));
-const factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {};
-const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
-const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
-const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
-const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
-const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
-const stockReturns = ensureArray(await sqliteStore.get('stock_returns'));
-const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
-const factoryProductionHistory = ensureArray(await sqliteStore.get('factory_production_history'));
-const factoryDefaultFormulas = (await sqliteStore.get('factory_default_formulas')) || {};
-const factoryAdditionalCosts = (await sqliteStore.get('factory_additional_costs')) || {};
+const _cncBatch = await sqliteStore.getBatch([
+'noman_history','factory_unit_tracking','payment_transactions','payment_entities',
+'expenses','mfg_pro_pkr','customer_sales','stock_returns',
+'factory_inventory_data','factory_production_history',
+'factory_default_formulas','factory_additional_costs',
+]);
+const salesHistory = ensureArray(_cncBatch.get('noman_history'));
+const factoryUnitTracking = _cncBatch.get('factory_unit_tracking') || {};
+const paymentTransactions = ensureArray(_cncBatch.get('payment_transactions'));
+const paymentEntities = ensureArray(_cncBatch.get('payment_entities'));
+const expenseRecords = ensureArray(_cncBatch.get('expenses'));
+const db = ensureArray(_cncBatch.get('mfg_pro_pkr'));
+const customerSales = ensureArray(_cncBatch.get('customer_sales'));
+const stockReturns = ensureArray(_cncBatch.get('stock_returns'));
+const factoryInventoryData = ensureArray(_cncBatch.get('factory_inventory_data'));
+const factoryProductionHistory = ensureArray(_cncBatch.get('factory_production_history'));
+const factoryDefaultFormulas = _cncBatch.get('factory_default_formulas') || {};
+const factoryAdditionalCosts = _cncBatch.get('factory_additional_costs') || {};
 try {
 let rawData = {
 totalProductionValue: 0,
@@ -3447,7 +3460,7 @@ const cashRatio = safeNumber(parseFloat(indicators.liquidityRatios?.cashRatio), 
 cashRatioElement.textContent = safeNumber(cashRatio, 0).toFixed(2);
 }
 }
-/** Validates and saves a new customer sale, checking inventory and credit limits. */
+
 async function saveCustomerSale() {
 const stockReturns = ensureArray(await sqliteStore.get('stock_returns'));
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
@@ -3696,7 +3709,7 @@ balEl.textContent = fmtAmt(remaining);
 balEl.style.color = remaining === 0 ? 'var(--accent-emerald)' : 'var(--warning)';
 }
 }
-/** Records a customer payment collection and updates credit balances. */
+
 async function saveCustomerCollection() {
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
@@ -3791,7 +3804,7 @@ showToast('Failed to save collection. Please try again.', 'error');
 restoreBtn();
 }
 }
-/** Entry point that delegates to saveCustomerSale or saveCustomerCollection. */
+
 async function saveCustomerTransaction() {
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
@@ -3973,7 +3986,7 @@ const calculateButton = salesSection.querySelector('.btn-main');
 salesSection.insertBefore(warningDiv, calculateButton);
 return warningDiv;
 }
-/** Deletes a customer sale or collection record and restores inventory. */
+
 async function deleteCustomerSale(id) {
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
 const salesCustomers = ensureArray(await sqliteStore.get('sales_customers'));
@@ -4087,39 +4100,22 @@ const firebaseConfig = {
   messagingSenderId: "124313576124",
   appId: "1:124313576124:web:fb721bb61bc19b51db26b9"
 };
-function loadFirestoreStats() {
-const saved = localStorage.getItem('firestoreStats');
-if (saved) {
+async function loadFirestoreStats() {
 try {
-firestoreStats = JSON.parse(saved);
-if (!firestoreStats.lastReset) {
-firestoreStats.lastReset = Date.now();
-}
+const saved = await sqliteStore.get('firestore_stats', null);
+if (saved && typeof saved === 'object') {
+firestoreStats = saved;
+if (!firestoreStats.lastReset) firestoreStats.lastReset = Date.now();
 checkAndAutoResetFirestoreStats();
-} catch (e) {
-firestoreStats = {
-reads: 0,
-writes: 0,
-history: [],
-lastReset: Date.now()
-};
-}
 } else {
-firestoreStats = {
-reads: 0,
-writes: 0,
-history: [],
-lastReset: Date.now()
-};
+firestoreStats = { reads: 0, writes: 0, history: [], lastReset: Date.now() };
+}
+} catch (e) {
+firestoreStats = { reads: 0, writes: 0, history: [], lastReset: Date.now() };
 }
 }
 function saveFirestoreStats() {
-try {
-localStorage.setItem('firestoreStats', JSON.stringify(firestoreStats));
-} catch (e) {
-console.error('Firebase operation failed.', _safeErr(e));
-showToast('Firebase operation failed.', 'error');
-}
+sqliteStore.set('firestore_stats', firestoreStats).catch(() => {});
 }
 let firestoreStats = {
 reads: 0,
@@ -4334,14 +4330,18 @@ trackId(collection, id) {
   if (!this._dirty.has(collection)) this._dirty.set(collection, new Set());
   this._dirty.get(collection).add(sid);
   if (this._downloaded.has(collection)) this._downloaded.get(collection).delete(sid);
-  sqliteStore.get(`pendingSync_${collection}`, []).then(existing => {
-    const arr = Array.isArray(existing) ? existing : [];
-    if (!arr.includes(sid)) {
-      arr.push(sid);
-      const trimmed = arr.length > 5000 ? arr.slice(-5000) : arr;
-      sqliteStore.set(`pendingSync_${collection}`, trimmed).catch(() => {});
-    }
-  }).catch(() => {});
+  const _dirtyIds = Array.from(this._dirty.get(collection) || []).filter(id => id !== '*');
+  if (_dirtyIds.length > 0) {
+    sqliteStore.get(`pendingSync_${collection}`, []).then(existing => {
+      const arr = Array.isArray(existing) ? existing : [];
+      let changed = false;
+      _dirtyIds.forEach(id => { if (!arr.includes(id)) { arr.push(id); changed = true; } });
+      if (changed) {
+        const trimmed = arr.length > 5000 ? arr.slice(-5000) : arr;
+        sqliteStore.set(`pendingSync_${collection}`, trimmed).catch(() => {});
+      }
+    }).catch(() => {});
+  }
 },
 trackCollection(collection) {
   if (!this._dirty.has(collection)) this._dirty.set(collection, new Set());
@@ -4361,15 +4361,18 @@ markUploaded(collection, id) {
   this._uploaded.get(collection).add(sid);
   if (this._dirty.has(collection)) this._dirty.get(collection).delete(sid);
 
-  sqliteStore.get(`uploadedIds_${collection}`, []).then(existing => {
-    const arr = Array.isArray(existing) ? existing : [];
-    if (!arr.includes(sid)) {
-      arr.push(sid);
-
-      const trimmed = arr.length > 5000 ? arr.slice(arr.length - 5000) : arr;
-      sqliteStore.set(`uploadedIds_${collection}`, trimmed).catch(() => {});
-    }
-  }).catch(() => {});
+  const _uploadedIds = Array.from(this._uploaded.get(collection) || []);
+  if (_uploadedIds.length > 0) {
+    sqliteStore.get(`uploadedIds_${collection}`, []).then(existing => {
+      const arr = Array.isArray(existing) ? existing : [];
+      let changed = false;
+      _uploadedIds.forEach(id => { if (!arr.includes(id)) { arr.push(id); changed = true; } });
+      if (changed) {
+        const trimmed = arr.length > 5000 ? arr.slice(arr.length - 5000) : arr;
+        sqliteStore.set(`uploadedIds_${collection}`, trimmed).catch(() => {});
+      }
+    }).catch(() => {});
+  }
 },
 async loadUploadedIds(collection) {
   try {
@@ -4509,8 +4512,6 @@ async clearAllTimestamps() {
     await sqliteStore.remove(lmKey);
     await sqliteStore.remove(`uploadedIds_${col}`);
     await sqliteStore.remove(`pendingSync_${col}`);
-    localStorage.removeItem(lsKey);
-    localStorage.removeItem(lmKey);
   }
 },
 async getSyncSummary() {
@@ -5574,15 +5575,20 @@ ticks: { color: colors.text }
 });
 }
 async function refreshUI(page = 1, force = false) {
-const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
-const stockReturns = ensureArray(await sqliteStore.get('stock_returns'));
-const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
-const salesCustomers = ensureArray(await sqliteStore.get('sales_customers'));
-const salesHistory = ensureArray(await sqliteStore.get('noman_history'));
-const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
-const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
-const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
-const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
+const _ruiBatch = await sqliteStore.getBatch([
+'mfg_pro_pkr','stock_returns','customer_sales','sales_customers',
+'noman_history','payment_transactions','payment_entities',
+'expenses','deleted_records',
+]);
+const db = ensureArray(_ruiBatch.get('mfg_pro_pkr'));
+const stockReturns = ensureArray(_ruiBatch.get('stock_returns'));
+const customerSales = ensureArray(_ruiBatch.get('customer_sales'));
+const salesCustomers = ensureArray(_ruiBatch.get('sales_customers'));
+const salesHistory = ensureArray(_ruiBatch.get('noman_history'));
+const paymentTransactions = ensureArray(_ruiBatch.get('payment_transactions'));
+const paymentEntities = ensureArray(_ruiBatch.get('payment_entities'));
+const expenseRecords = ensureArray(_ruiBatch.get('expenses'));
+const deletedRecordIds = new Set(ensureArray(_ruiBatch.get('deleted_records')));
 const selectedDate = document.getElementById('sys-date').value;
 if (!selectedDate) return;
 if (sqliteStore && sqliteStore.get) {
@@ -5982,6 +5988,8 @@ showToast(message, 'info', 5000);
 async function syncSuppliersToEntities() {
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
 const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
+const newEntities = [];
+const fixedMaterials = [];
 factoryInventoryData.forEach(material => {
 if (!material.supplierName) return;
 const existingEntity = paymentEntities.find(e =>
@@ -6006,19 +6014,24 @@ supplierCategory: 'raw_materials'
 };
 _sseEntity = ensureRecordIntegrity(_sseEntity, false);
 paymentEntities.push(_sseEntity);
+newEntities.push(_sseEntity);
 } else if (material.supplierId && existingEntity.id !== material.supplierId) {
 material.supplierId = existingEntity.id;
+fixedMaterials.push(material);
 }
 });
+
+if (newEntities.length > 0) {
 await saveWithTracking('payment_entities', paymentEntities);
+if (typeof saveRecordToFirestore === 'function') {
+newEntities.forEach(e => saveRecordToFirestore('payment_entities', e).catch(() => {}));
+}
+}
+if (fixedMaterials.length > 0) {
 await saveWithTracking('factory_inventory_data', factoryInventoryData);
 if (typeof saveRecordToFirestore === 'function') {
-  paymentEntities.filter(e => e && e.id).forEach(e =>
-    saveRecordToFirestore('payment_entities', e).catch(() => {})
-  );
-  factoryInventoryData.filter(i => i && i.id).forEach(i =>
-    saveRecordToFirestore('factory_inventory_data', i).catch(() => {})
-  );
+fixedMaterials.forEach(i => saveRecordToFirestore('factory_inventory_data', i).catch(() => {}));
+}
 }
 }
 async function verifyAccountPassword(password) {
@@ -6492,19 +6505,19 @@ mergedData[key] = merged.map(item => {
   return item;
 });
 }
-await Promise.all([
-sqliteStore.set('mfg_pro_pkr',                mergedData.mfg_pro_pkr),
-sqliteStore.set('noman_history',              mergedData.noman_history),
-sqliteStore.set('customer_sales',             mergedData.customer_sales),
-sqliteStore.set('rep_sales',                  mergedData.rep_sales),
-sqliteStore.set('rep_customers',              mergedData.rep_customers),
-sqliteStore.set('sales_customers',            mergedData.sales_customers),
-sqliteStore.set('factory_inventory_data',     mergedData.factory_inventory_data),
-sqliteStore.set('factory_production_history', mergedData.factory_production_history),
-sqliteStore.set('stock_returns',              mergedData.stock_returns),
-sqliteStore.set('payment_transactions',       mergedData.payment_transactions),
-sqliteStore.set('payment_entities',           mergedData.payment_entities),
-sqliteStore.set('expenses',                   mergedData.expenses)
+await sqliteStore.setBatch([
+['mfg_pro_pkr',                mergedData.mfg_pro_pkr],
+['noman_history',              mergedData.noman_history],
+['customer_sales',             mergedData.customer_sales],
+['rep_sales',                  mergedData.rep_sales],
+['rep_customers',              mergedData.rep_customers],
+['sales_customers',            mergedData.sales_customers],
+['factory_inventory_data',     mergedData.factory_inventory_data],
+['factory_production_history', mergedData.factory_production_history],
+['stock_returns',              mergedData.stock_returns],
+['payment_transactions',       mergedData.payment_transactions],
+['payment_entities',           mergedData.payment_entities],
+['expenses',                   mergedData.expenses],
 ]);
 const currentSettings = {
 factoryDefaultFormulas:       await sqliteStore.get('factory_default_formulas'),
@@ -6716,19 +6729,19 @@ const replaceData = {
     payment_entities:           ensureArray(data.paymentEntities).filter(isAlive),
     expenses:                   mergeDatasets(ensureArray(data.expenses).filter(isAlive), ensureArray(expenseRecords || []).filter(isAlive))
   };
-  await Promise.all([
-    sqliteStore.set('mfg_pro_pkr',                replaceData.mfg_pro_pkr),
-    sqliteStore.set('noman_history',              replaceData.noman_history),
-    sqliteStore.set('customer_sales',             replaceData.customer_sales),
-    sqliteStore.set('rep_sales',                  replaceData.rep_sales),
-    sqliteStore.set('rep_customers',              replaceData.rep_customers),
-    sqliteStore.set('sales_customers',            replaceData.sales_customers),
-    sqliteStore.set('factory_inventory_data',     replaceData.factory_inventory_data),
-    sqliteStore.set('factory_production_history', replaceData.factory_production_history),
-    sqliteStore.set('stock_returns',              replaceData.stock_returns),
-    sqliteStore.set('payment_transactions',       replaceData.payment_transactions),
-    sqliteStore.set('payment_entities',           replaceData.payment_entities),
-    sqliteStore.set('expenses',                   replaceData.expenses)
+  await sqliteStore.setBatch([
+    ['mfg_pro_pkr',                replaceData.mfg_pro_pkr],
+    ['noman_history',              replaceData.noman_history],
+    ['customer_sales',             replaceData.customer_sales],
+    ['rep_sales',                  replaceData.rep_sales],
+    ['rep_customers',              replaceData.rep_customers],
+    ['sales_customers',            replaceData.sales_customers],
+    ['factory_inventory_data',     replaceData.factory_inventory_data],
+    ['factory_production_history', replaceData.factory_production_history],
+    ['stock_returns',              replaceData.stock_returns],
+    ['payment_transactions',       replaceData.payment_transactions],
+    ['payment_entities',           replaceData.payment_entities],
+    ['expenses',                   replaceData.expenses],
   ]);
   const settingsTimestamp = Date.now();
   if (data.factoryDefaultFormulas) { await sqliteStore.set('factory_default_formulas', data.factoryDefaultFormulas); await sqliteStore.set('factory_default_formulas_timestamp', settingsTimestamp); factoryDefaultFormulas = data.factoryDefaultFormulas; }
@@ -7521,13 +7534,18 @@ startDate = new Date(end.getFullYear(), 0, 1);
 return getPreviousDayAvailableUnits(storeType, startDate);
 }
 async function refreshFactoryTab() {
-const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
-const factoryProductionHistory = ensureArray(await sqliteStore.get('factory_production_history'));
-const factoryDefaultFormulas = (await sqliteStore.get('factory_default_formulas')) || {};
-const factoryAdditionalCosts = (await sqliteStore.get('factory_additional_costs')) || {};
-const factorySalePrices = (await sqliteStore.get('factory_sale_prices')) || {};
-const factoryCostAdjustmentFactor = (await sqliteStore.get('factory_cost_adjustment_factor')) || {};
-const factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {};
+const _rftBatch = await sqliteStore.getBatch([
+'factory_inventory_data','factory_production_history',
+'factory_default_formulas','factory_additional_costs',
+'factory_sale_prices','factory_cost_adjustment_factor','factory_unit_tracking',
+]);
+const factoryInventoryData = ensureArray(_rftBatch.get('factory_inventory_data'));
+const factoryProductionHistory = ensureArray(_rftBatch.get('factory_production_history'));
+const factoryDefaultFormulas = _rftBatch.get('factory_default_formulas') || {};
+const factoryAdditionalCosts = _rftBatch.get('factory_additional_costs') || {};
+const factorySalePrices = _rftBatch.get('factory_sale_prices') || {};
+const factoryCostAdjustmentFactor = _rftBatch.get('factory_cost_adjustment_factor') || {};
+const factoryUnitTracking = _rftBatch.get('factory_unit_tracking') || {};
 if (sqliteStore && sqliteStore.getBatch) {
 try {
 const factoryKeys = [
@@ -7599,7 +7617,7 @@ currentFactoryDate = factoryDateInput.value;
 updateFactoryUnitsAvailableStats();
 updateFactorySummaryCard();
 renderFactoryHistory();
-renderFactoryInventory();
+await renderFactoryInventory();
 calculateFactoryProduction();
 }
 async function updateAllTabsWithFactoryCosts() {
@@ -9023,22 +9041,30 @@ function safeValue(value) {
 return isNaN(value) || !isFinite(value) ? 0 : value;
 }
 async function refreshAllDisplays() {
-const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
-const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
-const repSales = ensureArray(await sqliteStore.get('rep_sales'));
-const salesHistory = ensureArray(await sqliteStore.get('noman_history'));
-const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
-const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
-const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
-const stockReturns = ensureArray(await sqliteStore.get('stock_returns'));
-const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
-const factoryProductionHistory = ensureArray(await sqliteStore.get('factory_production_history'));
-const factoryDefaultFormulas = (await sqliteStore.get('factory_default_formulas')) || {};
-const factoryAdditionalCosts = (await sqliteStore.get('factory_additional_costs')) || {};
-const factorySalePrices = (await sqliteStore.get('factory_sale_prices')) || {};
-const factoryCostAdjustmentFactor = (await sqliteStore.get('factory_cost_adjustment_factor')) || {};
-const factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {};
-const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
+const _radBatch = await sqliteStore.getBatch([
+'mfg_pro_pkr','customer_sales','rep_sales','noman_history',
+'payment_transactions','payment_entities','expenses','stock_returns',
+'factory_inventory_data','factory_production_history',
+'factory_default_formulas','factory_additional_costs',
+'factory_sale_prices','factory_cost_adjustment_factor',
+'factory_unit_tracking','deleted_records',
+]);
+const db = ensureArray(_radBatch.get('mfg_pro_pkr'));
+const customerSales = ensureArray(_radBatch.get('customer_sales'));
+const repSales = ensureArray(_radBatch.get('rep_sales'));
+const salesHistory = ensureArray(_radBatch.get('noman_history'));
+const paymentTransactions = ensureArray(_radBatch.get('payment_transactions'));
+const paymentEntities = ensureArray(_radBatch.get('payment_entities'));
+const expenseRecords = ensureArray(_radBatch.get('expenses'));
+const stockReturns = ensureArray(_radBatch.get('stock_returns'));
+const factoryInventoryData = ensureArray(_radBatch.get('factory_inventory_data'));
+const factoryProductionHistory = ensureArray(_radBatch.get('factory_production_history'));
+const factoryDefaultFormulas = _radBatch.get('factory_default_formulas') || {};
+const factoryAdditionalCosts = _radBatch.get('factory_additional_costs') || {};
+const factorySalePrices = _radBatch.get('factory_sale_prices') || {};
+const factoryCostAdjustmentFactor = _radBatch.get('factory_cost_adjustment_factor') || {};
+const factoryUnitTracking = _radBatch.get('factory_unit_tracking') || {};
+const deletedRecordIds = new Set(ensureArray(_radBatch.get('deleted_records')));
 try {
 await syncFactoryProductionStats();
 } catch (error) {
@@ -9376,7 +9402,7 @@ else btn.classList.remove('active');
 updateAllStoresOverview(mode);
 refreshUI();
 }
-/** Deletes a calculator sales settlement record with full cascading reversal. */
+
 async function deleteSalesEntry(id) {
 const salesHistory = ensureArray(await sqliteStore.get('noman_history'));
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
@@ -9720,17 +9746,23 @@ const _entMO = document.getElementById('entityManagementOverlay'); if (_entMO) _
 }
 }
 async function refreshPaymentTab(force = false) {
-const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
-const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
-const salesHistory = ensureArray(await sqliteStore.get('noman_history'));
-const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
-const factoryProductionHistory = ensureArray(await sqliteStore.get('factory_production_history'));
-const factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {};
-const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
-const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
-const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
-const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
-const deletionRecords = ensureArray(await sqliteStore.get('deletion_records'));
+const _rptBatch = await sqliteStore.getBatch([
+'mfg_pro_pkr','customer_sales','noman_history',
+'factory_inventory_data','factory_production_history','factory_unit_tracking',
+'payment_entities','payment_transactions','expenses',
+'deleted_records','deletion_records',
+]);
+const db = ensureArray(_rptBatch.get('mfg_pro_pkr'));
+const customerSales = ensureArray(_rptBatch.get('customer_sales'));
+const salesHistory = ensureArray(_rptBatch.get('noman_history'));
+const factoryInventoryData = ensureArray(_rptBatch.get('factory_inventory_data'));
+const factoryProductionHistory = ensureArray(_rptBatch.get('factory_production_history'));
+const factoryUnitTracking = _rptBatch.get('factory_unit_tracking') || {};
+const paymentEntities = ensureArray(_rptBatch.get('payment_entities'));
+const paymentTransactions = ensureArray(_rptBatch.get('payment_transactions'));
+const expenseRecords = ensureArray(_rptBatch.get('expenses'));
+const deletedRecordIds = new Set(ensureArray(_rptBatch.get('deleted_records')));
+const deletionRecords = ensureArray(_rptBatch.get('deletion_records'));
 try {
 if (sqliteStore && sqliteStore.getBatch) {
 const allKeys = [
@@ -9961,12 +9993,13 @@ _diMsg += `\n\nThis cannot be undone.`;
 if (await showGlassConfirm(_diMsg, { title: `Delete "${_diName}"`, confirmText: "Delete", danger: true })) {
 try {
 const material = factoryInventoryData.find(i => i.id === editingFactoryInventoryId);
+
+const _materialToDelete = material ? { ...material } : null;
 if (material && material.supplierId) {
-await unlinkSupplierFromMaterial(material);
+await unlinkSupplierFromMaterial(material, false, true);
 }
-const _materialToDelete = factoryInventoryData.find(i => i.id === editingFactoryInventoryId);
-hasChanges = true;
-await unifiedDelete('factory_inventory_data', factoryInventoryData, editingFactoryInventoryId, { strict: true }, _materialToDelete);
+const filteredForDelete = factoryInventoryData.filter(i => i.id !== editingFactoryInventoryId);
+await unifiedDelete('factory_inventory_data', filteredForDelete, editingFactoryInventoryId, { strict: true }, _materialToDelete);
 notifyDataChange('inventory');
 triggerAutoSync();
 closeFactoryInventoryModal();
@@ -10253,7 +10286,7 @@ if (btn) btn.classList.remove('active');
 });
 if (clickedBtn) clickedBtn.classList.add('active');
 }
-/** Saves an operating expense or payment transaction to SQLite and cloud. */
+
 async function saveExpense() {
 const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
 const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
@@ -10690,29 +10723,13 @@ fragment.appendChild(tr);
 tbody.replaceChildren(fragment);
 }
 async function renderUnifiedTable(page = 1) {
-const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
-const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
-const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
-const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
-const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
-try {
-const freshEntities = await sqliteStore.get('payment_entities', []);
-if (freshEntities && Array.isArray(freshEntities)) {
-}
-const freshTransactions = await sqliteStore.get('payment_transactions', []);
-if (freshTransactions && Array.isArray(freshTransactions)) {
-}
-const freshExpenses = await sqliteStore.get('expenses', []);
-if (freshExpenses && Array.isArray(freshExpenses)) {
-}
 
-const freshInventory = await sqliteStore.get('factory_inventory_data', []);
-if (freshInventory && Array.isArray(freshInventory) && freshInventory.length > 0) {
-}
-} catch (error) {
-console.error('Failed to render data.', _safeErr(error));
-showToast('Failed to render data.', 'error');
-}
+const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
+const _notDeleted = (item) => item && item.id && !deletedRecordIds.has(String(item.id));
+const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data')).filter(_notDeleted);
+const paymentEntities = ensureArray(await sqliteStore.get('payment_entities')).filter(_notDeleted);
+const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions')).filter(_notDeleted);
+const expenseRecords = ensureArray(await sqliteStore.get('expenses')).filter(_notDeleted);
 const viewModeEl = document.getElementById('unifiedViewMode');
 const periodFilterEl = document.getElementById('unifiedPeriodFilter');
 const searchInputEl = document.getElementById('unified-search');
@@ -11590,7 +11607,7 @@ items.forEach(item => {
 item.style.display = item.innerText.toLowerCase().includes(term) ? 'flex' : 'none';
 });
 }
-/** Deletes an expense from the overlay and refreshes the overlay content. */
+
 async function deleteExpenseFromOverlay(expenseId) {
 const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
@@ -11600,7 +11617,7 @@ if (overlayEl && overlayEl.style.display === 'flex' && currentExpenseOverlayName
 renderExpenseOverlayContent();
 }
 }
-/** Saves a quick expense entry from the expense overlay. */
+
 async function saveQuickExpenseEntry() {
 const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
@@ -11645,7 +11662,7 @@ if (typeof calculateCashTracker === 'function') calculateCashTracker();
 showToast('Failed to save expense. Please try again.', 'error');
 }
 }
-/** Deletes all operating expenses matching the current overlay name. */
+
 async function deleteAllExpensesByName() {
 const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
@@ -11866,7 +11883,7 @@ showToast('PDF exported successfully', 'success');
 showToast('Failed to export PDF: ' + error.message, 'error');
 }
 }
-/** Deletes an expense, reverses linked payment transactions and supplier payables. */
+
 async function deleteExpense(expenseId) {
 const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
 const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
@@ -13447,12 +13464,20 @@ await sqliteStore.set('appMode_timestamp', timestamp);
 await sqliteStore.set('assignedManager', null);
 await sqliteStore.set('assignedUserTabs', []);
 await sqliteStore.set('repProfile', null);
+
+if (typeof firebaseDB !== 'undefined' && firebaseDB && window._firestoreNetworkDisabled) {
+try { await firebaseDB.enableNetwork(); window._firestoreNetworkDisabled = false; } catch (_en) {}
+}
+
+if (typeof OfflineQueue !== 'undefined' && navigator.onLine) {
+try { await OfflineQueue.processQueue(); } catch (_oq) {}
+}
 notifyDataChange('all');
-triggerAutoSync();
 showToast('Switching to Admin Mode...', 'info', 1500);
+
 setTimeout(() => {
 location.reload();
-}, 1000);
+}, 2000);
 }
 function unlockToAdminMode() {
 unlockAdminMode();
@@ -14067,13 +14092,13 @@ if (typeof renderRepCustomerTable === 'function') {
 var ThemeManager = {
 currentTheme: 'dark',
 observers: new Set(),
-init() {
-const saved = localStorage.getItem('app_theme');
+async init() {
+const saved = await sqliteStore.get('app_theme', null);
 const systemPrefers = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 this.currentTheme = saved || systemPrefers;
 this.apply();
-window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-if (!localStorage.getItem('app_theme')) {
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', async (e) => {
+if (!(await sqliteStore.get('app_theme', null))) {
 this.setTheme(e.matches ? 'dark' : 'light');
 }
 });
@@ -14084,7 +14109,7 @@ this.notifyObservers();
 },
 setTheme(theme) {
 this.currentTheme = theme;
-localStorage.setItem('app_theme', theme);
+sqliteStore.set('app_theme', theme).catch(() => {});
 this.apply();
 },
 toggle() {
@@ -15037,8 +15062,13 @@ danger: targetMode !== 'admin'
 });
 if (!confirmed) return;
 try {
+
+if (window._firestoreNetworkDisabled) {
+try { await firebaseDB.enableNetwork(); window._firestoreNetworkDisabled = false; } catch (_en) {}
+}
 const userRef = firebaseDB.collection('users').doc(currentUser.uid);
-const commandTimestamp = firebase.firestore.FieldValue.serverTimestamp();
+
+const commandTimestamp = Date.now();
 const deviceRef = userRef.collection('devices').doc(deviceId);
 const updateData = {
 targetMode: targetMode,
@@ -15176,7 +15206,8 @@ resolvedName = data.assignedRoleName || data.assignedManager || null;
 }
 const effectiveMode = data.assignedRoleType || targetMode;
 const resolvedUserTabs = Array.isArray(data.assignedUserTabs) ? data.assignedUserTabs : [];
-const commandTimestamp = data.targetModeTimestamp.toMillis
+
+const commandTimestamp = data.targetModeTimestamp && data.targetModeTimestamp.toMillis
 ? data.targetModeTimestamp.toMillis()
 : (typeof data.targetModeTimestamp === 'number' ? data.targetModeTimestamp : 0);
 if (!commandTimestamp) return;
@@ -15236,6 +15267,10 @@ batchData.push(['assignedManager', null], ['assignedUserTabs', []]);
 await sqliteStore.setBatch(batchData);
 if (firebaseDB && currentUser) {
 try {
+
+if (targetMode === 'admin' && window._firestoreNetworkDisabled) {
+try { await firebaseDB.enableNetwork(); window._firestoreNetworkDisabled = false; } catch (_en) {}
+}
 const deviceId = await getDeviceId();
 const deviceRef = firebaseDB.collection('users').doc(currentUser.uid)
 .collection('devices').doc(deviceId);

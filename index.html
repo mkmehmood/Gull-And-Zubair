@@ -56,76 +56,69 @@
 <link rel="preload" href="./sql-wasm.js" as="script" onerror="void 0">
 <script>
 (function() {
-  // Intercept console before Firebase SDK loads and again after (Firebase re-wires console).
-  // Two sources of "DOMException {  }":
-  //   1. Raw DOMException object passed to console — convert to readable string.
-  //   2. Firebase's internal _formatMsg already stringified it to the literal text
-  //      "DOMException {" — filter that string so it never reaches the console.
-  // Noise strings produced by Firebase SDK's internal logger — suppress entirely.
+
   var _FIREBASE_NOISE = ['DOMException', 'Failed to fetch', 'WebChannelConnection', 'QUIC_PROTOCOL_ERROR'];
   function _containsDOMException(args) {
     for (var i = 0; i < args.length; i++) {
       var a = args[i];
-      // Raw DOMException object
+
       if (a instanceof DOMException) return true;
-      // Pre-formatted string from Firebase _formatMsg
+
       if (typeof a === 'string') {
         for (var j = 0; j < _FIREBASE_NOISE.length; j++) {
           if (a.indexOf(_FIREBASE_NOISE[j]) !== -1) return true;
         }
       }
-      // Error wrapping a DOMException (from _safeErr)
+
       if (a instanceof Error && a.message && a.message.indexOf('[DOMException]') === 0) return true;
     }
     return false;
   }
   function _applyConsolePatch() {
-    // Only patch error and warn — log/debug/info are not used by Firebase for DOMException.
+
     var _methods = ['error', 'warn'];
     _methods.forEach(function(method) {
       var _orig = console[method].bind(console);
       console[method] = function() {
         var args = Array.from(arguments);
-        // Fully suppress any call that involves a DOMException in any form.
+
         if (_containsDOMException(args)) return;
         _orig.apply(console, args);
       };
     });
   }
-  // Apply immediately before Firebase loads.
+
   _applyConsolePatch();
-  // Re-apply after Firebase SDKs finish loading since they capture console references.
+
   window._reapplyConsolePatch = _applyConsolePatch;
 
-  // Catch ALL unhandled promise rejections — prevent DevTools red error for DOMException.
   window.addEventListener('unhandledrejection', function(event) {
     var reason = event.reason;
-    // Suppress null/undefined rejections
+
     if (!reason) { event.preventDefault(); return; }
-    // Suppress raw DOMException objects
+
     if (reason instanceof DOMException) { event.preventDefault(); return; }
-    // Suppress Error objects that wrap DOMException
+
     if (reason instanceof Error) {
       var msg = reason.message || '';
       if (msg.indexOf('[DOMException]') === 0 || msg.indexOf('DOMException') !== -1) {
         event.preventDefault(); return;
       }
     }
-    // Suppress string rejections containing DOMException (from Firebase internals)
+
     if (typeof reason === 'string' && reason.indexOf('DOMException') !== -1) {
       event.preventDefault(); return;
     }
   });
 
-  // Catch synchronous DOMException thrown at top level (window.onerror).
   window.onerror = function(msg, src, line, col, error) {
-    // Suppress raw DOMException
+
     if (error instanceof DOMException) return true;
-    // Suppress any error whose message contains DOMException
+
     if (error instanceof Error && error.message && error.message.indexOf('DOMException') !== -1) return true;
-    // Suppress string error messages containing DOMException (Firebase internal)
+
     if (typeof msg === 'string' && msg.indexOf('DOMException') !== -1) return true;
-    return false; // let all other errors through normally
+    return false;
   };
 })();
 </script>
@@ -133,26 +126,20 @@
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 <script>
-// Re-apply console patch after Firebase SDKs load and wire their own log handlers.
-// Also silence both Firebase app-level and Firestore-specific internal loggers.
-// Apply experimentalForceLongPolling BEFORE any Firestore instance is created —
-// this stops Firestore's XHR transport from throwing DOMException on network failure.
+
 (function() {
   if (typeof window._reapplyConsolePatch === 'function') window._reapplyConsolePatch();
   if (typeof firebase === 'undefined') return;
 
-  // Silence Firebase app-level logger.
   if (typeof firebase.setLogLevel === 'function') firebase.setLogLevel('silent');
 
-  // Silence Firestore-specific logger (separate from app-level).
   if (firebase.firestore && typeof firebase.firestore.setLogLevel === 'function') {
     firebase.firestore.setLogLevel('silent');
   }
 
-  // Pre-configure Firestore to use long-polling instead of XHR.
   try {
     firebase.firestore().settings({ experimentalForceLongPolling: true, merge: true });
-  } catch (_e) { /* already configured */ }
+  } catch (_e) {  }
 })();
 </script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="anonymous"></script>
