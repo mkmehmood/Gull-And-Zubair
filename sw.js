@@ -95,7 +95,7 @@ self.addEventListener('fetch', (event) => {
         fetch(event.request).then((res) => {
           if (res.ok) cache.put(event.request, res.clone());
           return res;
-        }).catch(() => cache.match(event.request))
+        }).catch(() => cache.match(event.request, { ignoreMethod: true }))
       )
     );
     return;
