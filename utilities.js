@@ -2074,19 +2074,19 @@ const PDF_MERGED_HDR_COLOR  = [126, 34, 206];
 const PDF_MERGED_ROW_COLOR  = [245, 235, 255];
 const PDF_MERGED_TEXT_COLOR = [126, 34, 206];
 
-/**
- * When a statement fits on a single page, render it as a high-resolution JPEG.
- *
- * On mobile (Android / iOS) the Web Share API is used so the image is
- * pre-attached when the user picks WhatsApp from the native share sheet.
- *
- * On desktop (no Web Share support) the image is downloaded and the
- * recipient's WhatsApp Web chat is opened in a new tab.
- *
- * @param {object} doc          - jsPDF document (fully built, 1 page)
- * @param {string} phone        - Raw phone string from the entity / customer
- * @param {string} filenameBase - Base name (no extension) for the output file
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
 async function _exportDocAsImageAndOpenWhatsApp(doc, phone, filenameBase) {
   const PDFJS_CDN  = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
   const PDFJS_WRKR = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -3070,6 +3070,7 @@ opt.classList.remove('active');
 });
 event.target.classList.add('active');
 calculateCashTracker();
+if (typeof calculateNetCash === 'function') calculateNetCash();
 }
 async function calculateCashTracker() {
 const salesHistory = ensureArray(await sqliteStore.get('noman_history'));
@@ -3556,6 +3557,38 @@ const factoryInventoryData = ensureArray(_cncBatch.get('factory_inventory_data')
 const factoryProductionHistory = ensureArray(_cncBatch.get('factory_production_history'));
 const factoryDefaultFormulas = _cncBatch.get('factory_default_formulas') || {};
 const factoryAdditionalCosts = _cncBatch.get('factory_additional_costs') || {};
+const paymentDateEl = document.getElementById('paymentDate');
+const selectedDate = (paymentDateEl && paymentDateEl.value) || new Date().toISOString().split('T')[0];
+const selectedDateObj = new Date(selectedDate);
+const selectedYear = selectedDateObj.getFullYear();
+const selectedMonth = selectedDateObj.getMonth();
+let cncStartDate = new Date('2000-01-01');
+let cncEndDate = new Date('2100-12-31');
+const _cncMode = typeof currentCashTrackerMode !== 'undefined' ? currentCashTrackerMode : 'all';
+if (_cncMode === 'day') {
+cncStartDate = new Date(selectedDate);
+cncStartDate.setHours(0,0,0,0);
+cncEndDate = new Date(selectedDate);
+cncEndDate.setHours(23,59,59,999);
+} else if (_cncMode === 'week') {
+cncStartDate = new Date(selectedDate);
+cncStartDate.setDate(selectedDateObj.getDate() - 6);
+cncStartDate.setHours(0,0,0,0);
+cncEndDate = new Date(selectedDate);
+cncEndDate.setHours(23,59,59,999);
+} else if (_cncMode === 'month') {
+cncStartDate = new Date(selectedYear, selectedMonth, 1);
+cncEndDate = new Date(selectedYear, selectedMonth + 1, 0, 23, 59, 59);
+} else if (_cncMode === 'year') {
+cncStartDate = new Date(selectedYear, 0, 1);
+cncEndDate = new Date(selectedYear, 11, 31, 23, 59, 59);
+}
+const _cncInRange = (dateStr) => {
+if (_cncMode === 'all') return true;
+if (!dateStr) return false;
+const d = new Date(dateStr);
+return d >= cncStartDate && d <= cncEndDate;
+};
 try {
 let rawData = {
 totalProductionValue: 0,
@@ -3570,24 +3603,23 @@ paymentsOut: 0
 };
 db.forEach(item => {
 if (item.isReturn) return;
+if (!_cncInRange(item.date)) return;
 rawData.totalProductionValue += item.totalSale || 0;
 rawData.totalProductionQuantity += item.net || 0;
 });
 customerSales.forEach(sale => {
+if (!_cncInRange(sale.date)) return;
 const isRepLinked = sale.salesRep && sale.salesRep !== 'NONE';
 if (sale.isMerged && sale.mergedSummary) {
 const ms = sale.mergedSummary;
 rawData.salesCash    += (ms.cashSales    || 0);
 rawData.salesCredits += (ms.unpaidCredit || 0);
 } else if (sale.paymentType === 'CREDIT' && !sale.creditReceived) {
-
 const partialPaid = sale.partialPaymentReceived || 0;
 rawData.salesCredits += Math.max(0, (sale.totalValue || 0) - partialPaid);
 } else if (isRepLinked) {
-
 rawData.salesCredits += sale.totalValue || 0;
 } else {
-
 if (sale.paymentType === 'CASH' || sale.creditReceived) {
 rawData.salesCash += sale.totalValue || 0;
 } else if (sale.paymentType === 'COLLECTION') {
@@ -3600,12 +3632,14 @@ rawData.salesCredits -= sale.totalValue || 0;
 }
 });
 salesHistory.forEach(item => {
+if (!_cncInRange(item.date)) return;
 rawData.calculatorCash += item.received || 0;
 rawData.calculatorTotalIssued += item.creditValue || 0;
 rawData.calculatorTotalRecovered += item.prevColl || 0;
 });
 let totalExpenses = 0;
 paymentTransactions.forEach(trans => {
+if (!_cncInRange(trans.date)) return;
 if (trans.isPayable && trans.type === 'IN') return;
 if (trans.type === 'IN') {
 rawData.paymentsIn += trans.amount;
@@ -3622,6 +3656,7 @@ if (Array.isArray(expenseRecords)) {
 expenseRecords.forEach(exp => {
 if (exp.isMerged !== true) return;
 if (exp.category === 'operating') {
+if (!_cncInRange(exp.date)) return;
 totalExpenses += (parseFloat(exp.amount) || 0);
 }
 });
@@ -3629,6 +3664,7 @@ totalExpenses += (parseFloat(exp.amount) || 0);
 if (Array.isArray(factoryProductionHistory)) {
 factoryProductionHistory.forEach(entry => {
 if (entry.isMerged) return;
+if (!_cncInRange(entry.date)) return;
 totalExpenses += (parseFloat(entry.additionalCost) || 0);
 });
 }
@@ -3781,6 +3817,7 @@ return null;
 }
 }
 function updateEconomicDashboard(indicators) {
+const _econMode = typeof currentCashTrackerMode !== 'undefined' ? currentCashTrackerMode : 'all';
 const netCashValueElement = document.getElementById('netCashValue');
 if (netCashValueElement) {
 netCashValueElement.textContent = `${fmtAmt(safeValue(indicators.cashInHand))}`;
@@ -3788,6 +3825,7 @@ netCashValueElement.style.color = indicators.cashInHand < 0 ? 'var(--danger)' :
 indicators.cashInHand < 10000 ? 'var(--warning)' :
 'var(--accent-emerald)';
 }
+
 const operatingCashElement = document.getElementById('operatingCashFlow');
 if (operatingCashElement) {
 operatingCashElement.textContent = `${fmtAmt(safeValue(indicators.operatingCashFlow))}`;
