@@ -3108,6 +3108,7 @@ totalProductionValue: 0,
 totalProductionQuantity: 0,
 salesCash: 0,
 salesCredits: 0,
+totalSoldValue: 0,
 calculatorCash: 0,
 calculatorCredits: 0,
 calculatorRecovered: 0,
@@ -3127,27 +3128,31 @@ customerSales.forEach(sale => {
 const saleDate = new Date(sale.date);
 if (saleDate >= startDate && saleDate <= endDate) {
 const isRepLinked = sale.salesRep && sale.salesRep !== 'NONE';
+const _ctSaleVal = sale.totalValue || 0;
 if (sale.isMerged && sale.mergedSummary) {
 const ms = sale.mergedSummary;
 rawData.salesCash    += (ms.cashSales    || 0);
 rawData.salesCredits += (ms.unpaidCredit || 0);
+rawData.totalSoldValue += (ms.cashSales || 0) + (ms.unpaidCredit || 0);
 } else if (sale.paymentType === 'CREDIT' && !sale.creditReceived) {
-
 const partialPaid = sale.partialPaymentReceived || 0;
-rawData.salesCredits += Math.max(0, (sale.totalValue || 0) - partialPaid);
+rawData.salesCredits += Math.max(0, _ctSaleVal - partialPaid);
+rawData.totalSoldValue += _ctSaleVal;
 } else if (isRepLinked) {
-
-rawData.salesCredits += sale.totalValue || 0;
+rawData.totalSoldValue += _ctSaleVal;
+if (!sale.creditReceived) {
+rawData.salesCredits += _ctSaleVal;
+}
 } else {
-
 if (sale.paymentType === 'CASH' || sale.creditReceived) {
-rawData.salesCash += sale.totalValue || 0;
+rawData.salesCash += _ctSaleVal;
+rawData.totalSoldValue += _ctSaleVal;
 } else if (sale.paymentType === 'COLLECTION') {
-rawData.salesCash += sale.totalValue || 0;
-rawData.salesCredits -= sale.totalValue || 0;
+rawData.salesCash += _ctSaleVal;
+rawData.salesCredits -= _ctSaleVal;
 } else if (sale.paymentType === 'PARTIAL_PAYMENT') {
-rawData.salesCash += sale.totalValue || 0;
-rawData.salesCredits -= sale.totalValue || 0;
+rawData.salesCash += _ctSaleVal;
+rawData.salesCredits -= _ctSaleVal;
 }
 }
 }
@@ -3202,6 +3207,7 @@ productionValue: rawData.totalProductionValue,
 productionQuantity: rawData.totalProductionQuantity,
 salesTabCash: netSalesCash,
 salesTabCredits: netSalesCredits,
+totalSoldValue: rawData.totalSoldValue,
 calculatorCash: rawData.calculatorCash,
 calculatorCredits: netCalculatorDebt,
 paymentsIn: rawData.paymentsIn,
@@ -3243,7 +3249,7 @@ if (elCreditTotal) elCreditTotal.textContent = `${fmtAmt(safeValue(totalCredits)
 return finalTotals;
 }
 function updateEconomicDashboardWithNetValues(totals, totalCredits) {
-const operatingCashFlow = totals.salesTabCash + totals.calculatorCash;
+const operatingCashFlow = totals.productionValue - totals.totalSoldValue + totals.salesTabCash + totals.calculatorCash;
 const operatingCashElement = document.getElementById('operatingCashFlow');
 if (operatingCashElement) {
 operatingCashElement.textContent = `${fmtAmt(safeValue(operatingCashFlow))}`;
@@ -3595,6 +3601,7 @@ totalProductionValue: 0,
 totalProductionQuantity: 0,
 salesCash: 0,
 salesCredits: 0,
+totalSoldValue: 0,
 calculatorCash: 0,
 calculatorTotalIssued: 0,
 calculatorTotalRecovered: 0,
@@ -3610,24 +3617,31 @@ rawData.totalProductionQuantity += item.net || 0;
 customerSales.forEach(sale => {
 if (!_cncInRange(sale.date)) return;
 const isRepLinked = sale.salesRep && sale.salesRep !== 'NONE';
+const _saleVal = sale.totalValue || 0;
 if (sale.isMerged && sale.mergedSummary) {
 const ms = sale.mergedSummary;
 rawData.salesCash    += (ms.cashSales    || 0);
 rawData.salesCredits += (ms.unpaidCredit || 0);
+rawData.totalSoldValue += (ms.cashSales || 0) + (ms.unpaidCredit || 0);
 } else if (sale.paymentType === 'CREDIT' && !sale.creditReceived) {
 const partialPaid = sale.partialPaymentReceived || 0;
-rawData.salesCredits += Math.max(0, (sale.totalValue || 0) - partialPaid);
+rawData.salesCredits += Math.max(0, _saleVal - partialPaid);
+rawData.totalSoldValue += _saleVal;
 } else if (isRepLinked) {
-rawData.salesCredits += sale.totalValue || 0;
+rawData.totalSoldValue += _saleVal;
+if (!sale.creditReceived) {
+rawData.salesCredits += _saleVal;
+}
 } else {
 if (sale.paymentType === 'CASH' || sale.creditReceived) {
-rawData.salesCash += sale.totalValue || 0;
+rawData.salesCash += _saleVal;
+rawData.totalSoldValue += _saleVal;
 } else if (sale.paymentType === 'COLLECTION') {
-rawData.salesCash += sale.totalValue || 0;
-rawData.salesCredits -= sale.totalValue || 0;
+rawData.salesCash += _saleVal;
+rawData.salesCredits -= _saleVal;
 } else if (sale.paymentType === 'PARTIAL_PAYMENT') {
-rawData.salesCash += sale.totalValue || 0;
-rawData.salesCredits -= sale.totalValue || 0;
+rawData.salesCash += _saleVal;
+rawData.salesCredits -= _saleVal;
 }
 }
 });
@@ -3783,7 +3797,7 @@ paymentsIn: rawData.paymentsIn,
 paymentsOut: rawData.paymentsOut,
 operatingExpenses: totalExpenses
 },
-operatingCashFlow: netSalesCash + rawData.totalProductionValue + rawData.calculatorCash,
+operatingCashFlow: rawData.totalProductionValue - rawData.totalSoldValue + netSalesCash + rawData.calculatorCash,
 assets: {
 cash: cashInHand,
 rawMaterials: RawMaterialsValue,
