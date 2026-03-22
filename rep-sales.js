@@ -1384,7 +1384,6 @@ await new Promise(r => setTimeout(r, 100));
 const dateStamp  = new Date().toISOString().split('T')[0];
 const safeRepName = customerName.replace(/[^a-z0-9]/gi, '_');
 if (pageCount === 1) {
-  // ── Single page → image + WhatsApp ──────────────────────────────────────
   showToast('Single-page statement — converting to image…', 'info');
   await _exportDocAsImageAndOpenWhatsApp(
     doc,
@@ -1392,7 +1391,6 @@ if (pageCount === 1) {
     `Rep_Customer_Statement_${safeRepName}_${dateStamp}`
   );
 } else {
-  // ── Multi-page → regular PDF download ───────────────────────────────────
   doc.save(`Rep_Customer_Statement_${safeRepName}_${dateStamp}.pdf`);
   showToast('PDF exported successfully', 'success');
 }

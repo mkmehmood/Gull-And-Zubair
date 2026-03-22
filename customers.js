@@ -323,16 +323,14 @@ salesCustomers.splice(contactIdx, 1);
 await saveWithTracking('sales_customers', salesCustomers);
 deleteRecordFromFirestore('sales_customers', contactId).catch(() => {});
 }
-const idsToDelete = txs.map(s => s.id);
-
 const txsToDelete = txs.slice();
-const prunedSales = customerSales.filter(s => !idsToDelete.includes(s.id));
-await sqliteStore.set('customer_sales', prunedSales);
+const idsToDelete = new Set(txsToDelete.map(t => t.id));
+let prunedSales = customerSales.filter(s => !idsToDelete.has(s.id));
 for (const tx of txsToDelete) {
-await registerDeletion(tx.id, 'sales', tx);
+prunedSales = prunedSales.filter(s => s.id !== tx.id);
+await unifiedDelete('customer_sales', prunedSales, tx.id, { strict: true }, tx);
 }
-await saveWithTracking('customer_sales', customerSales);
-void Promise.all(idsToDelete.map(id => deleteRecordFromFirestore('customer_sales', id).catch(() => {})));
+void Promise.all([...idsToDelete].map(id => deleteRecordFromFirestore('customer_sales', id).catch(() => {})));
 notifyDataChange('sales');
 triggerAutoSync();
 closeCustomerManagement();

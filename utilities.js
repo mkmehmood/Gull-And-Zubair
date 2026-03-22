@@ -1819,9 +1819,78 @@ showToast("Transaction saved successfully", "success");
 showToast('Failed to save transaction. Please try again.', 'error');
 }
 }
+async function _restorePayableFromDeletedTransaction(tx, allTransactions, allInventory) {
+if (!tx || !tx.isPayable) return false;
+const factoryInventoryData = allInventory || ensureArray(await sqliteStore.get('factory_inventory_data'));
+const paymentTransactions = allTransactions || ensureArray(await sqliteStore.get('payment_transactions'));
+if (tx.type === 'OUT') {
+const supplierId = tx.entityId;
+const supplierMaterials = factoryInventoryData.filter(m => String(m.supplierId) === String(supplierId));
+if (supplierMaterials.length === 0) return false;
+const remainingPayments = paymentTransactions
+.filter(t => t.id !== tx.id && t.isPayable === true && t.type === 'OUT' && String(t.entityId) === String(supplierId))
+.sort((a, b) => new Date(a.date || a.createdAt || 0) - new Date(b.date || b.createdAt || 0));
+const sortedMaterials = supplierMaterials.slice().sort((a, b) =>
+new Date(a.purchaseDate || a.createdAt || 0) - new Date(b.purchaseDate || b.createdAt || 0)
+);
+sortedMaterials.forEach(mat => {
+const original = parseFloat((
+mat.totalValue ||
+(mat.purchaseCost && mat.purchaseQuantity ? mat.purchaseCost * mat.purchaseQuantity : (mat.quantity || 0) * (mat.cost || 0)) ||
+0
+).toFixed(2));
+mat.totalPayable = original;
+mat.paymentStatus = 'pending';
+delete mat.paidDate;
+mat.updatedAt = getTimestamp();
+});
+remainingPayments.forEach(payment => {
+let remaining = parseFloat(payment.amount) || 0;
+for (const mat of sortedMaterials) {
+if (remaining <= 0) break;
+if (mat.totalPayable <= 0) continue;
+if (remaining >= mat.totalPayable) {
+remaining -= mat.totalPayable;
+mat.totalPayable = 0;
+mat.paymentStatus = 'paid';
+mat.paidDate = payment.date;
+mat.updatedAt = getTimestamp();
+} else {
+mat.totalPayable = parseFloat((mat.totalPayable - remaining).toFixed(2));
+remaining = 0;
+mat.updatedAt = getTimestamp();
+}
+ensureRecordIntegrity(mat, true);
+}
+});
+for (const mat of sortedMaterials) {
+ensureRecordIntegrity(mat, true);
+await unifiedSave('factory_inventory_data', factoryInventoryData, mat);
+}
+return true;
+}
+if (tx.type === 'IN') {
+const mat = factoryInventoryData.find(m => String(m.id) === String(tx.materialId));
+if (mat) {
+delete mat.supplierId;
+delete mat.supplierName;
+delete mat.supplierContact;
+delete mat.supplierType;
+mat.paymentStatus = 'pending';
+delete mat.totalPayable;
+delete mat.paidDate;
+mat.updatedAt = getTimestamp();
+ensureRecordIntegrity(mat, true);
+await unifiedSave('factory_inventory_data', factoryInventoryData, mat);
+}
+return true;
+}
+return false;
+}
 async function deleteEntityTransaction(id) {
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
+const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
 if (!id || !validateUUID(id)) {
 showToast('Invalid transaction ID', 'error');
 return;
@@ -1848,19 +1917,25 @@ _dtMsg += `\n\nEntity: ${_dtEntityName}`;
 _dtMsg += `\nAmount: ${_dtAmount}`;
 _dtMsg += `\nDate: ${_dtDate}`;
 if (_dtDesc) _dtMsg += _dtDesc;
+if (_dt.isPayable && _dt.type === 'OUT') {
+_dtMsg += `\n\n↩ Supplier payable status will be restored — material will revert to pending payment.`;
+}
+if (_dt.isPayable && _dt.type === 'IN') {
+_dtMsg += `\n\n↩ Credit purchase record removed — supplier will be unlinked from material.`;
+}
 _dtMsg += `\n\nThis cannot be undone.`;
 if (await showGlassConfirm(_dtMsg, { title: `Delete ${_dt.type === 'IN' ? 'Payment IN' : 'Payment OUT'}`, confirmText: "Delete", danger: true })) {
 try {
-const _txToDelete1 = _dt;
+await _restorePayableFromDeletedTransaction(_dt, paymentTransactions, factoryInventoryData);
 const _ptFiltered1 = paymentTransactions.filter(t => t.id !== id);
-await unifiedDelete('payment_transactions', _ptFiltered1, id, { strict: true }, _txToDelete1);
+await unifiedDelete('payment_transactions', _ptFiltered1, id, { strict: true }, _dt);
 const _dtEntityRefreshed = paymentEntities.find(e => String(e.id) === String(_dt.entityId));
 if (_dtEntityRefreshed) renderEntityOverlayContent(_dtEntityRefreshed);
 if (typeof calculateNetCash === 'function') calculateNetCash();
 if (typeof calculateCashTracker === 'function') calculateCashTracker();
 if (typeof renderFactoryInventory === 'function') renderFactoryInventory();
 if (typeof renderUnifiedTable === 'function') renderUnifiedTable(1);
-showToast(" Transaction deleted and all views restored successfully!", "success");
+showToast(" Transaction deleted and all balances restored!", "success");
 } catch (error) {
 showToast('Failed to delete transaction. Please try again.', 'error');
 }
@@ -1869,7 +1944,6 @@ showToast('Failed to delete transaction. Please try again.', 'error');
 async function deleteCurrentEntity() {
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
-const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
 const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
 if (!currentEntityId) return;
 if (!validateUUID(String(currentEntityId))) {
@@ -1883,18 +1957,33 @@ return;
 }
 const _entityName = _entityToDel.name || 'this entity';
 const _entityTxs = paymentTransactions.filter(t => String(t.entityId) === String(currentEntityId));
-const _totalIn  = _entityTxs.filter(t => t.type === 'IN').reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
-const _totalOut = _entityTxs.filter(t => t.type === 'OUT').reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+const _totalIn = _entityTxs.filter(t => t.type === 'IN' && !t.isPayable).reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+const _totalOut = _entityTxs.filter(t => t.type === 'OUT' && !t.isPayable).reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+const _linkedMaterials = factoryInventoryData.filter(m => String(m.supplierId) === String(currentEntityId));
 let msg = `Permanently delete "${_entityName}"?`;
 if (_entityTxs.length > 0) {
 msg += `\n\n\u26a0 This entity has ${_entityTxs.length} transaction${_entityTxs.length !== 1 ? 's' : ''} on record`;
-if (_totalIn  > 0) msg += `\n • Received: ${fmtAmt(_totalIn)}`;
+if (_totalIn > 0) msg += `\n • Received: ${fmtAmt(_totalIn)}`;
 if (_totalOut > 0) msg += `\n • Paid out: ${fmtAmt(_totalOut)}`;
 msg += `\n\nAll ${_entityTxs.length} transaction${_entityTxs.length !== 1 ? 's' : ''} will also be permanently deleted.`;
+}
+if (_linkedMaterials.length > 0) {
+msg += `\n\n\u21a9 ${_linkedMaterials.length} linked material${_linkedMaterials.length !== 1 ? 's' : ''} will be unlinked and reverted to pending payment status.`;
 }
 msg += `\n\nThis cannot be undone.`;
 if (!(await showGlassConfirm(msg, { title: `Delete Entity Permanently`, confirmText: "Delete", danger: true }))) return;
 try {
+for (const mat of _linkedMaterials) {
+delete mat.supplierId;
+delete mat.supplierName;
+delete mat.supplierContact;
+delete mat.supplierType;
+mat.paymentStatus = 'pending';
+delete mat.paidDate;
+mat.updatedAt = getTimestamp();
+ensureRecordIntegrity(mat, true);
+await unifiedSave('factory_inventory_data', factoryInventoryData, mat);
+}
 const txsToDelete = _entityTxs.slice();
 const txIdsToDelete = new Set(txsToDelete.map(t => t.id));
 const filteredTx = paymentTransactions.filter(t => !txIdsToDelete.has(t.id));
@@ -1908,6 +1997,7 @@ deleteRecordFromFirestore('payment_entities', _entityToDel.id).catch(() => {});
 notifyDataChange('entities');
 if (typeof calculateNetCash === 'function') calculateNetCash();
 if (typeof calculateCashTracker === 'function') calculateCashTracker();
+if (typeof renderFactoryInventory === 'function') renderFactoryInventory();
 closeEntityDetailsOverlay();
 if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
 showToast(`"${_entityName}" and all its transactions deleted.`, 'success');
@@ -1998,7 +2088,6 @@ const PDF_MERGED_TEXT_COLOR = [126, 34, 206];
  * @param {string} filenameBase - Base name (no extension) for the output file
  */
 async function _exportDocAsImageAndOpenWhatsApp(doc, phone, filenameBase) {
-  // ── 1. Load pdf.js if needed ──────────────────────────────────────────────
   const PDFJS_CDN  = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
   const PDFJS_WRKR = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   if (!window.pdfjsLib) {
@@ -2008,7 +2097,6 @@ async function _exportDocAsImageAndOpenWhatsApp(doc, phone, filenameBase) {
   if (!window.pdfjsLib) throw new Error('Failed to load pdf.js — please refresh and try again.');
   window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WRKR;
 
-  // ── 2. Render page 1 → canvas at 2.5× scale (~150 dpi) ──────────────────
   const pdfBytes = doc.output('arraybuffer');
   const pdfDoc   = await window.pdfjsLib.getDocument({ data: pdfBytes }).promise;
   const page     = await pdfDoc.getPage(1);
@@ -2019,7 +2107,6 @@ async function _exportDocAsImageAndOpenWhatsApp(doc, phone, filenameBase) {
   canvas.height  = viewport.height;
   await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
 
-  // ── 3. Convert canvas → Blob (JPEG 92%) ──────────────────────────────────
   const imageBlob = await new Promise(resolve =>
     canvas.toBlob(resolve, 'image/jpeg', 0.92)
   );
@@ -2028,7 +2115,6 @@ async function _exportDocAsImageAndOpenWhatsApp(doc, phone, filenameBase) {
   const hasPhone = phone && phone !== 'N/A' && phone.trim() !== '';
   const cleaned  = hasPhone ? phone.trim().replace(/[^\d+]/g, '') : '';
 
-  // ── 4a. Mobile: Web Share API → native share sheet (WhatsApp gets the file)
   if (navigator.canShare && navigator.canShare({ files: [imageFile] })) {
     try {
       await navigator.share({
@@ -2042,12 +2128,10 @@ async function _exportDocAsImageAndOpenWhatsApp(doc, phone, filenameBase) {
         showToast('Share cancelled', 'info');
         return;
       }
-      // Any other error: fall through to desktop path
       console.warn('[PDF share] Web Share failed, falling back to download:', err);
     }
   }
 
-  // ── 4b. Desktop fallback: download image + open WhatsApp Web ─────────────
   const dlLink    = document.createElement('a');
   dlLink.href     = URL.createObjectURL(imageBlob);
   dlLink.download = `${filenameBase}.jpg`;
@@ -2157,19 +2241,21 @@ const normalTxns  = transactions.filter(t => !t.isMerged);
 const buildTxRow = (t, runBal) => {
   const amt = parseFloat(t.amount) || 0;
   const isOut = t.type === 'OUT';
-  const isSupplierPmt = t.isPayable === true;
+  const isPayableTx = t.isPayable === true;
   runBal.val += isOut ? -amt : amt;
   let balDisplay;
   if (Math.abs(runBal.val) < 0.01) balDisplay = 'SETTLED';
-  else balDisplay = 'Rs ' + fmtAmt(Math.abs(runBal.val));
+  else balDisplay = fmtAmt(Math.abs(runBal.val));
   let desc = (t.description || '-').substring(0, 35);
-  if (isSupplierPmt) desc = '\u21a9 Supplier Pmt\n' + desc;
+  if (isPayableTx && !isOut) desc = '\u21a9 Credit Purchase\n' + desc;
+  else if (isPayableTx && isOut) desc = '\u2714 Supplier Pmt\n' + desc;
+  const typeLabel = isPayableTx && !isOut ? 'CR' : t.type;
   return [
     formatDisplayDate(t.date),
     desc,
-    t.type,
-    isOut ? 'Rs ' + fmtAmt(amt) : '-',
-    !isOut ? 'Rs ' + fmtAmt(amt) : '-',
+    typeLabel,
+    isOut ? fmtAmt(amt) : '-',
+    !isOut ? fmtAmt(amt) : '-',
     balDisplay
   ];
 };
@@ -2181,17 +2267,19 @@ if (mergedTxns.length > 0) {
     const ms = t.mergedSummary || {};
     const periodLabel = _pdfMergedPeriodLabel(t);
     const countLabel  = _pdfMergedCountLabel(t);
-    const origIn  = ms.originalIn  != null ? 'In: Rs '  + fmtAmt(ms.originalIn) : '';
-    const origOut = ms.originalOut != null ? 'Out: Rs ' + fmtAmt(ms.originalOut) : '';
+    const origIn  = ms.originalIn  != null ? 'In: ' + fmtAmt(ms.originalIn) : '';
+    const origOut = ms.originalOut != null ? 'Out: ' + fmtAmt(ms.originalOut) : '';
     const summary = [periodLabel, countLabel, origIn, origOut].filter(Boolean).join('\n');
     row[1] = summary.substring(0, 70);
     return row;
   });
-  const mTotOut = mergedTxns.filter(t => t.type === 'OUT').reduce((s,t) => s+(parseFloat(t.amount)||0), 0);
-  const mTotIn  = mergedTxns.filter(t => t.type === 'IN' ).reduce((s,t) => s+(parseFloat(t.amount)||0), 0);
-  const mFin    = mTotIn - mTotOut;
-  mergedRows.push(['', 'SUBTOTAL', '', 'Rs '+fmtAmt(mTotOut), 'Rs '+fmtAmt(mTotIn),
-    Math.abs(mFin)<0.01?'SETTLED':'Rs '+fmtAmt(Math.abs(mFin))]);
+  const mTotOut      = mergedTxns.filter(t => t.type === 'OUT').reduce((s,t) => s+(parseFloat(t.amount)||0), 0);
+  const mTotCashIn   = mergedTxns.filter(t => t.type === 'IN' && !t.isPayable).reduce((s,t) => s+(parseFloat(t.amount)||0), 0);
+  const mTotCredit   = mergedTxns.filter(t => t.type === 'IN' && t.isPayable).reduce((s,t) => s+(parseFloat(t.amount)||0), 0);
+  const mTotIn       = mTotCashIn + mTotCredit;
+  const mFin         = mTotIn - mTotOut;
+  mergedRows.push(['', 'SUBTOTAL', '', fmtAmt(mTotOut), fmtAmt(mTotIn),
+    Math.abs(mFin)<0.01?'SETTLED':fmtAmt(Math.abs(mFin))]);
   doc.autoTable({
     startY: yPos,
     head: [['Date', 'Year Period / Summary', 'Type', 'Payment OUT', 'Payment IN', 'Balance']],
@@ -2218,7 +2306,7 @@ if (mergedTxns.length > 0) {
         data.cell.styles.textColor = [80, 40, 120];
       }
       if (data.column.index === 2 && !isSubtotal)
-        data.cell.styles.textColor = data.cell.text[0] === 'OUT' ? [180, 40, 40] : [40, 130, 60];
+        data.cell.styles.textColor = data.cell.text[0] === 'OUT' ? [180, 40, 40] : data.cell.text[0] === 'CR' ? [200, 100, 0] : [40, 130, 60];
       if (data.column.index === 3 && !isSubtotal) data.cell.styles.textColor = [180, 40, 40];
       if (data.column.index === 4 && !isSubtotal) data.cell.styles.textColor = [40, 130, 60];
       if (data.column.index === 5 && !isSubtotal) {
@@ -2234,19 +2322,21 @@ if (mergedTxns.length > 0) {
 let runningBalance = 0;
 const txRunBal = { val: 0 };
 const txRows = normalTxns.map(t => buildTxRow(t, txRunBal));
-const totalOut = normalTxns.filter(t => t.type === 'OUT').reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
-const totalIn  = normalTxns.filter(t => t.type === 'IN' ).reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
-const finalBal = totalIn - totalOut;
+const totalOut          = normalTxns.filter(t => t.type === 'OUT').reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+const totalCashIn       = normalTxns.filter(t => t.type === 'IN' && !t.isPayable).reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+const totalCreditPurch  = normalTxns.filter(t => t.type === 'IN' && t.isPayable).reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+const totalIn           = totalCashIn + totalCreditPurch;
+const finalBal          = totalIn - totalOut;
 let finalBalDisplay;
 if (Math.abs(finalBal) < 0.01) finalBalDisplay = 'SETTLED';
-else finalBalDisplay = 'Rs ' + fmtAmt(Math.abs(finalBal));
+else finalBalDisplay = fmtAmt(Math.abs(finalBal));
 if (normalTxns.length > 0) {
   doc.setFontSize(8.5); doc.setFont(undefined, 'bold');
   doc.setTextColor(...headerColor);
   doc.text('INDIVIDUAL TRANSACTIONS', 14, yPos);
   doc.setTextColor(80, 80, 80); doc.setFont(undefined, 'normal');
   yPos += 5;
-  txRows.push(['', 'TOTAL', '', 'Rs ' + fmtAmt(totalOut), 'Rs ' + fmtAmt(totalIn), finalBalDisplay]);
+  txRows.push(['', 'TOTAL', '', fmtAmt(totalOut), fmtAmt(totalIn), finalBalDisplay]);
   doc.autoTable({
     startY: yPos,
     head: [['Date', 'Description', 'Type', 'Payment OUT', 'Payment IN', 'Running Balance']],
@@ -2266,7 +2356,7 @@ if (normalTxns.length > 0) {
       const isTotal = data.row.index === txRows.length - 1;
       if (isTotal) { data.cell.styles.fontStyle='bold'; data.cell.styles.fillColor=[240,240,240]; data.cell.styles.fontSize=9; }
       if (data.column.index===2 && !isTotal)
-        data.cell.styles.textColor = data.cell.text[0]==='OUT'?[220,53,69]:[40,167,69];
+        data.cell.styles.textColor = data.cell.text[0]==='OUT'?[220,53,69]:data.cell.text[0]==='CR'?[200,100,0]:[40,167,69];
       if (data.column.index===5 && !isTotal) {
         const txt=(data.cell.text||[]).join('');
         if (txt.includes('SETTLED')) data.cell.styles.textColor=[100,100,100];
@@ -2280,18 +2370,22 @@ if (normalTxns.length > 0) {
 const afterTx = (normalTxns.length > 0 ? doc.lastAutoTable.finalY : yPos - 5) + 5;
 if (afterTx < 270) {
 doc.setFillColor(245, 245, 245);
-doc.roundedRect(14, afterTx, pageW - 28, 14, 2, 2, 'F');
+doc.roundedRect(14, afterTx, pageW - 28, totalCreditPurch > 0 ? 20 : 14, 2, 2, 'F');
 doc.setFontSize(8.5); doc.setFont(undefined, 'normal');
 doc.setTextColor(220, 53, 69);
-doc.text(`Total OUT: Rs ${fmtAmt(totalOut)}`, 20, afterTx + 9);
+doc.text(`Total OUT: ${fmtAmt(totalOut)}`, 20, afterTx + 9);
 doc.setTextColor(40, 167, 69);
-doc.text(`Total IN: Rs ${fmtAmt(totalIn)}`, 75, afterTx + 9);
+doc.text(`Cash IN: ${fmtAmt(totalCashIn)}`, 75, afterTx + 9);
+if (totalCreditPurch > 0) {
+doc.setTextColor(200, 100, 0);
+doc.text(`Credit Purchases: ${fmtAmt(totalCreditPurch)}`, 20, afterTx + 17);
+}
 doc.setTextColor(Math.abs(finalBal) < 0.01 ? 100 : finalBal < 0 ? 220 : 40,
 Math.abs(finalBal) < 0.01 ? 100 : finalBal < 0 ? 53 : 167,
 Math.abs(finalBal) < 0.01 ? 100 : finalBal < 0 ? 69 : 69);
 doc.setFont(undefined, 'bold');
 doc.text(`Net Balance: ${finalBalDisplay}`, 138, afterTx + 9);
-yPos = afterTx + 18;
+yPos = afterTx + (totalCreditPurch > 0 ? 24 : 18);
 } else {
 yPos = afterTx + 5;
 }
@@ -2338,17 +2432,17 @@ return [
 formatDisplayDate(mat.purchaseDate || mat.date || mat.createdAt || '') || '-',
 (mat.name || 'Material').substring(0, 25),
 qtyStr,
-'Rs ' + fmtAmt(originalAmt),
-paid > 0 ? 'Rs ' + fmtAmt(paid) : '-',
-remaining > 0 ? 'Rs ' + fmtAmt(remaining) : '-',
+fmtAmt(originalAmt),
+paid > 0 ? fmtAmt(paid) : '-',
+remaining > 0 ? fmtAmt(remaining) : '-',
 status
 ];
 });
 matRows.push([
 '', 'TOTAL', '',
-'Rs ' + fmtAmt(totalInvoice),
-'Rs ' + fmtAmt(totalPaid),
-'Rs ' + fmtAmt(totalRemaining),
+fmtAmt(totalInvoice),
+fmtAmt(totalPaid),
+fmtAmt(totalRemaining),
 totalRemaining <= 0 ? 'CLEARED' : ''
 ]);
 doc.autoTable({
@@ -2389,12 +2483,12 @@ doc.setFillColor(255, 245, 230);
 doc.roundedRect(14, afterMat, pageW - 28, 14, 2, 2, 'F');
 doc.setFontSize(8.5); doc.setFont(undefined, 'normal');
 doc.setTextColor(50, 50, 50);
-doc.text(`Total Invoiced: Rs ${fmtAmt(totalInvoice)}`, 20, afterMat + 9);
+doc.text(`Total Invoiced: ${fmtAmt(totalInvoice)}`, 20, afterMat + 9);
 doc.setTextColor(40, 167, 69);
-doc.text(`Paid: Rs ${fmtAmt(totalPaid)}`, 88, afterMat + 9);
+doc.text(`Paid: ${fmtAmt(totalPaid)}`, 88, afterMat + 9);
 doc.setTextColor(totalRemaining > 0 ? 220 : 100, totalRemaining > 0 ? 53 : 100, totalRemaining > 0 ? 69 : 100);
 doc.setFont(undefined, 'bold');
-doc.text(`Outstanding Payable: Rs ${fmtAmt(totalRemaining)}`, 138, afterMat + 9);
+doc.text(`Outstanding Payable: ${fmtAmt(totalRemaining)}`, 138, afterMat + 9);
 }
 }
 const pageCount = doc.internal.getNumberOfPages();
@@ -2411,7 +2505,6 @@ await new Promise(r => setTimeout(r, 100));
 const dateStamp  = new Date().toISOString().split('T')[0];
 const safeName   = entity.name.replace(/[^a-z0-9]/gi, '_');
 if (pageCount === 1) {
-  // ── Single page → image + WhatsApp ──────────────────────────────────────
   showToast('Single-page statement — converting to image…', 'info');
   await _exportDocAsImageAndOpenWhatsApp(
     doc,
@@ -2419,7 +2512,6 @@ if (pageCount === 1) {
     `Entity_Statement_${safeName}_${dateStamp}`
   );
 } else {
-  // ── Multi-page → regular PDF download ───────────────────────────────────
   doc.save(`Entity_Statement_${safeName}_${dateStamp}.pdf`);
   showToast('PDF exported successfully', 'success');
 }
@@ -2525,19 +2617,19 @@ const buildSaleRow = async (t, runBal) => {
     const val = await getSaleTransactionValue(t);
     debit = val; credit = val;
     typeLabel = 'CASH';
-    detailLabel = `${fmtAmt(t.quantity||0)} kg \xd7 Rs ${fmtAmt(await getSalePrice(t))}\n${t.supplyStore?getStoreLabel(t.supplyStore):''}`;
+    detailLabel = `${fmtAmt(t.quantity||0)} kg \xd7 ${fmtAmt(await getSalePrice(t))}\n${t.supplyStore?getStoreLabel(t.supplyStore):''}`;
   } else if (pt === 'CREDIT' && !t.creditReceived) {
     const val = await getSaleTransactionValue(t);
     const partial = parseFloat(t.partialPaymentReceived) || 0;
     debit = val; credit = partial;
     typeLabel = partial > 0 ? 'CREDIT\n(PARTIAL)' : 'CREDIT';
-    detailLabel = `${fmtAmt(t.quantity||0)} kg \xd7 Rs ${fmtAmt(await getSalePrice(t))}`;
-    if (partial > 0) detailLabel += `\nPaid: Rs ${fmtAmt(partial)} | Due: Rs ${fmtAmt(val-partial)}`;
+    detailLabel = `${fmtAmt(t.quantity||0)} kg \xd7 ${fmtAmt(await getSalePrice(t))}`;
+    if (partial > 0) detailLabel += `\nPaid: ${fmtAmt(partial)} | Due: ${fmtAmt(val-partial)}`;
   } else if (pt === 'CREDIT' && t.creditReceived) {
     const val = await getSaleTransactionValue(t);
     debit = val; credit = val;
     typeLabel = 'CREDIT\n(PAID)';
-    detailLabel = `${fmtAmt(t.quantity||0)} kg \xd7 Rs ${fmtAmt(await getSalePrice(t))}`;
+    detailLabel = `${fmtAmt(t.quantity||0)} kg \xd7 ${fmtAmt(await getSalePrice(t))}`;
     displayDate = formatDisplayDate(t.creditReceivedDate || t.date);
   } else if (pt === 'COLLECTION') {
     credit = parseFloat(t.totalValue) || 0;
@@ -2553,10 +2645,10 @@ const buildSaleRow = async (t, runBal) => {
   runBal.val += (debit - credit);
   let balDisplay;
   if (Math.abs(runBal.val) < 0.01) balDisplay = 'SETTLED';
-  else if (runBal.val > 0) balDisplay = 'Rs ' + fmtAmt(runBal.val);
-  else balDisplay = 'OVERPAID\nRs ' + fmtAmt(Math.abs(runBal.val));
+  else if (runBal.val > 0) balDisplay = fmtAmt(runBal.val);
+  else balDisplay = 'OVERPAID\n' + fmtAmt(Math.abs(runBal.val));
   return { row: [displayDate, typeLabel, detailLabel.substring(0,55),
-    debit>0?'Rs '+fmtAmt(debit):'-', credit>0?'Rs '+fmtAmt(credit):'-', balDisplay],
+    debit>0?fmtAmt(debit):'-', credit>0?fmtAmt(credit):'-', balDisplay],
     debit, credit, qty: t.quantity||0 };
 };
 const mergedSalesTxns = transactions.filter(t => t.isMerged === true);
@@ -2574,21 +2666,21 @@ if (mergedSalesTxns.length > 0) {
     const details = [
       periodLabel,
       countLabel,
-      cashS > 0 ? `Cash sales: Rs ${fmtAmt(cashS)}` : '',
-      !isSettled ? `Net due: Rs ${fmtAmt(netOut)}` : 'Settled'
+      cashS > 0 ? `Cash sales: ${fmtAmt(cashS)}` : '',
+      !isSettled ? `Net due: ${fmtAmt(netOut)}` : 'Settled'
     ].filter(Boolean).join('\n');
     mRunBal.val += netOut;
-    const balTxt = isSettled ? 'SETTLED' : 'Rs ' + fmtAmt(netOut);
+    const balTxt = isSettled ? 'SETTLED' : fmtAmt(netOut);
     const pt = t.paymentType || 'CASH';
     const typeLabel = isSettled ? 'SETTLED\n(MERGED)' : (pt === 'CREDIT' ? 'CREDIT\n(MERGED)' : 'CASH\n(MERGED)');
     return [formatDisplayDate(t.date), typeLabel, details.substring(0,70),
-      netOut>0?'Rs '+fmtAmt(netOut):'-', isSettled?'Rs '+fmtAmt(cashS):'-', balTxt];
+      netOut>0?fmtAmt(netOut):'-', isSettled?fmtAmt(cashS):'-', balTxt];
   });
   const mNetTotal = mergedSalesTxns.reduce((s,t)=>{
     const ms=t.mergedSummary||{}; return s+(ms.netOutstanding||t.totalValue||0);},0);
   mergedRows.push(['','SUBTOTAL',`${mergedSalesTxns.length} year-end record${mergedSalesTxns.length!==1?'s':''}`,
-    mNetTotal>0?'Rs '+fmtAmt(mNetTotal):'-','',
-    mNetTotal<=0.01?'SETTLED':'Rs '+fmtAmt(mNetTotal)]);
+    mNetTotal>0?fmtAmt(mNetTotal):'-','',
+    mNetTotal<=0.01?'SETTLED':fmtAmt(mNetTotal)]);
   doc.autoTable({
     startY: yPos,
     head: [['Date', 'Type', 'Year Period / Summary', 'Outstanding', 'Settled', 'Balance']],
@@ -2635,8 +2727,8 @@ if (normalSalesTxns.length > 0) {
   doc.setTextColor(80,80,80); doc.setFont(undefined,'normal');
   yPos += 5;
   txRows.push(['TOTALS','',`${fmtAmt(totQty)} kg total`,
-    'Rs '+fmtAmt(totDebit),'Rs '+fmtAmt(totCredit),
-    Math.abs(finalBal)<0.01?'SETTLED':(finalBal>0?'DUE\nRs '+fmtAmt(finalBal):'OVERPAID\nRs '+fmtAmt(Math.abs(finalBal)))]);
+    fmtAmt(totDebit),fmtAmt(totCredit),
+    Math.abs(finalBal)<0.01?'SETTLED':(finalBal>0?'DUE\n' +fmtAmt(finalBal):'OVERPAID\n' +fmtAmt(Math.abs(finalBal)))]);
   doc.autoTable({
     startY: yPos,
     head: [['Date', 'Type', 'Details', 'Debit (Sale)', 'Credit (Rcvd)', 'Balance']],
@@ -2678,16 +2770,16 @@ doc.setDrawColor(...hdrColor); doc.setLineWidth(0.3);
 doc.roundedRect(14, afterY, pageW - 28, 20, 2, 2, 'S');
 doc.setFontSize(8); doc.setFont(undefined, 'normal');
 doc.setTextColor(220, 53, 69);
-doc.text(`Total Debit (Sales): Rs ${fmtAmt(totDebit)}`, 20, afterY + 7);
+doc.text(`Total Debit (Sales): ${fmtAmt(totDebit)}`, 20, afterY + 7);
 doc.setTextColor(40, 167, 69);
-doc.text(`Total Credit (Rcvd): Rs ${fmtAmt(totCredit)}`, 20, afterY + 14);
+doc.text(`Total Credit (Rcvd): ${fmtAmt(totCredit)}`, 20, afterY + 14);
 doc.setTextColor(Math.abs(finalBal) < 0.01 ? 100 : finalBal > 0 ? 220 : 40,
 Math.abs(finalBal) < 0.01 ? 100 : finalBal > 0 ? 53 : 167,
 Math.abs(finalBal) < 0.01 ? 100 : finalBal > 0 ? 69 : 69);
 doc.setFont(undefined, 'bold');
 const balStr = Math.abs(finalBal) < 0.01 ? 'SETTLED'
-: finalBal > 0 ? `Outstanding Due: Rs ${fmtAmt(finalBal)}`
-: `Overpaid by: Rs ${fmtAmt(Math.abs(finalBal))}`;
+: finalBal > 0 ? `Outstanding Due: ${fmtAmt(finalBal)}`
+: `Overpaid by: ${fmtAmt(Math.abs(finalBal))}`;
 doc.text(balStr, 110, afterY + 10.5);
 }
 } else {
@@ -2708,7 +2800,6 @@ await new Promise(r => setTimeout(r, 100));
 const dateStamp    = new Date().toISOString().split('T')[0];
 const safeCustName = customerName.replace(/[^a-z0-9]/gi, '_');
 if (pageCount === 1) {
-  // ── Single page → image + WhatsApp ──────────────────────────────────────
   showToast('Single-page statement — converting to image…', 'info');
   await _exportDocAsImageAndOpenWhatsApp(
     doc,
@@ -2716,7 +2807,6 @@ if (pageCount === 1) {
     `Customer_Statement_${safeCustName}_${dateStamp}`
   );
 } else {
-  // ── Multi-page → regular PDF download ───────────────────────────────────
   doc.save(`Customer_Statement_${safeCustName}_${dateStamp}.pdf`);
   showToast('PDF exported successfully', 'success');
 }
@@ -3072,6 +3162,7 @@ rawData.calculatorRecovered += item.prevColl || 0;
 paymentTransactions.forEach(transaction => {
 const transDate = new Date(transaction.date);
 if (transDate >= startDate && transDate <= endDate) {
+if (transaction.isPayable && transaction.type === 'IN') return;
 if (transaction.type === 'IN') {
 rawData.paymentsIn += transaction.amount;
 } else if (transaction.type === 'OUT') {
@@ -3094,6 +3185,14 @@ rawData.expenses += (parseFloat(exp.amount) || 0);
 }
 });
 }
+const factoryProductionHistoryCT = ensureArray(await sqliteStore.get('factory_production_history'));
+factoryProductionHistoryCT.forEach(entry => {
+if (entry.isMerged) return;
+const entryDate = new Date(entry.date);
+if (entryDate >= startDate && entryDate <= endDate) {
+rawData.expenses += (parseFloat(entry.additionalCost) || 0);
+}
+});
 const netSalesCash = rawData.salesCash;
 const netSalesCredits = rawData.salesCredits;
 const netCalculatorDebt = rawData.calculatorCredits - rawData.calculatorRecovered;
@@ -3114,20 +3213,20 @@ finalTotals.paymentsIn - finalTotals.paymentsOut - finalTotals.expenses;
 const totalCredits = finalTotals.salesTabCredits +
 finalTotals.calculatorCredits;
 const elCashProdValue = document.getElementById('cash-prod-value');
-if (elCashProdValue) elCashProdValue.textContent = `Rs ${fmtAmt(safeValue(finalTotals.productionValue))}`;
+if (elCashProdValue) elCashProdValue.textContent = `${fmtAmt(safeValue(finalTotals.productionValue))}`;
 const elCashSalesCash = document.getElementById('cash-sales-cash');
-if (elCashSalesCash) elCashSalesCash.textContent = `Rs ${fmtAmt(safeValue(finalTotals.salesTabCash))}`;
+if (elCashSalesCash) elCashSalesCash.textContent = `${fmtAmt(safeValue(finalTotals.salesTabCash))}`;
 const elCashCalcCash = document.getElementById('cash-calculator-cash');
-if (elCashCalcCash) elCashCalcCash.textContent = `Rs ${fmtAmt(safeValue(finalTotals.calculatorCash))}`;
+if (elCashCalcCash) elCashCalcCash.textContent = `${fmtAmt(safeValue(finalTotals.calculatorCash))}`;
 const elCashPayIn = document.getElementById('cash-payments-in');
-if (elCashPayIn) elCashPayIn.textContent = `Rs ${fmtAmt(safeValue(finalTotals.paymentsIn))}`;
+if (elCashPayIn) elCashPayIn.textContent = `${fmtAmt(safeValue(finalTotals.paymentsIn))}`;
 const elCashPayOut = document.getElementById('cash-payments-out');
-if (elCashPayOut) elCashPayOut.textContent = `Rs ${fmtAmt(safeValue(finalTotals.paymentsOut))}`;
+if (elCashPayOut) elCashPayOut.textContent = `${fmtAmt(safeValue(finalTotals.paymentsOut))}`;
 const elCashExpenses = document.getElementById('cash-expenses');
-if (elCashExpenses) elCashExpenses.textContent = `Rs ${fmtAmt(safeValue(finalTotals.expenses))}`;
+if (elCashExpenses) elCashExpenses.textContent = `${fmtAmt(safeValue(finalTotals.expenses))}`;
 const elCashNet = document.getElementById('cash-net-total');
 if (elCashNet) {
-elCashNet.textContent = `Rs ${fmtAmt(safeValue(netCash))}`;
+elCashNet.textContent = `${fmtAmt(safeValue(netCash))}`;
 if (netCash < 0) {
 elCashNet.style.color = 'var(--danger)';
 } else {
@@ -3135,11 +3234,11 @@ elCashNet.style.color = 'var(--accent-emerald)';
 }
 }
 const elCreditSales = document.getElementById('credit-sales-tab');
-if (elCreditSales) elCreditSales.textContent = `Rs ${fmtAmt(safeValue(finalTotals.salesTabCredits))}`;
+if (elCreditSales) elCreditSales.textContent = `${fmtAmt(safeValue(finalTotals.salesTabCredits))}`;
 const elCreditCalc = document.getElementById('credit-calculator');
-if (elCreditCalc) elCreditCalc.textContent = `Rs ${fmtAmt(safeValue(finalTotals.calculatorCredits))}`;
+if (elCreditCalc) elCreditCalc.textContent = `${fmtAmt(safeValue(finalTotals.calculatorCredits))}`;
 const elCreditTotal = document.getElementById('credit-total');
-if (elCreditTotal) elCreditTotal.textContent = `Rs ${fmtAmt(safeValue(totalCredits))}`;
+if (elCreditTotal) elCreditTotal.textContent = `${fmtAmt(safeValue(totalCredits))}`;
 return finalTotals;
 }
 function updateEconomicDashboardWithNetValues(totals, totalCredits) {
@@ -3373,6 +3472,7 @@ showToast(message, 'success');
 async function deletePaymentTransaction(id) {
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
+const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
 if (!id || !validateUUID(id)) {
 showToast('Invalid transaction ID', 'error');
 return;
@@ -3392,6 +3492,12 @@ _dpMsg += `\n\nEntity: ${_dpEntityName}`;
 _dpMsg += `\nAmount: ${_dpAmount}`;
 _dpMsg += `\nDate: ${_dpDate}`;
 if (_dpTx?.description) _dpMsg += `\nNote: ${_dpTx.description}`;
+if (_dpTx?.isPayable && _dpTx.type === 'OUT') {
+_dpMsg += `\n\n\u21a9 Supplier payable status will be restored — material will revert to pending payment.`;
+}
+if (_dpTx?.isPayable && _dpTx.type === 'IN') {
+_dpMsg += `\n\n\u21a9 Credit purchase record removed — supplier will be unlinked from material.`;
+}
 _dpMsg += `\n\nThis cannot be undone.`;
 if (await showGlassConfirm(_dpMsg, { title: `Delete ${_dpTx?.type === 'IN' ? 'Payment IN' : 'Payment OUT'}`, confirmText: "Delete", danger: true })) {
 try {
@@ -3401,6 +3507,7 @@ if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
 if (typeof calculateNetCash === 'function') calculateNetCash();
 return;
 }
+await _restorePayableFromDeletedTransaction(transaction, paymentTransactions, factoryInventoryData);
 const _ptFiltered2 = paymentTransactions.filter(t => t.id !== id);
 await unifiedDelete('payment_transactions', _ptFiltered2, id, { strict: true }, transaction);
 notifyDataChange('payments');
@@ -3409,7 +3516,7 @@ if (typeof calculateNetCash === 'function') calculateNetCash();
 if (typeof calculateCashTracker === 'function') calculateCashTracker();
 if (typeof renderFactoryInventory === 'function') renderFactoryInventory();
 if (typeof renderUnifiedTable === 'function') renderUnifiedTable(1);
-showToast(" Transaction deleted and all views restored successfully!", "success");
+showToast(" Transaction deleted and all balances restored!", "success");
 } catch (error) {
 showToast(" Failed to delete transaction. Please try again.", "error");
 }
@@ -3499,6 +3606,7 @@ rawData.calculatorTotalRecovered += item.prevColl || 0;
 });
 let totalExpenses = 0;
 paymentTransactions.forEach(trans => {
+if (trans.isPayable && trans.type === 'IN') return;
 if (trans.type === 'IN') {
 rawData.paymentsIn += trans.amount;
 } else if (trans.type === 'OUT') {
@@ -3516,6 +3624,12 @@ if (exp.isMerged !== true) return;
 if (exp.category === 'operating') {
 totalExpenses += (parseFloat(exp.amount) || 0);
 }
+});
+}
+if (Array.isArray(factoryProductionHistory)) {
+factoryProductionHistory.forEach(entry => {
+if (entry.isMerged) return;
+totalExpenses += (parseFloat(entry.additionalCost) || 0);
 });
 }
 const netSalesCash = rawData.salesCash;
@@ -4307,6 +4421,22 @@ _dcMsg += `\n\n\u21a9 ${(recordToDelete.quantity||0).toFixed(2)} kg will be rest
 _dcMsg += `\n\nThis cannot be undone.`;
 if (await showGlassConfirm(_dcMsg, { title: `Delete ${_dcPayLabel}`, confirmText: "Delete", danger: true })) {
 try {
+const wasPartialPayment = recordToDelete.paymentType === 'PARTIAL_PAYMENT';
+const paymentAmount = recordToDelete.totalValue || 0;
+if (wasPartialPayment && recordToDelete.relatedSaleId) {
+const relatedSale = customerSales.find(s => s.id === recordToDelete.relatedSaleId);
+if (relatedSale) {
+relatedSale.partialPaymentReceived = Math.max(0, (relatedSale.partialPaymentReceived || 0) - paymentAmount);
+if (relatedSale.partialPaymentReceived === 0) {
+relatedSale.creditReceived = false;
+delete relatedSale.creditReceivedDate;
+}
+relatedSale.updatedAt = getTimestamp();
+ensureRecordIntegrity(relatedSale, true);
+await saveWithTracking('customer_sales', customerSales, relatedSale);
+saveRecordToFirestore('customer_sales', relatedSale).catch(() => {});
+}
+}
 const customerSalesFiltered = customerSales.filter(s => s.id !== id);
 await unifiedDelete('customer_sales', customerSalesFiltered, id, { strict: true }, recordToDelete);
 await refreshCustomerSales();
@@ -5193,10 +5323,10 @@ customerRows.push([
 cust.name,
 cust.phone,
 cust.address.substring(0, 35),
-cust.debt > 0 ? 'Rs ' + fmtAmt(cust.debt) : '-',
-cust.paid > 0 ? 'Rs ' + fmtAmt(cust.paid) : '-',
+cust.debt > 0 ? fmtAmt(cust.debt) : '-',
+cust.paid > 0 ? fmtAmt(cust.paid) : '-',
 Math.abs(net) < 0.01 ? 'SETTLED'
-: (net > 0 ? 'Rs ' + fmtAmt(net) : 'OVERPAID\nRs ' + fmtAmt(Math.abs(net))),
+: (net > 0 ? fmtAmt(net) : 'OVERPAID\n' + fmtAmt(Math.abs(net))),
 fmtAmt(cust.qty),
 formatDisplayDate(cust.lastDate) || '-'
 ]);
@@ -5204,9 +5334,9 @@ formatDisplayDate(cust.lastDate) || '-'
 customerRows.push([
 'TOTAL (' + customerMap.size + ' customers)',
 '', '',
-'Rs ' + fmtAmt(totDebt),
-'Rs ' + fmtAmt(totPaid),
-'Rs ' + fmtAmt(Math.abs(totNet)) + (totNet > 0 ? '\n(DUE)' : totNet < 0 ? '\n(OVERPAID)' : '\nSETTLED'),
+fmtAmt(totDebt),
+fmtAmt(totPaid),
+fmtAmt(Math.abs(totNet)) + (totNet > 0 ? '' : totNet < 0 ? '' : 'SETTLED'),
 fmtAmt(totQty),
 ''
 ]);
@@ -5246,7 +5376,7 @@ margin: { left: 14, right: 14 }
 const afterY = doc.lastAutoTable.finalY + 6;
 if (afterY < pageH - 25) {
 doc.setFontSize(8); doc.setFont(undefined,'normal'); doc.setTextColor(100,100,100);
-doc.text(`Customers with outstanding debt: ${cntDebtors} | Settled accounts: ${cntSettled} | Total outstanding: Rs ${fmtAmt(Math.max(totNet), 2)}`, 14, afterY);
+doc.text(`Customers with outstanding debt: ${cntDebtors} | Settled accounts: ${cntSettled} | Total outstanding: ${fmtAmt(Math.max(totNet), 2)}`, 14, afterY);
 if (hasMergedEntries) {
   const noteY = afterY + 6;
   if (noteY < pageH - 12) {
@@ -11111,10 +11241,12 @@ html += `<div style="color: var(--text-muted); font-size: 0.7rem; margin-top: 4p
 container.innerHTML = html;
 }
 async function exportUnifiedData() {
-const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
-const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
-const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
-const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
+const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
+const _notDeleted = (item) => item && item.id && !deletedRecordIds.has(String(item.id));
+const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data')).filter(_notDeleted);
+const paymentEntities = ensureArray(await sqliteStore.get('payment_entities')).filter(_notDeleted);
+const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions')).filter(_notDeleted);
+const expenseRecords = ensureArray(await sqliteStore.get('expenses')).filter(_notDeleted);
 const viewModeEl = document.getElementById('unifiedViewMode');
 const periodFilterEl = document.getElementById('unifiedPeriodFilter');
 if (!viewModeEl || !periodFilterEl) {
@@ -11155,25 +11287,20 @@ doc.setFontSize(12); doc.setFont(undefined,'bold'); doc.setTextColor(50,50,50);
 const titleText = isEntities ? 'Payment Entities — Balances & Ledger' : 'Expenses — Transaction Records';
 doc.text(`${titleText} · ${periodName}`, pageW/2, 30, { align:'center' });
 doc.setFontSize(8); doc.setFont(undefined,'normal'); doc.setTextColor(120,120,120);
-doc.text(`Generated: ${new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})} at ${new Date().toLocaleTimeString('en-US')}`, pageW/2, 36, { align:'center' });
+doc.text(`Generated: ${now.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})} at ${now.toLocaleTimeString('en-US')}`, pageW/2, 36, { align:'center' });
 doc.setDrawColor(...hdrColor); doc.setLineWidth(0.5);
 doc.line(14, 39, pageW - 14, 39);
 let yPos = 44;
 if (isEntities) {
-if (typeof paymentEntities !== 'undefined' && paymentEntities.length > 0) {
 const supplierIdSet = new Set();
-if (typeof factoryInventoryData !== 'undefined') {
 factoryInventoryData.forEach(m => { if (m.supplierId) supplierIdSet.add(String(m.supplierId)); });
-}
-const supplierInventoryBalances = {};
-if (typeof factoryInventoryData !== 'undefined') {
+const supplierBalances = {};
 factoryInventoryData.forEach(mat => {
 if (mat.supplierId && mat.paymentStatus === 'pending' && mat.totalPayable > 0) {
 const sid = String(mat.supplierId);
-supplierInventoryBalances[sid] = (supplierInventoryBalances[sid] || 0) + mat.totalPayable;
+supplierBalances[sid] = (supplierBalances[sid] || 0) + mat.totalPayable;
 }
 });
-}
 const entityNetBalances = {};
 const entityMergedInfo = {};
 paymentEntities.forEach(e => {
@@ -11181,66 +11308,64 @@ if (e.isExpenseEntity === true) return;
 if (supplierIdSet.has(String(e.id))) return;
 entityNetBalances[e.id] = 0;
 });
-if (typeof paymentTransactions !== 'undefined') {
 paymentTransactions.forEach(t => {
 if (t.isExpense === true) return;
+if (t.isPayable === true) return;
 if (supplierIdSet.has(String(t.entityId))) return;
 if (entityNetBalances[t.entityId] !== undefined) {
 const amt = parseFloat(t.amount) || 0;
 if (t.type === 'OUT') entityNetBalances[t.entityId] -= amt;
 else if (t.type === 'IN') entityNetBalances[t.entityId] += amt;
 if (t.isMerged === true && t.mergedSummary) {
-  entityMergedInfo[t.entityId] = entityMergedInfo[t.entityId] || [];
-  entityMergedInfo[t.entityId].push({
-    period: _pdfMergedPeriodLabel(t),
-    count: _pdfMergedCountLabel(t),
-    originalIn:  (t.mergedSummary.originalIn  || 0),
-    originalOut: (t.mergedSummary.originalOut || 0)
-  });
+entityMergedInfo[t.entityId] = entityMergedInfo[t.entityId] || [];
+entityMergedInfo[t.entityId].push({
+period: _pdfMergedPeriodLabel(t),
+count: _pdfMergedCountLabel(t),
+originalIn: (t.mergedSummary.originalIn || 0),
+originalOut: (t.mergedSummary.originalOut || 0)
+});
 }
 }
 });
-}
 const entityRows = [];
-const pdfEntityList = [];
+const pdfEntityMeta = [];
 let totPayable = 0, totReceivable = 0;
-paymentEntities
+const allEntities = paymentEntities
 .filter(e => !e.isExpenseEntity)
-.forEach(entity => {
+.map(entity => {
 const sid = String(entity.id);
-let balance = 0;
-let source = 'Transactions';
-if (supplierIdSet.has(sid)) {
-balance = -(supplierInventoryBalances[sid] || 0);
-source = 'Inventory';
-} else {
-balance = entityNetBalances[entity.id] || 0;
-}
-if (balance < -0.01) totPayable += Math.abs(balance);
-if (balance > 0.01) totReceivable += balance;
+const isSupplier = supplierIdSet.has(sid);
+const balance = isSupplier
+? (supplierBalances[sid] || 0)
+: (entityNetBalances[entity.id] || 0);
+return { entity, sid, isSupplier, balance };
+})
+.sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance));
+allEntities.forEach(({ entity, sid, isSupplier, balance }) => {
+if (balance > 0.01) totPayable += balance;
+else if (balance < -0.01) totReceivable += Math.abs(balance);
 let balDisplay, balNote;
-if (Math.abs(balance) < 0.01) { balDisplay = 'SETTLED'; balNote = ''; }
-else if (balance < 0) { balDisplay = 'Rs ' + fmtAmt(Math.abs(balance)); balNote = 'PAYABLE'; }
-else { balDisplay = 'Rs ' + fmtAmt(balance); balNote = 'RECEIVABLE'; }
+if (Math.abs(balance) < 0.01) { balDisplay = 'SETTLED'; balNote = 'SETTLED'; }
+else if (balance > 0.01) { balDisplay = fmtAmt(balance); balNote = 'PAYABLE'; }
+else { balDisplay = fmtAmt(Math.abs(balance)); balNote = 'RECEIVABLE'; }
+const source = isSupplier ? 'Inventory' : 'Transactions';
 const hasMergedTx = !!entityMergedInfo[entity.id];
-const mergedNote = hasMergedTx
-  ? entityMergedInfo[entity.id].map(m => `\u2605 ${m.period} (${m.count})`).join('\n')
-  : '';
 entityRows.push([
 entity.name + (hasMergedTx ? '\n\u2605 Has year-end balance' : ''),
-supplierIdSet.has(sid) ? 'SUPPLIER' : 'ENTITY',
+isSupplier ? 'SUPPLIER' : (entity.type === 'payee' ? 'PAYEE' : 'PAYOR'),
 entity.phone || 'N/A',
 hasMergedTx ? 'Year-End\n' + source : source,
 balDisplay,
 balNote
 ]);
-pdfEntityList.push(entity);
+pdfEntityMeta.push({ entity, balNote, hasMergedTx });
 });
 entityRows.push([
-`TOTAL (${entityRows.length} entities)`, '', '', '',
-'Payable: Rs ' + fmtAmt(totPayable) + '\nReceivable: Rs ' + fmtAmt(totReceivable),
-'Net: Rs ' + fmtAmt(Math.abs(totReceivable - totPayable))
+`TOTAL (${pdfEntityMeta.length} entities)`, '', '', '',
+'Payable: ' + fmtAmt(totPayable) + '\nReceivable: ' + fmtAmt(totReceivable),
+'Net: ' + fmtAmt(Math.abs(totReceivable - totPayable))
 ]);
+if (entityRows.length > 1) {
 doc.autoTable({
 startY: yPos,
 head: [['Name', 'Type', 'Phone', 'Balance Source', 'Balance', 'Status']],
@@ -11262,20 +11387,25 @@ if (isTotal) {
 data.cell.styles.fontStyle = 'bold';
 data.cell.styles.fillColor = [240, 248, 255];
 data.cell.styles.fontSize = 9;
+return;
 }
-const rowEntity = (data.row.index < entityRows.length - 1) ? pdfEntityList[data.row.index] : null;
-if (rowEntity && entityMergedInfo[rowEntity.id]) {
-  data.cell.styles.fillColor = PDF_MERGED_ROW_COLOR;
+const meta = pdfEntityMeta[data.row.index];
+if (meta && meta.hasMergedTx) data.cell.styles.fillColor = PDF_MERGED_ROW_COLOR;
+if (data.column.index === 4 && meta) {
+if (meta.balNote === 'PAYABLE') data.cell.styles.textColor = [220,53,69];
+else if (meta.balNote === 'RECEIVABLE') data.cell.styles.textColor = [40,167,69];
+else data.cell.styles.textColor = [100,100,100];
 }
-if (data.column.index === 4 && !isTotal) {
+if (data.column.index === 5 && meta) {
+if (meta.balNote === 'SETTLED') data.cell.styles.textColor = [100,100,100];
+else if (meta.balNote === 'RECEIVABLE') data.cell.styles.textColor = [40,167,69];
+else if (meta.balNote === 'PAYABLE') data.cell.styles.textColor = [220,53,69];
+}
+if (data.column.index === 1) {
 const txt = (data.cell.text || []).join('');
-data.cell.styles.textColor = txt === 'SETTLED' ? [100,100,100] : [220,53,69];
-}
-if (data.column.index === 5 && !isTotal) {
-const txt = (data.cell.text || []).join('');
-if (txt === 'SETTLED') data.cell.styles.textColor = [100,100,100];
-else if (txt === 'RECEIVABLE') data.cell.styles.textColor = [40,167,69];
-else if (txt === 'PAYABLE') data.cell.styles.textColor = [220,53,69];
+if (txt === 'SUPPLIER') data.cell.styles.textColor = [200,100,0];
+else if (txt === 'PAYEE') data.cell.styles.textColor = [220,53,69];
+else if (txt === 'PAYOR') data.cell.styles.textColor = [40,167,69];
 }
 },
 margin: { left: 14, right: 14 }
@@ -11284,16 +11414,16 @@ const afterY = doc.lastAutoTable.finalY + 6;
 if (afterY < 275) {
 doc.setFontSize(8); doc.setFont(undefined,'normal'); doc.setTextColor(100,100,100);
 doc.text(
-`Total Payables: Rs ${fmtAmt(totPayable)} | Total Receivables: Rs ${fmtAmt(totReceivable)} | Net Position: Rs ${fmtAmt(Math.abs(totReceivable - totPayable))} ${totReceivable > totPayable ? '(IN OUR FAVOR)' : '(NET PAYABLE)'}`,
+`Total Payables: ${fmtAmt(totPayable)} | Total Receivables: ${fmtAmt(totReceivable)} | Net Position: ${fmtAmt(Math.abs(totReceivable - totPayable))} ${totReceivable > totPayable ? '(IN OUR FAVOR)' : '(NET PAYABLE)'}`,
 14, afterY
 );
-const hasMergedEntries2 = Object.keys(entityMergedInfo).length > 0;
-if (hasMergedEntries2 && afterY + 7 < 280) {
-  doc.setFillColor(245, 235, 255);
-  doc.roundedRect(14, afterY + 6, pageW - 28, 9, 1.5, 1.5, 'F');
-  doc.setFontSize(7.5); doc.setFont(undefined,'bold'); doc.setTextColor(126, 34, 206);
-  doc.text('\u2605 Highlighted rows contain year-end opening balances (MERGED) from Close Financial Year.', 18, afterY + 12.5);
-  doc.setFont(undefined,'normal'); doc.setTextColor(80,80,80);
+const hasMergedEntries = Object.keys(entityMergedInfo).length > 0;
+if (hasMergedEntries && afterY + 7 < 280) {
+doc.setFillColor(245, 235, 255);
+doc.roundedRect(14, afterY + 6, pageW - 28, 9, 1.5, 1.5, 'F');
+doc.setFontSize(7.5); doc.setFont(undefined,'bold'); doc.setTextColor(126, 34, 206);
+doc.text('\u2605 Highlighted rows contain year-end opening balances (MERGED) from Close Financial Year.', 18, afterY + 12.5);
+doc.setFont(undefined,'normal'); doc.setTextColor(80,80,80);
 }
 }
 } else {
@@ -11302,65 +11432,59 @@ doc.text('No entities found.', pageW/2, yPos + 10, { align:'center' });
 }
 }
 if (!isEntities) {
-let expenses = (typeof expenseRecords !== 'undefined' ? expenseRecords : [])
-.filter(exp => exp && exp.category === 'operating');
+let expenses = expenseRecords.filter(exp => exp && exp.category === 'operating');
 if (periodFilter !== 'all') {
-expenses = expenses.filter(exp => {
-if (!exp.date) return false;
-return new Date(exp.date) >= startDate;
-});
+expenses = expenses.filter(exp => exp.date && new Date(exp.date) >= startDate);
 }
 expenses.sort((a, b) => new Date(b.date) - new Date(a.date));
 if (expenses.length > 0) {
 const nameGroups = {};
 expenses.forEach(exp => {
 const key = exp.name || 'Unnamed';
-if (!nameGroups[key]) nameGroups[key] = 0;
-nameGroups[key] += parseFloat(exp.amount) || 0;
+nameGroups[key] = (nameGroups[key] || 0) + (parseFloat(exp.amount) || 0);
 });
 const mergedExpenses = expenses.filter(e => e.isMerged === true);
 const normalExpenses = expenses.filter(e => !e.isMerged);
 if (mergedExpenses.length > 0) {
-  yPos = _pdfDrawMergedSectionHeader(doc, yPos, pageW, 'YEAR-END EXPENSE SUMMARIES (Carried Forward)');
-  const mergedExpRows = mergedExpenses.map(exp => {
-    const ms = exp.mergedSummary || {};
-    const period = _pdfMergedPeriodLabel(exp);
-    const count  = _pdfMergedCountLabel(exp);
-    return [
-      period,
-      exp.name || '-',
-      exp.category || 'operating',
-      `${count} — ${(exp.description || '').substring(0, 35)}`,
-      'Rs ' + fmtAmt(parseFloat(exp.amount)||0)
-    ];
-  });
-  const mExpTotal = mergedExpenses.reduce((s,e)=>s+(parseFloat(e.amount)||0),0);
-  mergedExpRows.push(['','','','SUBTOTAL ('+mergedExpenses.length+' groups)','Rs '+fmtAmt(mExpTotal)]);
-  doc.autoTable({startY:yPos,head:[['Year Period','Name / Vendor','Category','Summary','Total Amount']],body:mergedExpRows,theme:'grid',
-    headStyles:{fillColor:PDF_MERGED_HDR_COLOR,textColor:255,fontSize:9,fontStyle:'bold',halign:'center'},
-    styles:{fontSize:8,cellPadding:2.5,lineWidth:0.15,lineColor:[200,180,230],overflow:'linebreak'},
-    columnStyles:{0:{cellWidth:30,halign:'center'},1:{cellWidth:34},2:{cellWidth:22,halign:'center',fontSize:7.5},3:{cellWidth:58},4:{cellWidth:28,halign:'right',fontStyle:'bold'}},
-    didParseCell:function(data){const isSub=data.row.index===mergedExpRows.length-1;if(isSub){data.cell.styles.fillColor=[230,210,255];data.cell.styles.fontStyle='bold';data.cell.styles.fontSize=9.5;}else{data.cell.styles.fillColor=PDF_MERGED_ROW_COLOR;data.cell.styles.textColor=[80,40,120];}if(data.column.index===4)data.cell.styles.textColor=isSub?[126,34,206]:[140,60,180];},
-    margin:{left:14,right:14}});
-  yPos = doc.lastAutoTable.finalY + 6;
-  if (yPos > 250) { doc.addPage(); yPos = 20; }
+yPos = _pdfDrawMergedSectionHeader(doc, yPos, pageW, 'YEAR-END EXPENSE SUMMARIES (Carried Forward)');
+const mergedExpRows = mergedExpenses.map(exp => {
+const period = _pdfMergedPeriodLabel(exp);
+const count = _pdfMergedCountLabel(exp);
+return [
+period,
+exp.name || '-',
+exp.category || 'operating',
+`${count} — ${(exp.description || '').substring(0, 35)}`,
+fmtAmt(parseFloat(exp.amount)||0)
+];
+});
+const mExpTotal = mergedExpenses.reduce((s,e)=>s+(parseFloat(e.amount)||0),0);
+mergedExpRows.push(['','','','SUBTOTAL ('+mergedExpenses.length+' groups)',fmtAmt(mExpTotal)]);
+doc.autoTable({startY:yPos,head:[['Year Period','Name / Vendor','Category','Summary','Total Amount']],body:mergedExpRows,theme:'grid',
+headStyles:{fillColor:PDF_MERGED_HDR_COLOR,textColor:255,fontSize:9,fontStyle:'bold',halign:'center'},
+styles:{fontSize:8,cellPadding:2.5,lineWidth:0.15,lineColor:[200,180,230],overflow:'linebreak'},
+columnStyles:{0:{cellWidth:30,halign:'center'},1:{cellWidth:34},2:{cellWidth:22,halign:'center',fontSize:7.5},3:{cellWidth:58},4:{cellWidth:28,halign:'right',fontStyle:'bold'}},
+didParseCell:function(data){const isSub=data.row.index===mergedExpRows.length-1;if(isSub){data.cell.styles.fillColor=[230,210,255];data.cell.styles.fontStyle='bold';data.cell.styles.fontSize=9.5;}else{data.cell.styles.fillColor=PDF_MERGED_ROW_COLOR;data.cell.styles.textColor=[80,40,120];}if(data.column.index===4)data.cell.styles.textColor=isSub?[126,34,206]:[140,60,180];},
+margin:{left:14,right:14}});
+yPos = doc.lastAutoTable.finalY + 6;
+if (yPos > 250) { doc.addPage(); yPos = 20; }
 }
 const expenseRows = normalExpenses.map(exp => [
 formatDisplayDate(exp.date) || exp.date || '',
 exp.name || '-',
 exp.category || 'operating',
 (exp.description || '-').substring(0, 45),
-'Rs ' + fmtAmt(parseFloat(exp.amount) || 0)
+fmtAmt(parseFloat(exp.amount) || 0)
 ]);
 const totalAmt = expenses.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
 if (normalExpenses.length > 0) {
-  doc.setFontSize(8.5); doc.setFont(undefined,'bold');
-  doc.setTextColor(...hdrColor);
-  doc.text('INDIVIDUAL EXPENSE RECORDS', 14, yPos);
-  doc.setTextColor(80,80,80); doc.setFont(undefined,'normal');
-  yPos += 5;
+doc.setFontSize(8.5); doc.setFont(undefined,'bold');
+doc.setTextColor(...hdrColor);
+doc.text('INDIVIDUAL EXPENSE RECORDS', 14, yPos);
+doc.setTextColor(80,80,80); doc.setFont(undefined,'normal');
+yPos += 5;
 }
-expenseRows.push(['', '', '', 'TOTAL (' + expenses.length + ' records)', 'Rs ' + fmtAmt(totalAmt)]);
+expenseRows.push(['', '', '', 'TOTAL (' + expenses.length + ' records)', fmtAmt(totalAmt)]);
 doc.autoTable({
 startY: yPos,
 head: [['Date', 'Name / Vendor', 'Category', 'Description', 'Amount']],
@@ -11399,7 +11523,7 @@ if (bkY > 275) return;
 doc.setTextColor(80,80,80);
 doc.text(name.substring(0, 30), 14, bkY);
 doc.setTextColor(220,53,69); doc.setFont(undefined,'bold');
-doc.text('Rs ' + fmtAmt(total), 130, bkY, { align:'right' });
+doc.text(fmtAmt(total), 130, bkY, { align:'right' });
 doc.setFont(undefined,'normal');
 bkY += 5;
 });
@@ -11414,12 +11538,12 @@ for (let i = 1; i <= pageCount; i++) {
 doc.setPage(i);
 doc.setFontSize(7); doc.setTextColor(160);
 doc.text(
-`Generated on ${new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})} at ${new Date().toLocaleTimeString('en-US')} | GULL AND ZUBAIR NASWAR DEALERS`,
+`Generated on ${now.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})} at ${now.toLocaleTimeString('en-US')} | GULL AND ZUBAIR NASWAR DEALERS`,
 pageW/2, 291, { align:'center' }
 );
 doc.text(`Page ${i} of ${pageCount}`, pageW/2, 287, { align:'center' });
 }
-const filename = `Unified_Statement_${viewMode}_${periodFilter}_${new Date().toISOString().split('T')[0]}.pdf`;
+const filename = `Unified_Statement_${viewMode}_${periodFilter}_${now.toISOString().split('T')[0]}.pdf`;
 doc.save(filename);
 showToast('PDF exported successfully!', 'success');
 } catch (error) {
@@ -11740,7 +11864,7 @@ doc.setFont(undefined,'bold'); doc.text('Records:', 75, 38);
 doc.setFont(undefined,'normal'); doc.text(String(records.length), 98, 38);
 doc.setFont(undefined,'bold'); doc.text('Total:', 120, 38);
 doc.setFont(undefined,'normal'); doc.setTextColor(...hdrColor); doc.setFont(undefined,'bold');
-doc.text('Rs ' + fmtAmt(total), 138, 38);
+doc.text(fmtAmt(total), 138, 38);
 doc.setTextColor(80,80,80); doc.setFont(undefined,'normal');
 doc.setFont(undefined,'bold'); doc.text('Generated:', 14, 44);
 doc.setFont(undefined,'normal'); doc.text(now.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'}) + ' at ' + now.toLocaleTimeString('en-US'), 42, 44);
@@ -11759,12 +11883,12 @@ if (mergedExpRecs.length > 0) {
     return [
       period,
       `${count} — ${(e.description||'Year-end merged total').substring(0,45)}`,
-      'Rs ' + fmtAmt(parseFloat(e.amount)||0),
+      fmtAmt(parseFloat(e.amount)||0),
       '\u2605 MERGED'
     ];
   });
   const mTot = mergedExpRecs.reduce((s,e)=>s+(parseFloat(e.amount)||0),0);
-  mergedRows.push(['','SUBTOTAL ('+mergedExpRecs.length+' year periods)','Rs '+fmtAmt(mTot),'']);
+  mergedRows.push(['','SUBTOTAL ('+mergedExpRecs.length+' year periods)',fmtAmt(mTot),'']);
   doc.autoTable({startY:tableStartY,head:[['Year Period','Summary','Amount','Note']],body:mergedRows,theme:'grid',
     headStyles:{fillColor:PDF_MERGED_HDR_COLOR,textColor:255,fontSize:9,fontStyle:'bold',halign:'center'},
     styles:{fontSize:8.5,cellPadding:3,lineWidth:0.15,lineColor:[200,180,230],overflow:'linebreak'},
@@ -11788,11 +11912,11 @@ runningTotal += parseFloat(e.amount) || 0;
 return [
 formatDisplayDate(e.date) || e.date || '-',
 (e.description || 'No description').substring(0, 55),
-'Rs ' + fmtAmt(parseFloat(e.amount) || 0),
-'Rs ' + fmtAmt(runningTotal)
+fmtAmt(parseFloat(e.amount) || 0),
+fmtAmt(runningTotal)
 ];
 });
-expenseRows.push(['', 'TOTAL (' + records.length + ' entries)', 'Rs ' + fmtAmt(total), '']);
+expenseRows.push(['', 'TOTAL (' + records.length + ' entries)', fmtAmt(total), '']);
 doc.autoTable({
 startY: tableStartY,
 head: [['Date', 'Description', 'Amount', 'Cumulative Total']],
@@ -11835,7 +11959,7 @@ Object.entries(monthTotals).forEach(([month, amt]) => {
 if (bkY > 278) return;
 doc.setTextColor(80,80,80); doc.text(month, 14, bkY);
 doc.setTextColor(220,53,69); doc.setFont(undefined,'bold');
-doc.text('Rs ' + fmtAmt(amt), 60, bkY);
+doc.text(fmtAmt(amt), 60, bkY);
 doc.setFont(undefined,'normal');
 bkY += 5;
 });

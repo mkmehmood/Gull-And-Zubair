@@ -218,11 +218,6 @@ if (opts.strict !== true) {
 }
 await saveWithTracking(sqliteKey, dataArray);
 const collectionName = getFirestoreCollection(sqliteKey);
-// IMPORTANT: registerDeletion must be awaited OUTSIDE _syncQueue.run() because it
-// internally acquires _syncQueue itself. Calling it from within _syncQueue.run()
-// creates a promise-chain deadlock — the outer block awaits something that can only
-// run after the outer block completes — so deleted_records never gets updated and
-// deleteRecordFromFirestore never runs, leaving the record alive in Firestore.
 if (collectionName && typeof window.registerDeletion === 'function') {
   try {
     await window.registerDeletion(deletedRecordId, collectionName, preDeletedRecord || null);
@@ -231,7 +226,6 @@ if (collectionName && typeof window.registerDeletion === 'function') {
   }
 }
 
-// Only the Firestore delete goes in the queue — it has no nested queue calls.
 _syncQueue.run(async () => {
   try {
     await deleteRecordFromFirestore(sqliteKey, deletedRecordId);
@@ -1161,10 +1155,9 @@ _syncQueue.run(async () => {
 
 function _updateArray(array, docData, collectionName) {
   if (docData._placeholder || docData.id === '_placeholder_') return array;
-  if (!docData.id || !validateUUID(String(docData.id))) {
+  if (!docData.id) {
     docData = ensureRecordIntegrity(docData, false, true);
   }
-  docData = ensureRecordIntegrity(docData, false, true);
   const sid = String(docData.id);
 
   const existingIdx_pre = array.findIndex(item => item && item.id === docData.id);

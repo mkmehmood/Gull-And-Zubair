@@ -401,7 +401,13 @@ if (sel && sel.value && qtyIn.value > 0 && costIn.value > 0) {
 const selectedOpt = sel.options[sel.selectedIndex];
 const itemName = selectedOpt ? selectedOpt.textContent.trim() : '';
 if (itemName) {
-newFormula.push({ id: sel.value, name: itemName, cost: parseFloat(costIn.value), quantity: parseFloat(qtyIn.value) });
+let resolvedId = sel.value;
+const liveMatch = factoryInventoryData.find(i => String(i.id) === String(sel.value));
+if (!liveMatch && itemName) {
+const nameMatch = factoryInventoryData.find(i => i.name && i.name.trim().toLowerCase() === itemName.toLowerCase());
+if (nameMatch) resolvedId = nameMatch.id;
+}
+newFormula.push({ id: resolvedId, name: itemName, cost: parseFloat(costIn.value), quantity: parseFloat(qtyIn.value) });
 }
 }
 });
@@ -652,15 +658,15 @@ try {
 const quantityInKg = qty * conversionFactor;
 const costPerKg = conversionFactor > 0 ? cost / conversionFactor : cost;
 const totalValue = qty * cost;
-let materialId = editingFactoryInventoryId || generateUUID('mat');
-if (!validateUUID(materialId)) materialId = generateUUID('mat');
+let materialId;
+let _supplierUnchanged = false;
 if (editingFactoryInventoryId) {
+materialId = editingFactoryInventoryId;
 const idx = factoryInventoryData.findIndex(i => i.id === editingFactoryInventoryId);
 if (idx !== -1) {
 const existingMaterial = factoryInventoryData[idx];
 const oldSupplierId = existingMaterial.supplierId;
 const supplierInput = document.getElementById('factoryExistingSupplier');
-
 const newSupplierId = (supplierInput && supplierInput.getAttribute('data-supplier-id')) || '';
 const isSupplierSame = supplierType === 'existing' && oldSupplierId && newSupplierId && String(oldSupplierId) === String(newSupplierId);
 const isSupplierChanging = !isSupplierSame && (
@@ -668,17 +674,16 @@ const isSupplierChanging = !isSupplierSame && (
 (supplierType === 'existing' && oldSupplierId && newSupplierId && String(oldSupplierId) !== String(newSupplierId))
 );
 if (isSupplierChanging) await unlinkSupplierFromMaterial(existingMaterial, false, true);
-
-const _supplierUnchanged = !!(editingFactoryInventoryId && isSupplierSame);
+_supplierUnchanged = isSupplierSame;
 factoryInventoryData[idx] = ensureRecordIntegrity({ ...factoryInventoryData[idx], name, quantity: quantityInKg, cost: costPerKg, unit: 'kg', totalValue, purchaseQuantity: qty, purchaseCost: cost, conversionFactor, purchaseUnitName: unitName, updatedAt: getTimestamp() }, true);
 }
-}
-if (!editingFactoryInventoryId) {
+} else {
+materialId = generateUUID('mat');
+if (!validateUUID(materialId)) materialId = generateUUID('mat');
 const _matNow = getTimestamp();
 let _newMaterial = { id: materialId, name, quantity: quantityInKg, cost: costPerKg, unit: 'kg', totalValue, paymentStatus: 'pending', syncedAt: new Date().toISOString(), purchaseQuantity: qty, purchaseCost: cost, conversionFactor, purchaseUnitName: unitName, createdAt: _matNow, updatedAt: _matNow, timestamp: _matNow };
 _newMaterial = ensureRecordIntegrity(_newMaterial, false);
 factoryInventoryData.push(_newMaterial);
-await sqliteStore.set('factory_inventory_data', factoryInventoryData);
 }
 if (supplierType === 'none') {
 const material = factoryInventoryData.find(m => m.id === materialId);
@@ -915,14 +920,43 @@ material.paymentStatus = 'pending';
 material.totalPayable = totalCost;
 material.updatedAt = getTimestamp();
 ensureRecordIntegrity(material, true);
+const payableTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
+const now = new Date();
+const dateStr = now.toISOString().split('T')[0];
+const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+let payableTxId = generateUUID('pay');
+if (!validateUUID(payableTxId)) payableTxId = generateUUID('pay');
+const payableTxCreatedAt = getTimestamp();
+let payableTx = {
+id: payableTxId,
+entityId: supplier.id,
+entityName: supplier.name,
+entityType: 'payee',
+date: dateStr,
+time: timeStr,
+amount: totalCost,
+description: `Material purchase: ${material.name}`,
+type: 'IN',
+isPayable: true,
+materialId: material.id,
+createdAt: payableTxCreatedAt,
+updatedAt: payableTxCreatedAt,
+timestamp: payableTxCreatedAt,
+syncedAt: now.toISOString()
+};
+payableTx = ensureRecordIntegrity(payableTx, false);
+payableTransactions.push(payableTx);
 if (!skipSideEffects) {
 await unifiedSave('factory_inventory_data', factoryInventoryData, material);
+await unifiedSave('payment_transactions', payableTransactions, payableTx);
 notifyDataChange('all');
 triggerAutoSync();
 await renderFactoryInventory();
 await refreshPaymentTab();
 calculateNetCash();
 showToast(`Linked to ${esc(supplier.name)}`, 'success');
+} else {
+await sqliteStore.set('payment_transactions', payableTransactions);
 }
 }
 
@@ -1031,16 +1065,26 @@ const additionalCost = factoryAdditionalCosts[currentFactoryEntryStore] || 0;
 let baseCost = 0;
 let rawMat = 0;
 if (settings) {
-baseCost = settings.reduce((acc, cur) => acc + (cur.cost * cur.quantity), 0) * units;
+baseCost = settings.reduce((acc, cur) => {
+let liveItem = factoryInventoryData.find(i => String(i.id) === String(cur.id));
+if (!liveItem && cur.name) liveItem = factoryInventoryData.find(i => i.name && i.name.trim().toLowerCase() === cur.name.trim().toLowerCase());
+const liveCost = liveItem ? liveItem.cost : cur.cost;
+return acc + (liveCost * cur.quantity);
+}, 0) * units;
 rawMat = settings.reduce((acc, cur) => acc + cur.quantity, 0) * units;
 }
 const totalCost = baseCost + (additionalCost * units);
 let inventoryUpdated = false;
 if (settings && settings.length > 0) {
-settings.forEach(item => {
+for (const item of settings) {
 const materialUsed = item.quantity * units;
-const inventoryItem = factoryInventoryData.find(i => String(i.id) === String(item.id));
-if (inventoryItem) {
+let inventoryItem = factoryInventoryData.find(i => String(i.id) === String(item.id));
+if (!inventoryItem && item.name) {
+inventoryItem = factoryInventoryData.find(i => i.name && i.name.trim().toLowerCase() === item.name.trim().toLowerCase());
+}
+if (!inventoryItem) {
+throw new Error(`Material "${item.name}" not found in inventory. Please re-open Factory Settings and re-save the formula to relink all materials.`);
+}
 if (inventoryItem.quantity >= materialUsed) {
 inventoryItem.quantity -= materialUsed;
 inventoryItem.quantity = Math.max(0, parseFloat(inventoryItem.quantity.toFixed(6)));
@@ -1051,10 +1095,9 @@ inventoryItem.purchaseQuantity = inventoryItem.quantity / inventoryItem.conversi
 inventoryItem.updatedAt = getTimestamp();
 inventoryUpdated = true;
 } else {
-throw new Error(`Insufficient ${inventoryItem.name} in inventory! Available: ${inventoryItem.quantity}, Required: ${materialUsed}`);
+throw new Error(`Insufficient "${inventoryItem.name}" in inventory! Available: ${inventoryItem.quantity.toFixed(2)} kg, Required: ${materialUsed.toFixed(2)} kg`);
 }
 }
-});
 }
 let factProdId = generateUUID('fprod');
 if (!validateUUID(factProdId)) factProdId = generateUUID('fprod');
@@ -1199,7 +1242,11 @@ if (entry.isMerged) { showToast('Merged opening balance records cannot be delete
 const _feStoreLabel = getStoreLabel(entry.store) || entry.store;
 const _feFormula = factoryDefaultFormulas[entry.store] || [];
 const _feMatsDetail = _feFormula.length > 0
-? _feFormula.map(f => { const inv = factoryInventoryData.find(i => i.id === f.id); return ` • ${inv?.name || 'Material'}: ${(f.quantity * entry.units).toFixed(2)} kg restored`; }).join('\n')
+? _feFormula.map(f => {
+let inv = factoryInventoryData.find(i => i.id === f.id);
+if (!inv && f.name) inv = factoryInventoryData.find(i => i.name && i.name.trim().toLowerCase() === f.name.trim().toLowerCase());
+return ` • ${inv?.name || f.name || 'Material'}: ${(f.quantity * entry.units).toFixed(2)} kg restored`;
+}).join('\n')
 : '';
 let _feMsg = `Delete this factory production batch permanently?`;
 _feMsg += `\nStore: ${_feStoreLabel}\nDate: ${entry.date}\nUnits Produced: ${entry.units}`;
@@ -1214,17 +1261,23 @@ ensureRecordIntegrity(entry, true);
 let restoredMaterials = [];
 const formula = factoryDefaultFormulas[entry.store];
 if (formula && formula.length > 0) {
-formula.forEach(formulaItem => {
+for (const formulaItem of formula) {
 const materialToRestore = formulaItem.quantity * entry.units;
-const inventoryItem = factoryInventoryData.find(i => i.id === formulaItem.id);
+let inventoryItem = factoryInventoryData.find(i => i.id === formulaItem.id);
+if (!inventoryItem && formulaItem.name) {
+inventoryItem = factoryInventoryData.find(i => i.name && i.name.trim().toLowerCase() === formulaItem.name.trim().toLowerCase());
+}
 if (inventoryItem) {
 inventoryItem.quantity += materialToRestore;
 inventoryItem.totalValue = inventoryItem.quantity * inventoryItem.cost;
+if (inventoryItem.conversionFactor && inventoryItem.conversionFactor !== 1) {
+inventoryItem.purchaseQuantity = inventoryItem.quantity / inventoryItem.conversionFactor;
+}
 inventoryItem.updatedAt = getTimestamp();
 ensureRecordIntegrity(inventoryItem, true);
 restoredMaterials.push({ name: inventoryItem.name || 'Unknown', quantity: materialToRestore });
 }
-});
+}
 }
 factoryProductionHistory.splice(entryIndex, 1);
 await Promise.all([
