@@ -13195,7 +13195,7 @@ const userId = new Uint8Array(16);
 window.crypto.getRandomValues(userId);
 const publicKey = {
 challenge: challenge,
-rp: { name: "Sarim App" },
+rp: { name: "Sarim App", id: window.location.hostname },
 user: {
 id: userId,
 name: username,
@@ -13214,7 +13214,7 @@ timeout: 60000
 };
 const credential = await navigator.credentials.create({ publicKey });
 const credId = BiometricAuth._bufToBase64(credential.rawId);
-const transports = credential.response?.getTransports?.() || ["internal", "hybrid"];
+const transports = credential.response?.getTransports?.() || ["internal"];
 await sqliteStore.set('bio_cred_id', credId);
 await sqliteStore.set('bio_cred_transports', JSON.stringify(transports));
 await sqliteStore.set('bio_enabled', 'true');
@@ -13232,22 +13232,26 @@ try {
 const savedCredId = await sqliteStore.get('bio_cred_id');
 if (!savedCredId) throw new Error("No biometric set up found.");
 const storedTransports = await sqliteStore.get('bio_cred_transports');
-const transports = storedTransports ? JSON.parse(storedTransports) : ["internal", "hybrid"];
+let transports = storedTransports ? JSON.parse(storedTransports) : ["internal"];
+transports = transports.filter(t => t !== "hybrid");
+if (transports.length === 0) transports = ["internal"];
 const challenge = new Uint8Array(32);
 window.crypto.getRandomValues(challenge);
 const publicKey = {
 challenge: challenge,
 allowCredentials: [{
 id: BiometricAuth._base64ToBuf(savedCredId),
-type: "public-key",
-transports: transports
+type: "public-key"
+// transports omitted: iOS Safari/Face ID silently skips prompt if transports hint doesn't match exactly
 }],
-userVerification: "preferred",
+userVerification: "required",
 timeout: 60000
 };
 await navigator.credentials.get({ publicKey });
 return true;
 } catch (err) {
+if (err && err.name === 'NotAllowedError') throw err;
+console.error('[BiometricAuth] authenticate error:', err?.name, err?.message);
 return false;
 }
 }

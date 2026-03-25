@@ -164,7 +164,11 @@ if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
 } catch (e) {
 const iconWrap = document.getElementById('_lock-icon-wrap');
 if (iconWrap) { iconWrap.style.animation = '_lockShake 0.5s ease'; setTimeout(() => { iconWrap.style.animation = ''; }, 520); }
+if (e && e.name === 'NotAllowedError') {
+showToast("Fingerprint cancelled. Tap to try again.", "info");
+} else {
 showToast("Biometric Error: " + e.message, "error");
+}
 if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
 }
 };
