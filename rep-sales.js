@@ -16,11 +16,10 @@ showToast("Setup failed: " + e.message, "error");
 }
 }
 async function disableBiometricLock() {
-const _bioMsg = `Remove the biometric (fingerprint) lock from this app?\n\nAfter removal:\n • Anyone with access to this device can open the app without biometric verification\n • To re-enable, tap Fingerprint Lock in the sidebar again\n\nYour data will not be affected.`;
+const _bioMsg = `Remove the biometric (fingerprint / Face ID) lock from this app?\n\nAfter removal:\n • Anyone with access to this device can open the app without biometric verification\n • To re-enable, tap Fingerprint Lock in the sidebar again\n\nYour data will not be affected.`;
 if (await showGlassConfirm(_bioMsg, { title: "Remove Biometric Lock", confirmText: "Remove Lock", danger: true })) {
 await sqliteStore.remove('bio_enabled');
 await sqliteStore.remove('bio_cred_id');
-await sqliteStore.remove('bio_cred_transports');
 showToast("Biometric Lock Removed", "info");
 const _bioBtnD = document.getElementById('bio-toggle-btn');
 if (_bioBtnD) {
@@ -132,10 +131,10 @@ lockScreen.innerHTML = `
     <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
     <path d="m9 12 2 2 4-4" stroke="#1de9b6"/>
   </svg>
-  Use Fingerprint
+  Use Fingerprint / Face ID
 </button>
 
-<p id="_lock-hint">Touch the sensor</p>
+<p id="_lock-hint">Touch the sensor or look at the camera</p>
 
 <div id="_lock-dots">
   <span></span><span></span><span></span>
@@ -164,11 +163,7 @@ if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
 } catch (e) {
 const iconWrap = document.getElementById('_lock-icon-wrap');
 if (iconWrap) { iconWrap.style.animation = '_lockShake 0.5s ease'; setTimeout(() => { iconWrap.style.animation = ''; }, 520); }
-if (e && e.name === 'NotAllowedError') {
-showToast("Fingerprint cancelled. Tap to try again.", "info");
-} else {
 showToast("Biometric Error: " + e.message, "error");
-}
 if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
 }
 };
