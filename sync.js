@@ -1,4 +1,3 @@
-
 async function saveWithTracking(key, data, specificRecord = null, specificIds = null) {
 const result = await sqliteStore.set(key, data);
 const collectionEntry = SQLiteToFirestoreMap[key];
@@ -406,31 +405,12 @@ try {
   console.warn('Auth: post-login data reload failed:', _safeErr(e));
 }
 updateSyncButton();
-// ── Generate a fresh device ID + shard on every login ────────────────────
-// We only clear the stored device ID when the user has just signed in
-// (explicit credential entry or OAuth redirect).  Page reloads with a
-// persisted Firebase session must NOT re-generate the ID because:
-//   • The existing Firestore device doc (mode, shard, heartbeat) is still valid.
-//   • App lock mode (rep/factory/userrole) would briefly disappear until
-//     registerDevice re-writes the doc with the freshly-loaded SQLite mode.
-//
-// ── Stamp the login time so getDeviceId() can self-expire stale IDs ──────
-// sessionStorage is wiped by signOut() and cleared between browser sessions,
-// so every genuine login lands here with no prior value.  Page reloads
-// keep the existing stamp, meaning the current device ID (whose embedded
-// timestamp is >= _gznd_login_ts) is accepted as-is.
-//
-// getDeviceId() compares the timestamp baked into any found device ID
-// against _gznd_login_ts.  If the ID predates this login it is discarded
-// and a brand-new UUID+Date.now() is minted — no storage wipe needed, no
-// Firestore fingerprint recovery can resurrect the old ID.
+
 const _isFreshLogin = !sessionStorage.getItem('_gznd_login_ts');
 if (_isFreshLogin) {
   try { sessionStorage.setItem('_gznd_login_ts', String(Date.now())); } catch(_) {}
 }
-// ── Derive device shard immediately and await it ──────────────────────────
-// Must run before registerDevice (which writes the shard to Firestore) and
-// before any generateUUID() calls so UUIDs always embed the correct shard.
+
 if (typeof initDeviceShard === 'function') {
   await initDeviceShard().catch(() => {});
   if (typeof UUIDSyncRegistry !== 'undefined') {
@@ -1354,8 +1334,7 @@ function scheduleListenerReconnect() {
     isReconnecting = false;
     if (firebaseDB && currentUser) {
       subscribeToRealtime().catch(e => {
-        // subscribeToRealtime itself threw — make sure isReconnecting is clear
-        // so the next error from a listener can schedule another attempt
+
         isReconnecting = false;
         console.warn('subscribeToRealtime retry failed:', _safeErr(e));
       });
@@ -1812,7 +1791,7 @@ async function subscribeToRealtime() {
 
     updateSignalUI('online');
     recordSuccessfulConnection();
-    listenerRetryAttempts = 0; // reset retry counter — all listeners attached cleanly
+    listenerRetryAttempts = 0;
     if (typeof registerDevice === 'function') {
       registerDevice().catch(err => { console.warn('Device registration failed:', _safeErr(err)); });
     }
@@ -1843,7 +1822,7 @@ async function initFirebase() {
   try {
     window._fbOfflineHandler = () => { updateSignalUI('offline'); };
     window._fbOnlineHandler = () => {
-      // Network has returned — reset retry state and re-subscribe unconditionally
+
       listenerRetryAttempts = 0;
       isReconnecting = false;
       if (listenerReconnectTimer) { clearTimeout(listenerReconnectTimer); listenerReconnectTimer = null; }
@@ -2112,7 +2091,7 @@ async function _detectUserType(userRef) {
 async function _downloadDeltas(userRef, userType, forceDownload = false) {
   const FRESH_THRESHOLD_MS = 8 * 1000;
   const buildQuery = async (collection, collectionName) => {
-    // forceDownload or 'existing' user type → always full fetch, skip all gates
+
     if (forceDownload || userType === 'existing') return collection.get();
     const lastDownloadKey = `lastDownload_${collectionName}`;
     let lastDownloadMs = 0;
@@ -2120,7 +2099,7 @@ async function _downloadDeltas(userRef, userType, forceDownload = false) {
       const raw = await sqliteStore.get(lastDownloadKey);
       lastDownloadMs = raw ? (typeof raw === 'number' ? raw : parseInt(raw)) : 0;
     } catch (_) {}
-    // Only apply freshness gate for routine background pulls, not manual restores
+
     if (lastDownloadMs && (Date.now() - lastDownloadMs) < FRESH_THRESHOLD_MS) {
       return { docs: [], docChanges: () => [] };
     }
@@ -2321,7 +2300,7 @@ async function _syncSettings(cloudData) {
       defaultSettings = sd.naswar_default_settings;
       await sqliteStore.set('naswar_default_settings', defaultSettings);
     }
-    // Sync repProfile — present in cloud settings doc but was missing from batch-download path
+
     if (sd && sd.repProfile) {
       const ct = sd.repProfile_timestamp || 0;
       const lt = (await sqliteStore.get('repProfile_timestamp')) || 0;
@@ -2334,7 +2313,7 @@ async function _syncSettings(cloudData) {
         ]);
       }
     }
-    // Sync sales reps list if present in settings
+
     if (sd && Array.isArray(sd.sales_reps) && sd.sales_reps.length > 0) {
       const ct = sd.sales_reps_timestamp || 0;
       const lt = (await sqliteStore.get('sales_reps_list_timestamp')) || 0;
@@ -2579,13 +2558,12 @@ async function _doOneClickSync(silent = false) {
       return;
     }
 
-    // Always do a full fetch for existing/new users during sync — never delta-only
     const syncForceDownload = (userType === 'existing');
     const cloudData = await _downloadDeltas(userRef, userType, syncForceDownload);
     const totalCloudChanges = Object.values(cloudData.data).reduce((s, a) => s + (a?.length || 0), 0);
 
     if (userType === 'existing' && typeof UUIDSyncRegistry !== 'undefined') {
-      // Disable shard gate so locally-created records are re-downloaded from cloud
+
       UUIDSyncRegistry.setNewDeviceRestore(true);
     }
     await _mergeAndPersist(cloudData);
@@ -2758,14 +2736,13 @@ async function _doPullDataFromCloud(silent = false, forceDownload = false) {
     await sqliteStore.init();
     await sqliteStore.flush();
 
-    // Ensure shard is initialised before any download so _isLocalOrigin is accurate
     if (typeof initDeviceShard === 'function') {
       await initDeviceShard().catch(() => {});
     }
 
     const userRef = firebaseDB.collection('users').doc(currentUser.uid);
     const pullUserType = await _detectUserType(userRef);
-    // On a forced restore, treat user as 'existing' so _downloadDeltas does a full fetch
+
     const effectiveUserType = forceDownload ? 'existing' : (pullUserType === 'new' ? 'existing' : pullUserType);
     const cloudData = await _downloadDeltas(userRef, effectiveUserType, forceDownload);
 
@@ -2781,8 +2758,6 @@ async function _doPullDataFromCloud(silent = false, forceDownload = false) {
       return;
     }
 
-    // Always disable shard gate during any cloud pull so locally-originated
-    // records that were synced to cloud are not silently skipped on restore
     if (typeof UUIDSyncRegistry !== 'undefined') UUIDSyncRegistry.setNewDeviceRestore(true);
     await _mergeAndPersist(cloudData);
     if (typeof UUIDSyncRegistry !== 'undefined') UUIDSyncRegistry.setNewDeviceRestore(false);
@@ -3461,7 +3436,7 @@ try { localStorage.setItem('_gznd_session_active', '1'); sessionStorage.setItem(
 LoginRateLimiter.recordSuccess();
 messageDiv.textContent = '✓ Offline Login Successful';
 messageDiv.style.color = 'var(--accent-emerald)';
-// Derive shard immediately so any UUIDs generated during loadAllData use the correct shard
+
 if (typeof initDeviceShard === 'function') {
   await initDeviceShard().catch(() => {});
 }
@@ -3700,9 +3675,7 @@ console.error('adminRemoveAccount:', _safeErr(err));
 
 async function signOut() {
 try {
-// ── STEP 1: Save app-mode fields BEFORE any storage is wiped ────────────
-// These survive the logout so the device boots straight into the same
-// mode (rep, admin, factory, etc.) after the user logs back in.
+
 let _savedAppMode = null;
 try {
   const _modeKeys = [
@@ -3773,11 +3746,11 @@ try {
 sqliteStore.clearUserPrefix();
 DeltaSync.clearAllTimestamps().catch(() => {});
 if (typeof UUIDSyncRegistry !== 'undefined') UUIDSyncRegistry.clearAll().catch(() => {});
-// ── STEP 2a: Wipe device ID from all storage so re-login gets a fresh ID ──
+
 if (typeof _clearDeviceIdStorage === 'function') {
   await _clearDeviceIdStorage().catch(() => {});
 }
-// ── STEP 3a: Restore app-mode so it persists to the new device/shard ──────
+
 if (_savedAppMode && _savedAppMode.length) {
   await sqliteStore.setBatch(_savedAppMode).catch(() => {});
 }
@@ -3821,11 +3794,11 @@ try {
 sqliteStore.clearUserPrefix();
 DeltaSync.clearAllTimestamps().catch(() => {});
 if (typeof UUIDSyncRegistry !== 'undefined') UUIDSyncRegistry.clearAll().catch(() => {});
-// ── STEP 2b: Wipe device ID from all storage so re-login gets a fresh ID ──
+
 if (typeof _clearDeviceIdStorage === 'function') {
   await _clearDeviceIdStorage().catch(() => {});
 }
-// ── STEP 3b: Restore app-mode so it persists to the new device/shard ──────
+
 if (_savedAppMode && _savedAppMode.length) {
   await sqliteStore.setBatch(_savedAppMode).catch(() => {});
 }

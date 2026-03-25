@@ -246,6 +246,9 @@ if ('serviceWorker' in navigator) {
 .sidebar-scroll {
   flex: 1; overflow-y: auto; padding: 10px 10px 24px;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
+  will-change: scroll-position;
 }
 .sidebar-section-label {
   font-size: 0.58rem; font-weight: 800; color: var(--text-secondary);
@@ -313,7 +316,7 @@ if ('serviceWorker' in navigator) {
   border-bottom: 1px solid var(--glass-border);
   flex-shrink: 0; min-height: 52px;
 }
-/* .screen-back-btn removed — navigation handled by device back button via History API */
+
 .screen-back-btn { display: none !important; }
 .screen-title {
   font-size: 0.9rem; font-weight: 800; color: var(--text-main);
@@ -324,6 +327,9 @@ if ('serviceWorker' in navigator) {
   flex: 1; overflow-y: auto;
   padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
+  will-change: scroll-position;
 }
 .settings-list-item {
   display: flex; align-items: center; gap: 14px;
@@ -539,7 +545,7 @@ input:checked + .theme-toggle-track::before { transform: translateX(22px); }
     <div style="background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.18);border-radius:14px;padding:9px 13px;font-size:0.73rem;color:var(--text-muted);line-height:1.5;">
       Recover restores the record to its original collection. Records expire after <strong style="color:var(--text-main);">90 days</strong>.
     </div>
-    <div id="recycleBinList" style="flex:1;overflow-y:auto;"></div>
+    <div id="recycleBinList" style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-y:contain;touch-action:pan-y;will-change:scroll-position;"></div>
   </div>
 </div>
 
@@ -2383,24 +2389,10 @@ No records found
 <script>
 (function() {
 
-/* ══════════════════════════════════════════════════════════════════════════
-   PWA Navigation — stack-based, History API, no programmatic history.back()
-   ─────────────────────────────────────────────────────────────────────────
-   Rules:
-   • pushState ONLY in open functions — never in close functions.
-   • _navStack is the single source of truth for what is open.
-   • popstate handler closes whatever is on top of _navStack, ignoring e.state.
-   • Ghost entries (from programmatic closes) are harmlessly consumed by the
-     popstate handler, which simply sees an empty (or already-correct) stack.
-   • Double-back-to-exit: when stack is empty, first back arms a 2-s timer and
-     pushes a guard; second back within 2 s lets the OS close the app.
-   ══════════════════════════════════════════════════════════════════════════ */
-
-var _navStack   = [];   // [{type:'sidebar'|'screen', id?:string}]
+var _navStack   = [];
 var _lastBackMs = 0;
 var _DOUBLE_BACK_MS = 2000;
 
-/* ── helpers ──────────────────────────────────────────────────────────── */
 function _hideSidebar() {
   document.getElementById('sidebar-backdrop').classList.remove('open');
   document.getElementById('app-sidebar').classList.remove('open');
@@ -2412,7 +2404,7 @@ function _hideScreen(id) {
   if (!el) return;
   el.classList.remove('screen-entering');
   el.classList.add('screen-leaving');
-  var ANIM_MS = 220; // must match screenSlideOut duration in app.css
+  var ANIM_MS = 220;
   setTimeout(function() {
     el.classList.remove('screen-leaving');
     el.style.display = 'none';
@@ -2436,7 +2428,6 @@ function _stackRemove(type, id) {
   }
 }
 
-/* ── sidebar ──────────────────────────────────────────────────────────── */
 function openSidebar() {
   var mode = window.appMode || 'admin';
   var settingsSection = document.getElementById('sidebar-settings-section');
@@ -2444,12 +2435,12 @@ function openSidebar() {
     settingsSection.style.display = '';
     var alwaysVisibleIds = new Set(['sidebar-btn-sync','sidebar-btn-recycle','sidebar-btn-theme','sidebar-label-data','sidebar-label-appearance']);
     if (mode === 'admin') {
-      // Restore everything
+
       settingsSection.querySelectorAll('.sidebar-settings-btn, .sidebar-section-label').forEach(function(el) {
         el.style.display = '';
       });
     } else {
-      // Hide all settings buttons/labels except the always-visible ones
+
       settingsSection.querySelectorAll('.sidebar-settings-btn, .sidebar-section-label').forEach(function(el) {
         el.style.display = alwaysVisibleIds.has(el.id) ? '' : 'none';
       });
@@ -2458,7 +2449,7 @@ function openSidebar() {
   document.getElementById('sidebar-backdrop').classList.add('open');
   document.getElementById('app-sidebar').classList.add('open');
   document.body.style.overflow = 'hidden';
-  // Only push if not already tracked (prevents duplicate stack entries)
+
   var alreadyTracked = _navStack.some(function(x){ return x.type === 'sidebar'; });
   if (!alreadyTracked) {
     _navStack.push({ type: 'sidebar' });
@@ -2466,9 +2457,6 @@ function openSidebar() {
   }
 }
 
-// closeSidebar — safe to call programmatically (e.g. onclick, Escape key).
-// Does NOT call history.back(); the orphaned history entry is consumed harmlessly
-// by the next back press (stack will be at its correct state then).
 function closeSidebar() {
   _stackRemove('sidebar');
   _hideSidebar();
@@ -2477,13 +2465,12 @@ function closeSidebar() {
 window.openSidebar  = openSidebar;
 window.closeSidebar = closeSidebar;
 
-/* ── standalone screens ───────────────────────────────────────────────── */
 function openStandaloneScreen(id) {
   var el = document.getElementById(id);
   if (!el) return;
   el.classList.remove('screen-leaving');
   el.style.display = 'flex';
-  // Force reflow so the entering animation plays from scratch
+
   void el.offsetWidth;
   el.classList.add('screen-entering');
   el.addEventListener('animationend', function onEnterDone() {
@@ -2496,13 +2483,11 @@ function openStandaloneScreen(id) {
   history.pushState({ _pwa: 'nav' }, '');
 }
 
-// _fromPopstate param kept for backward-compat; logic is identical either way.
 function closeStandaloneScreen(id, _fromPopstate) {
   _stackRemove('screen', id);
   _hideScreen(id);
 }
 
-/* ── unified popstate handler ─────────────────────────────────────────── */
 window.addEventListener('popstate', function() {
   var top = _navStack[_navStack.length - 1];
 
@@ -2513,26 +2498,22 @@ window.addEventListener('popstate', function() {
     } else {
       _hideScreen(top.id);
     }
-    // If stack still has items, push a guard so the NEXT back press won't
-    // go past all our entries and trigger an unintended OS exit.
-    // If stack is now empty, fall through — the next back will hit the
-    // double-back logic (see below).
+
     if (_navStack.length > 0) {
       history.pushState({ _pwa: 'nav' }, '');
     } else {
-      // Just closed the last item; push guard for the double-back exit check.
+
       history.pushState({ _pwa: 'guard' }, '');
     }
     return;
   }
 
-  // Stack is empty — this is either a ghost entry or the user wants to exit.
   var now = Date.now();
   if (now - _lastBackMs < _DOUBLE_BACK_MS) {
-    // Second back within 2 s → let Android / iOS / desktop close the app.
+
     return;
   }
-  // First back with nothing open → arm the timer, push guard to stay in app.
+
   _lastBackMs = now;
   history.pushState({ _pwa: 'guard' }, '');
 });
@@ -2550,7 +2531,7 @@ function sidebarNav(tab) {
 window.sidebarNav = sidebarNav;
 
 window.openDataMenu = function() { if(typeof performOneClickSync==='function') performOneClickSync().catch(e=>console.error(e)); };
-window.closeDataMenu = function() { /* sync-data-screen removed; no-op */ };
+window.closeDataMenu = function() {  };
 
 window.openRecycleBin = function() {
   openStandaloneScreen('recycle-bin-screen');
@@ -2607,7 +2588,7 @@ async function _loadFormulaScreen(store) {
   if (typeof selectFactoryStore === 'function') selectFactoryStore(store, null);
 
   if (store === 'asaan') {
-    // Load all formula data directly from SQLite for the asaan screen
+
     try {
       var loadedFormulas = await sqliteStore.get('factory_default_formulas');
       var loadedCosts    = await sqliteStore.get('factory_additional_costs');
@@ -2623,7 +2604,6 @@ async function _loadFormulaScreen(store) {
       var asaanPrice      = (loadedPrices  && loadedPrices.asaan   != null) ? loadedPrices.asaan   : 0;
       var asaanAvailable  = (loadedTracking && loadedTracking.asaan) ? loadedTracking.asaan.available : 0;
 
-      // Populate asaan input fields
       var acpuA = document.getElementById('additional-cost-per-unit-asaan');
       var cafA  = document.getElementById('cost-adjustment-factor-asaan');
       var spSA  = document.getElementById('sale-price-standard-asaan');
@@ -2633,7 +2613,6 @@ async function _loadFormulaScreen(store) {
       if (spSA)  spSA.value  = stdPrice;
       if (spAO)  spAO.value  = asaanPrice;
 
-      // Populate asaan material rows directly from saved asaan formula
       var dstContainer = document.getElementById('factoryRawMaterialsContainerAsaan');
       if (dstContainer) {
         dstContainer.replaceChildren();
@@ -2645,7 +2624,6 @@ async function _loadFormulaScreen(store) {
         }
       }
 
-      // Update summary stats
       var totalRawCost = 0, totalWeight = 0;
       asaanFormula.forEach(function(ing) {
         totalRawCost += (ing.cost * ing.quantity);
@@ -2663,7 +2641,7 @@ async function _loadFormulaScreen(store) {
       console.error('[_loadFormulaScreen asaan]', e);
     }
   } else {
-    // Standard screen — use the existing factory.js logic
+
     if (window._origOpenFactorySettings) {
       try { await window._origOpenFactorySettings.call(window); } catch(e) {}
     }
@@ -2688,20 +2666,18 @@ window.saveFactoryFormulasAsaan = async function() {
     var spAO  = document.getElementById('sale-price-asaan-only');
     var container = document.getElementById('factoryRawMaterialsContainerAsaan');
 
-    // Read asaan formula rows directly from the DOM
     var newAsaanFormula = [];
     if (container) {
       var inventoryData = await sqliteStore.get('factory_inventory_data') || [];
       container.querySelectorAll('.factory-formula-grid').forEach(function(row) {
-        var sel    = row.querySelector('.factory-mat-select');
+        var inp    = row.querySelector('.factory-mat-search-input');
         var costIn = row.querySelector('.factory-mat-cost');
         var qtyIn  = row.querySelector('.factory-mat-qty');
-        if (sel && sel.value && qtyIn && parseFloat(qtyIn.value) > 0) {
-          var selectedOpt = sel.options[sel.selectedIndex];
-          var itemName = selectedOpt ? selectedOpt.textContent.trim() : '';
+        if (inp && inp.dataset.matId && qtyIn && parseFloat(qtyIn.value) > 0) {
+          var itemName = inp.value.trim();
           if (itemName) {
-            var resolvedId = sel.value;
-            var liveMatch = inventoryData.find(function(i) { return String(i.id) === String(sel.value); });
+            var resolvedId = inp.dataset.matId;
+            var liveMatch = inventoryData.find(function(i) { return String(i.id) === String(resolvedId); });
             if (!liveMatch && itemName) {
               var nameMatch = inventoryData.find(function(i) { return i.name && i.name.trim().toLowerCase() === itemName.toLowerCase(); });
               if (nameMatch) resolvedId = nameMatch.id;
@@ -2717,7 +2693,6 @@ window.saveFactoryFormulasAsaan = async function() {
       });
     }
 
-    // Load existing data and update only asaan keys
     var _rawFormulas = await sqliteStore.get('factory_default_formulas') || {};
     var _rawCosts    = await sqliteStore.get('factory_additional_costs')  || {};
     var _rawFactor   = await sqliteStore.get('factory_cost_adjustment_factor') || {};
@@ -2846,9 +2821,6 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   });
 
-  // Tag the initial page-load entry so the very first back press fires
-  // popstate (instead of silently closing the PWA on Android).
-  // replaceState is used — it modifies the current entry without adding one.
   history.replaceState({ _pwa: 'base' }, '');
 
   var origOpenDevice = window.openStandaloneScreen;

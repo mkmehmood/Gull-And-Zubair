@@ -171,7 +171,9 @@ if (isOpen) {
 const container = document.getElementById('factoryRawMaterialsContainer');
 const liveRows = container ? Array.from(container.querySelectorAll('.factory-formula-grid')) : [];
 const liveState = liveRows.map(row => ({
-id: row.querySelector('.factory-mat-select')?.value || '',
+id: row.querySelector('.factory-mat-search-input')?.dataset.matId || '',
+name: row.querySelector('.factory-mat-search-input')?.value || '',
+cost: row.querySelector('.factory-mat-search-input')?.dataset.matCost || '',
 qty: row.querySelector('.factory-mat-qty')?.value || ''
 }));
 const hasUnsavedWork = liveState.some(r => r.id !== '');
@@ -182,9 +184,11 @@ liveState.forEach((state, idx) => {
 if (!state.id) return;
 const row = newRows[idx];
 if (!row) return;
-const sel = row.querySelector('.factory-mat-select');
+const inp = row.querySelector('.factory-mat-search-input');
+const costIn = row.querySelector('.factory-mat-cost');
 const qty = row.querySelector('.factory-mat-qty');
-if (sel && state.id) { sel.value = state.id; updateFactoryRowCost(sel); }
+if (inp) { inp.value = state.name; inp.dataset.matId = state.id; inp.dataset.matCost = state.cost; }
+if (costIn) costIn.value = state.cost;
 if (qty && state.qty) qty.value = state.qty;
 });
 }
@@ -266,26 +270,82 @@ _setFS1('factorySettingsSalesCostPerKgAsaan', await formatCurrency(asaanSalesCos
 async function createFactorySettingRow(container, selectedId = '', qtyVal = '', costVal = null, savedName = '', inventoryData = null) {
 const factoryInventoryData = inventoryData !== null ? inventoryData : ensureArray(await sqliteStore.get('factory_inventory_data'));
 let currentCost = costVal !== null ? costVal : 0;
+let currentId = selectedId ? String(selectedId) : '';
+let currentName = savedName || '';
+if (currentId) {
+const match = factoryInventoryData.find(i => String(i.id) === currentId);
+if (match) {
+currentName = match.name;
+if (costVal === null) currentCost = match.cost;
+}
+}
+const rowId = 'fmr-' + Math.random().toString(36).slice(2, 8);
 const div = document.createElement('div');
 div.className = 'factory-formula-grid';
+div.style.position = 'relative';
 
-const sel = document.createElement('select');
-sel.className = 'factory-mat-select';
-sel.onchange = function() { updateFactoryRowCost(this); };
-const defaultOpt = document.createElement('option');
-defaultOpt.value = '';
-defaultOpt.textContent = 'Select Material';
-sel.appendChild(defaultOpt);
-factoryInventoryData.forEach(i => {
-const opt = document.createElement('option');
-opt.value = String(i.id);
-opt.dataset.cost = String(i.cost);
-opt.textContent = i.name;
-sel.appendChild(opt);
-if (String(i.id) === String(selectedId)) {
-if (costVal === null) currentCost = i.cost;
+const searchWrap = document.createElement('div');
+searchWrap.className = 'factory-mat-select';
+searchWrap.style.cssText = 'position:relative;';
+
+const searchInput = document.createElement('input');
+searchInput.type = 'text';
+searchInput.className = 'factory-mat-search-input';
+searchInput.placeholder = 'Search material…';
+searchInput.value = currentName;
+searchInput.dataset.matId = currentId;
+searchInput.dataset.matCost = String(currentCost);
+searchInput.autocomplete = 'off';
+searchInput.style.cssText = 'width:100%;box-sizing:border-box;';
+
+const dropdown = document.createElement('div');
+dropdown.className = 'factory-mat-dropdown hidden u-search-dropdown';
+dropdown.style.cssText = 'position:absolute;top:100%;left:0;right:0;z-index:999;max-height:180px;overflow-y:auto;';
+
+function renderDropdown(query) {
+const q = (query || '').toLowerCase();
+const filtered = q
+? factoryInventoryData.filter(i => i.name && i.name.toLowerCase().includes(q))
+: factoryInventoryData;
+if (!filtered.length) {
+dropdown.innerHTML = '<div class="u-search-empty">No materials found</div>';
+} else {
+dropdown.innerHTML = filtered.map(i =>
+`<div class="factory-mat-option" data-id="${esc(String(i.id))}" data-cost="${esc(String(i.cost))}" data-name="${esc(i.name)}"
+style="padding:9px 10px;cursor:pointer;border-bottom:1px solid var(--glass-border);font-size:0.85rem;color:var(--text-main);background:var(--input-bg);"
+onmouseover="this.style.background='var(--highlight-bg)'"
+onmouseout="this.style.background='var(--input-bg)'">${esc(i.name)}</div>`
+).join('');
+}
+dropdown.classList.remove('hidden');
+dropdown.querySelectorAll('.factory-mat-option').forEach(opt => {
+opt.addEventListener('mousedown', e => {
+e.preventDefault();
+const id = opt.dataset.id;
+const cost = opt.dataset.cost;
+const name = opt.dataset.name;
+searchInput.value = name;
+searchInput.dataset.matId = id;
+searchInput.dataset.matCost = cost;
+costInput.value = cost;
+dropdown.classList.add('hidden');
+updateFactoryFormulasSummary();
+});
+});
+}
+
+searchInput.addEventListener('focus', () => renderDropdown(searchInput.value));
+searchInput.addEventListener('input', () => renderDropdown(searchInput.value));
+searchInput.addEventListener('blur', () => {
+setTimeout(() => dropdown.classList.add('hidden'), 150);
+if (!searchInput.dataset.matId) {
+searchInput.value = '';
+costInput.value = '';
 }
 });
+
+searchWrap.appendChild(searchInput);
+searchWrap.appendChild(dropdown);
 
 const costInput = document.createElement('input');
 costInput.type = 'number';
@@ -312,32 +372,11 @@ div.remove();
 updateFactoryFormulasSummary();
 };
 
-div.appendChild(sel);
+div.appendChild(searchWrap);
 div.appendChild(costInput);
 div.appendChild(qtyInput);
 div.appendChild(delBtn);
 container.appendChild(div);
-
-if (selectedId) {
-const targetId = String(selectedId).trim();
-let matched = false;
-for (const opt of sel.options) {
-if (opt.value.trim() === targetId) {
-opt.selected = true;
-matched = true;
-break;
-}
-}
-if (!matched && savedName) {
-const ghostOpt = document.createElement('option');
-ghostOpt.value = targetId;
-ghostOpt.dataset.cost = String(currentCost);
-ghostOpt.textContent = savedName;
-ghostOpt.selected = true;
-sel.appendChild(ghostOpt);
-}
-costInput.value = currentCost;
-}
 }
 
 function getColumnLabel(index) {
@@ -355,23 +394,16 @@ const container = document.getElementById('factoryRawMaterialsContainer');
 createFactorySettingRow(container, '', '', null, '', null);
 }
 
-function updateFactoryRowCost(selectEl) {
-const costInput = selectEl.closest('.factory-formula-grid').querySelector('.factory-mat-cost');
-const selectedOption = selectEl.options[selectEl.selectedIndex];
-costInput.value = selectedOption.getAttribute('data-cost') || 0;
-updateFactoryFormulasSummary();
-}
-
 async function updateFactoryFormulasSummary() {
 const factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {};
 const container = document.getElementById('factoryRawMaterialsContainer');
 const rows = container.querySelectorAll('.factory-formula-grid');
 let totalRawCost = 0, totalWeight = 0;
 rows.forEach(row => {
-const sel = row.querySelector('.factory-mat-select');
+const inp = row.querySelector('.factory-mat-search-input');
 const qtyIn = row.querySelector('.factory-mat-qty');
 const costIn = row.querySelector('.factory-mat-cost');
-if (sel && sel.value && qtyIn.value > 0 && costIn.value > 0) {
+if (inp && inp.dataset.matId && qtyIn.value > 0 && costIn.value > 0) {
 totalRawCost += (parseFloat(costIn.value) * parseFloat(qtyIn.value));
 totalWeight += parseFloat(qtyIn.value);
 }
@@ -417,15 +449,14 @@ const container = document.getElementById('factoryRawMaterialsContainer');
 const rows = container.querySelectorAll('.factory-formula-grid');
 const newFormula = [];
 rows.forEach(row => {
-const sel = row.querySelector('.factory-mat-select');
+const inp = row.querySelector('.factory-mat-search-input');
 const qtyIn = row.querySelector('.factory-mat-qty');
 const costIn = row.querySelector('.factory-mat-cost');
-if (sel && sel.value && qtyIn.value > 0 && costIn.value > 0) {
-const selectedOpt = sel.options[sel.selectedIndex];
-const itemName = selectedOpt ? selectedOpt.textContent.trim() : '';
+if (inp && inp.dataset.matId && qtyIn.value > 0 && costIn.value > 0) {
+const itemName = inp.value.trim();
 if (itemName) {
-let resolvedId = sel.value;
-const liveMatch = factoryInventoryData.find(i => String(i.id) === String(sel.value));
+let resolvedId = inp.dataset.matId;
+const liveMatch = factoryInventoryData.find(i => String(i.id) === String(resolvedId));
 if (!liveMatch && itemName) {
 const nameMatch = factoryInventoryData.find(i => i.name && i.name.trim().toLowerCase() === itemName.toLowerCase());
 if (nameMatch) resolvedId = nameMatch.id;
@@ -1218,7 +1249,7 @@ const storeLabel = entry.store === 'standard' ? 'STD' : 'ASN';
 const perUnitCost = entry.units > 0 ? entry.totalCost / entry.units : 0;
 const additionalCostPerUnit = factoryAdditionalCosts[entry.store] || 0;
 const totalAdditionalCost = additionalCostPerUnit * entry.units;
-// Build per-material breakdown
+
 const formula = factoryDefaultFormulas[entry.store] || [];
 let matsBreakdownHtml = '';
 if (formula.length > 0) {

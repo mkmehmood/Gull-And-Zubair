@@ -5103,19 +5103,13 @@ const UUIDSyncRegistry = (() => {
   function skipDownload(col, id) {
     const sid = String(id);
 
-    // Already downloaded this session — skip
     const dn = _downloaded.get(col);
     if (dn && dn.has(sid)) return true;
 
-    // During any restore/full-download pass, never block on shard
     if (_newDeviceRestore) return false;
 
-    // For local-origin records: only skip if the record is NOT dirty (i.e. hasn't
-    // been modified locally since last upload). If it's dirty the cloud may have
-    // a newer version pushed from another device, so we must not skip it.
     if (_isLocalOrigin(sid)) {
-      // If the record is flagged dirty in DeltaSync, let mergeArrays decide via
-      // compareRecordVersions — don't short-circuit here
+
       if (typeof DeltaSync !== 'undefined' && DeltaSync.isDirtyId(col, sid)) return false;
       return true;
     }
@@ -6141,7 +6135,6 @@ const tbody = document.getElementById('entity-table-body');
 const filterInput = document.getElementById('entity-list-filter');
 const filter = filterInput ? String(filterInput.value).toLowerCase() : '';
 if (!tbody) return;
-
 
 try {
 const _freshInv = await sqliteStore.get('factory_inventory_data', []);
@@ -12361,14 +12354,14 @@ const RECYCLE_RECOVERABLE_COLLECTIONS = new Set([
 ]);
 async function openRecycleBin() {
 if (typeof openStandaloneScreen === 'function') openStandaloneScreen('recycle-bin-screen');
-// Determine which filter to apply based on active app mode
+
 const MODE_TO_RECYCLE_FILTER = {
   'production': 'tab_production',
   'factory':    'tab_factory',
   'rep':        'tab_rep',
   'sales':      'tab_sales',
-  'userrole':   null, // determined by assigned tabs
-  'admin':      null, // show all
+  'userrole':   null,
+  'admin':      null,
 };
 const mode = window.appMode || 'admin';
 let defaultFilter = 'all';
@@ -12388,13 +12381,13 @@ if (mode === 'userrole') {
 } else {
   defaultFilter = MODE_TO_RECYCLE_FILTER[mode] || 'all';
 }
-// Update filter dropdown: hide options not relevant to locked mode
+
 const filterSel = document.getElementById('recycleBinFilter');
 if (filterSel) {
   const allowedFilters = new Set();
   allowedFilters.add('all');
   if (mode === 'admin') {
-    // All options visible
+
     Array.from(filterSel.options).forEach(opt => { opt.style.display = ''; });
   } else if (mode === 'userrole') {
     const tabs = window._assignedUserTabs || [];
@@ -12596,7 +12589,7 @@ async function renderRecycleBin(filterCollection = 'all') {
           }
         }
       }
-      // Extract user role / rep badges from snapshot
+
       const _snap = rec.snapshot || {};
       const _rbCreatedBy = _snap.createdBy || rec.createdBy || null;
       const _rbManagedBy = _snap.managedBy || rec.managedBy || null;
@@ -12611,7 +12604,7 @@ async function renderRecycleBin(filterCollection = 'all') {
         ? `<span style="display:inline-flex;align-items:center;padding:2px 7px;font-size:0.62rem;font-weight:700;letter-spacing:0.04em;color:var(--accent);background:rgba(37,99,235,0.10);border:1px solid rgba(37,99,235,0.25);border-radius:999px;white-space:nowrap;">${esc(_rbSalesRep.split(' ')[0])}</span>`
         : '';
       const _rbBadgesHtml = [_rbManagedBadge, _rbCreatorBadge, _rbRepBadge].filter(Boolean).join('');
-      // Deleted-by badge: show who deleted this record (role or rep name)
+
       const _rbDeletedByRaw = rec.deleted_by || null;
       const _rbDeletedByBadge = (_rbDeletedByRaw && _rbDeletedByRaw !== 'user')
         ? `<span style="display:inline-flex;align-items:center;gap:3px;padding:2px 7px;font-size:0.62rem;font-weight:700;letter-spacing:0.04em;color:#f87171;background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.28);border-radius:999px;white-space:nowrap;"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>del by ${esc(_rbDeletedByRaw)}</span>`
@@ -12642,12 +12635,13 @@ async function renderRecycleBin(filterCollection = 'all') {
             ${nameHtml}
             ${amountHtml}
           </div>
-          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px;">
+          <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-bottom:3px;">
             ${typeTag}
             ${detailHtml}
             ${syncBadge}
+            ${_rbBadgesHtml}
+            ${_rbDeletedByBadge}
           </div>
-          ${ (_rbBadgesHtml || _rbDeletedByBadge) ? `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-top:4px;margin-bottom:2px;">${_rbBadgesHtml}${_rbDeletedByBadge}</div>` : ''}
           <div style="font-size:0.68rem;color:var(--text-muted);">
             Deleted ${daysAgo === 0 ? 'today' : daysAgo + 'd ago'} · ${deletedDate} · expires in ${expiresIn}d
           </div>
@@ -14145,61 +14139,7 @@ isSyncing = false;
 updateConnectionStatus();
 }
 };
-(function() {
-const threshold = 80;
-let startY = 0;
-let startScrollBottom = 0;
-let isPulling = false;
-const _anyOverlayOpen = () =>
-document.querySelector('.factory-overlay[style*="flex"], .factory-overlay[style*="block"], .settings-overlay.active') !== null;
-window._ptrTouchStart = (e) => {
-if (_anyOverlayOpen()) { isPulling = false; return; }
-const scrollEl = document.scrollingElement || document.documentElement;
-startY = e.touches[0].clientY;
-startScrollBottom = scrollEl.scrollTop + scrollEl.clientHeight;
-isPulling = true;
-};
-window._ptrTouchMove = (e) => {
-if (!isPulling) return;
-if (_anyOverlayOpen()) { isPulling = false; return; }
-const scrollEl = document.scrollingElement || document.documentElement;
-const draggedDown = e.touches[0].clientY - startY;
-const scrolledToBottom = scrollEl.scrollTop + scrollEl.clientHeight >= scrollEl.scrollHeight - 2;
-if (draggedDown > 8 && scrolledToBottom) e.preventDefault();
-};
-window._ptrTouchEnd = async (e) => {
-if (!isPulling) return;
-isPulling = false;
-if (_anyOverlayOpen()) return;
-const scrollEl = document.scrollingElement || document.documentElement;
-const endY = e.changedTouches[0].clientY;
-const draggedDown = endY - startY;
-const halfScreen = window.innerHeight / 2;
-const scrolledToBottom = scrollEl.scrollTop + scrollEl.clientHeight >= scrollEl.scrollHeight - 2;
-if (draggedDown < halfScreen || !scrolledToBottom) return;
-if (navigator.vibrate) navigator.vibrate([12, 8, 20]);
-showToast('↻ Syncing…', 'info', 12000);
-const result = await performOneClickSync(true);
-if (navigator.vibrate) navigator.vibrate(18);
-const down = (result && result.down) || 0;
-const up   = (result && result.up)   || 0;
-const err  = result && result.error;
-if (err) {
-showToast('Sync error — will retry when online', 'warning', 3000);
-} else if (down > 0 && up > 0) {
-showToast('↓' + down + ' ↑' + up + ' synced', 'success', 2500);
-} else if (down > 0) {
-showToast('↓ ' + down + ' update' + (down !== 1 ? 's' : '') + ' downloaded', 'success', 2500);
-} else if (up > 0) {
-showToast('↑ ' + up + ' change' + (up !== 1 ? 's' : '') + ' uploaded', 'success', 2500);
-} else {
-showToast('✓ Up to date', 'success', 1500);
-}
-};
-document.addEventListener('touchstart', window._ptrTouchStart, { passive: true });
-document.addEventListener('touchmove', window._ptrTouchMove, { passive: false });
-document.addEventListener('touchend', window._ptrTouchEnd);
-})();
+
 (function registerRenderFunctions() {
 if (typeof renderUnifiedTable === 'function') {
 }
@@ -14408,9 +14348,6 @@ if (window._rafScrollHandler) {
 window.removeEventListener('scroll', window._rafScrollHandler);
 window._rafScrollHandler = null;
 }
-if (window._ptrTouchStart) { document.removeEventListener('touchstart', window._ptrTouchStart); window._ptrTouchStart = null; }
-if (window._ptrTouchMove) { document.removeEventListener('touchmove', window._ptrTouchMove); window._ptrTouchMove = null; }
-if (window._ptrTouchEnd) { document.removeEventListener('touchend', window._ptrTouchEnd); window._ptrTouchEnd = null; }
 if (window._fbOfflineHandler) { window.removeEventListener('offline', window._fbOfflineHandler); window._fbOfflineHandler = null; }
 if (window._fbVisibilityHandler) { document.removeEventListener('visibilitychange', window._fbVisibilityHandler); window._fbVisibilityHandler = null; }
 if (window._tombstoneCleanupInterval) { clearInterval(window._tombstoneCleanupInterval); window._tombstoneCleanupInterval = null; }
@@ -15026,8 +14963,7 @@ const modeColor = deviceMode === 'admin' ? '#007aff'
 const modeIcon = '';
 const onlineColor = isOnline ? '#30d158' : '#ff453a';
 const onlineDot = isOnline ? '● Online' : '○ Offline';
-// Prefer the shard stored on the Firestore document (written by registerDevice
-// using the composite device ID). Fall back to deriving it on the fly.
+
 let deviceShard = 'N/A';
 if (device.deviceShard) {
   deviceShard = String(device.deviceShard).toUpperCase();
@@ -15036,7 +14972,7 @@ try {
 deviceShard = deriveDeviceShard(device.deviceId).toUpperCase();
 } catch (_) { deviceShard = 'N/A'; }
 }
-// Resolve the first-login timestamp from the stored field or the device ID suffix.
+
 let firstLoginStr = '';
 if (device.firstLoginAt) {
   try {
@@ -15051,6 +14987,8 @@ if (device.firstLoginAt) {
     if (flt) firstLoginStr = flt.toLocaleString();
   } catch (_) {}
 }
+let cardHtml = '<div style="background:var(--glass-raised);border:1px solid var(--glass-border);border-radius:14px;padding:14px;margin-bottom:12px;">';
+cardHtml += '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px;">';
 cardHtml += '<div style="font-size:0.65rem;font-family:\'Geist Mono\',monospace;color:var(--text-muted);flex:1;min-width:0;line-height:1.4;" title="Device shard: ' + deviceShard + (firstLoginStr ? ' | First login: ' + firstLoginStr : '') + '">Shard: <span style="color:var(--accent);font-weight:700;letter-spacing:0.08em;">' + deviceShard + '</span>' + (firstLoginStr ? ' &nbsp;<span style="color:var(--text-muted);font-weight:400;font-size:0.6rem;">first login: ' + firstLoginStr + '</span>' : '') + '</div>';
 cardHtml += '<div style="text-align:right;flex-shrink:0;">';
 cardHtml += '<div style="font-size:0.8rem;font-weight:800;color:' + modeColor + ';white-space:nowrap;">' + modeLabel + '</div>';
@@ -15255,7 +15193,7 @@ window.getDeviceId = getDeviceId;
 window.getDeviceName = getDeviceName;
 window.registerDevice = registerDevice;
 async function restoreDeviceModeOnLogin(uid) {
-// ── Helpers ──────────────────────────────────────────────────────────────
+
 function _applyModeFromData(modeStr, ts, assignedRep, assignedManager, assignedUserTabs, remoteApplied) {
   const previousMode = appMode;
   appMode = modeStr;
@@ -15286,7 +15224,6 @@ function _applyModeFromData(modeStr, ts, assignedRep, assignedManager, assignedU
 try {
   const localTimestamp = Number(await sqliteStore.get('appMode_timestamp')) || 0;
 
-  // ── Path A: Try Firestore first (online, doc already written) ──────────
   if (firebaseDB && !window._firestoreNetworkDisabled && navigator.onLine) {
     try {
       const deviceId = await getDeviceId();
@@ -15309,24 +15246,15 @@ try {
             data.assignedUserTabs, !!data.remoteAppliedMode
           );
         }
-        // Doc exists and mode is already correct — nothing to do.
+
         return;
       }
-      // Doc doesn't exist yet (fresh device ID, registerDevice() is still
-      // in-flight because it runs 500 ms after this function is called).
-      // Fall through to the SQLite fallback below.
+
     } catch (_fsErr) {
       console.warn('[restoreDeviceMode] Firestore read failed, trying SQLite fallback:', _safeErr(_fsErr));
     }
   }
 
-  // ── Path B: SQLite fallback ───────────────────────────────────────────
-  // This path activates when:
-  //   • The device doc doesn't exist yet (just rotated to a new device ID).
-  //   • The app is offline.
-  //   • Firestore threw an error.
-  // SQLite already holds the correct mode fields because the login flow
-  // saved them back before _clearDeviceIdStorage() ran.
   const sqliteMode = await sqliteStore.get('appMode') || 'admin';
   const _modeIsLockedSqlite = sqliteMode !== 'admin';
   const _localIsAdminSqlite = appMode === 'admin';
@@ -15352,7 +15280,6 @@ try { window.deviceCommandsUnsubscribe(); } catch (_) {}
 window.deviceCommandsUnsubscribe = null;
 }
 
-// Retry state — reset each time listenForDeviceCommands is called fresh
 if (!window._deviceCmdRetryAttempts) window._deviceCmdRetryAttempts = 0;
 if (!window._deviceCmdRetrying) window._deviceCmdRetrying = false;
 
@@ -15363,7 +15290,7 @@ const deviceRef = userRef.collection('devices').doc(deviceId);
 
 const unsubscribe = deviceRef.onSnapshot({ includeMetadataChanges: false }, (doc) => {
 try {
-// Ignore cache hits and locally-pending writes — only process confirmed server data
+
 if (doc.metadata.fromCache || doc.metadata.hasPendingWrites) return;
 if (!doc.exists) return;
 const data = doc.data();
@@ -15387,7 +15314,7 @@ const lastProcessed = window.lastProcessedCommandTimestamp || 0;
 if (commandTimestamp > lastProcessed) {
 applyRemoteModeChange(effectiveMode, data.commandSource || 'remote', resolvedName, resolvedUserTabs);
 window.lastProcessedCommandTimestamp = commandTimestamp;
-// Reset retry counter on any successful server event
+
 window._deviceCmdRetryAttempts = 0;
 }
 } catch (snapErr) {
@@ -15398,7 +15325,6 @@ const _code = error && error.code;
 console.warn('[device] command listener error:', _code, _safeErr(error));
 window.deviceCommandsUnsubscribe = null;
 
-// Don't retry unrecoverable auth/permission errors
 if (_code === 'permission-denied' || _code === 'failed-precondition') {
 console.warn('[device] stopping device listener — unrecoverable error:', _code);
 window._deviceCmdRetryAttempts = 0;
@@ -15406,7 +15332,6 @@ window._deviceCmdRetrying = false;
 return;
 }
 
-// Guard against overlapping concurrent retry attempts
 if (window._deviceCmdRetrying) return;
 window._deviceCmdRetryAttempts = (window._deviceCmdRetryAttempts || 0) + 1;
 const MAX_DEVICE_RETRIES = 8;
@@ -15416,7 +15341,7 @@ window._deviceCmdRetryAttempts = 0;
 window._deviceCmdRetrying = false;
 return;
 }
-// Exponential backoff: 5s, 10s, 20s, 40s … capped at 120s
+
 const delay = Math.min(5000 * Math.pow(2, window._deviceCmdRetryAttempts - 1), 120000);
 window._deviceCmdRetrying = true;
 setTimeout(() => {
@@ -15430,7 +15355,7 @@ console.warn('[device] listenForDeviceCommands retry failed:', _safeErr(e));
 }, delay);
 });
 window.deviceCommandsUnsubscribe = unsubscribe;
-// Reset retry counter on clean attach
+
 window._deviceCmdRetryAttempts = 0;
 window._deviceCmdRetrying = false;
 } catch (error) {
