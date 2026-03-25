@@ -13244,7 +13244,7 @@ id: BiometricAuth._base64ToBuf(savedCredId),
 type: "public-key"
 // transports omitted: iOS Safari/Face ID silently skips prompt if transports hint doesn't match exactly
 }],
-userVerification: "required",
+userVerification: "preferred", // "required" breaks devices without Face ID; "preferred" matches registration setting
 timeout: 60000
 };
 await navigator.credentials.get({ publicKey });
