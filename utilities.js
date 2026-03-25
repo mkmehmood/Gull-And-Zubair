@@ -5,12 +5,10 @@ const currentTheme = html.getAttribute('data-theme') || 'dark';
 const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
 html.setAttribute('data-theme', newTheme);
 if (newTheme === 'dark') {
-themeToggle.innerHTML = '';
-themeToggle.title = "Switch to Light Mode";
+if (themeToggle) { themeToggle.innerHTML = ''; themeToggle.title = "Switch to Light Mode"; }
 await sqliteStore.set('theme', 'dark');
 } else {
-themeToggle.innerHTML = '';
-themeToggle.title = "Switch to Dark Mode";
+if (themeToggle) { themeToggle.innerHTML = ''; themeToggle.title = "Switch to Dark Mode"; }
 await sqliteStore.set('theme', 'light');
 }
 const metaThemeColor = document.querySelector('meta[name="theme-color"]');
@@ -280,7 +278,6 @@ modal.innerHTML = `
 <div class="dl-queue-card">
 <div class="dl-queue-header">
 <h3 class="dl-queue-title">⚠️ Failed Uploads</h3>
-<button class="dl-queue-close" aria-label="Close" onclick="document.getElementById('dl-queue-modal').remove()">✕</button>
 </div>
 <p class="dl-queue-subtitle">These operations exhausted all ${this.maxRetries} retry attempts. Retry to re-attempt upload, or dismiss to discard.</p>
 <div class="dl-queue-list">${rows}</div>
@@ -753,8 +750,8 @@ if (typeof updateFactoryUnitsAvailableStats === 'function') setTimeout(updateFac
 }
 async function syncPaymentsTab() {
 try {
-if (typeof refreshPaymentTab === 'function') refreshPaymentTab();
-if (typeof renderEntityTable === 'function') renderEntityTable();
+if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
+if (typeof renderEntityTable === 'function') await renderEntityTable();
 } catch (error) {
 console.error('Payment tab refresh failed.', _safeErr(error));
 showToast('Payment tab refresh failed.', 'error');
@@ -791,8 +788,6 @@ console.error('Rep tab refresh failed.', _safeErr(error));
 showToast('Rep tab refresh failed.', 'error');
 if (typeof renderRepCustomerTable === 'function') setTimeout(renderRepCustomerTable, 500);
 }
-}
-function startPeriodicSync() {
 }
 function stopPeriodicSync() {
 }
@@ -1259,7 +1254,12 @@ deletedAt: now,
 collection: collectionName,
 syncedToCloud: false,
 tombstoned_at: now,
-deleted_by: 'user',
+deleted_by: (() => {
+  const _mode = typeof appMode !== 'undefined' ? appMode : 'admin';
+  if (_mode === 'rep') return (typeof currentRepProfile !== 'undefined' && currentRepProfile) ? currentRepProfile : 'Sales Rep';
+  if (_mode === 'userrole' || _mode === 'production' || _mode === 'factory') return (window._assignedManagerName) ? window._assignedManagerName : (_mode === 'userrole' ? 'User Role' : _mode === 'production' ? 'Production' : 'Factory');
+  return 'Admin';
+})(),
 deletion_version: '2.0',
 displayName: _snapshot.displayName || null,
 displayDetail: _snapshot.displayDetail || null,
@@ -1576,19 +1576,10 @@ const quickAmountEl = document.getElementById('quickEntityAmount');
 if (quickAmountEl) quickAmountEl.value = '';
 setQuickEntityType('OUT');
 await renderEntityOverlayContent(entity);
-requestAnimationFrame(() => {
-document.body.style.overflow = 'hidden';
-document.documentElement.style.overflow = 'hidden';
-const overlayEl = document.getElementById('entityDetailsOverlay');
-if (overlayEl) overlayEl.style.display = 'flex';
-});
+if (typeof openStandaloneScreen === 'function') openStandaloneScreen('entity-details-screen');
 }
 function closeEntityDetailsOverlay() {
-requestAnimationFrame(() => {
-document.body.style.overflow = '';
-document.documentElement.style.overflow = '';
-document.getElementById('entityDetailsOverlay').style.display = 'none';
-});
+if (typeof closeStandaloneScreen === 'function') closeStandaloneScreen('entity-details-screen');
 currentEntityId = null;
 refreshPaymentTab();
 }
@@ -1596,10 +1587,6 @@ function openEditEntityFromDetails() {
 const id = currentEntityId;
 if (!id) return;
 editEntityBasicInfo(id);
-requestAnimationFrame(() => {
-const editOverlay = document.getElementById('entityManagementOverlay');
-if (editOverlay) editOverlay.style.zIndex = '10004';
-});
 }
 function setQuickEntityType(type) {
 currentQuickType = type;
@@ -1614,7 +1601,8 @@ const _manageET = document.getElementById('manageEntityTitle');
 if (_manageET) {
 const phone = entity.phone || '';
 const wallet = entity.wallet || '';
-_manageET.innerHTML = `<div class="u-fw-700" >${esc(entity.name)}</div>${(phone || wallet) ? `<div style="font-size:0.75rem; color:var(--text-muted); font-weight:normal; margin-top:3px;">${phone ? phoneActionHTML(phone) : ''}${phone && wallet ? ' &middot; ' : ''}${esc(wallet)}</div>` : ''}`;
+const _safeEntityId = String(entity.id).replace(/'/g, "\\'");
+_manageET.innerHTML = `<div style="display:flex;align-items:center;gap:8px;"><span class="u-fw-700">${esc(entity.name)}</span><button class="sidebar-settings-btn" style="width:auto;padding:5px 10px;font-size:0.75rem;color:var(--accent);background:rgba(29,233,182,0.07);border-radius:8px;border:1px solid rgba(29,233,182,0.25);display:inline-flex;align-items:center;gap:5px;" onclick="editEntityBasicInfo('${_safeEntityId}')" title="Edit Entity"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>Edit</button></div>${(phone || wallet) ? `<div style="font-size:0.75rem;color:var(--text-muted);font-weight:normal;margin-top:3px;">${phone ? phoneActionHTML(phone) : ''}${phone && wallet ? ' &middot; ' : ''}${esc(wallet)}</div>` : ''}`;
 }
 
 try {
@@ -2074,19 +2062,6 @@ const PDF_MERGED_HDR_COLOR  = [126, 34, 206];
 const PDF_MERGED_ROW_COLOR  = [245, 235, 255];
 const PDF_MERGED_TEXT_COLOR = [126, 34, 206];
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 async function _exportDocAsImageAndOpenWhatsApp(doc, phone, filenameBase) {
   const PDFJS_CDN  = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
   const PDFJS_WRKR = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -2172,22 +2147,34 @@ await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/
 await new Promise(r => setTimeout(r, 200));
 }
 if (!window.jspdf || !window.jspdf.jsPDF) throw new Error("Failed to load PDF library. Please refresh and try again.");
-let transactions = paymentTransactions.filter(t => String(t.entityId) === String(entity.id) && !t.isExpense);
+// All transactions for this entity (all time)
+const allEntityTxns = paymentTransactions.filter(t => String(t.entityId) === String(entity.id) && !t.isExpense);
 const now = new Date();
 const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+// Determine cutoff date for the selected period
+let periodCutoff = null; // null means 'all' — no prior-balance concept
 if (range !== 'all') {
-transactions = transactions.filter(t => {
-if (!t.date) return false;
-const d = new Date(t.date);
-switch(range) {
-case 'today': return d >= today;
-case 'week': { const w = new Date(today); w.setDate(w.getDate() - 7); return d >= w; }
-case 'month': { const m = new Date(today); m.setMonth(m.getMonth() - 1); return d >= m; }
-case 'year': { const y = new Date(today); y.setFullYear(y.getFullYear() - 1); return d >= y; }
-default: return true;
+  switch(range) {
+    case 'today':  periodCutoff = today; break;
+    case 'week':   { const w = new Date(today); w.setDate(w.getDate() - 7);       periodCutoff = w; break; }
+    case 'month':  { const m = new Date(today); m.setMonth(m.getMonth() - 1);     periodCutoff = m; break; }
+    case 'year':   { const y = new Date(today); y.setFullYear(y.getFullYear()-1);  periodCutoff = y; break; }
+  }
 }
-});
-}
+// priorTxns  = transactions BEFORE the period → used to compute opening balance
+// transactions = transactions WITHIN the period → shown in the table
+const priorTxns = periodCutoff
+  ? allEntityTxns.filter(t => { if (!t.date) return false; return new Date(t.date) < periodCutoff; })
+  : [];
+let transactions = periodCutoff
+  ? allEntityTxns.filter(t => { if (!t.date) return false; return new Date(t.date) >= periodCutoff; })
+  : allEntityTxns;
+// Opening balance: net of all activity strictly before the selected period.
+// Positive = net IN (they owe us / credit balance); Negative = net OUT (we owe them).
+const openingBalance = priorTxns.reduce((bal, t) => {
+  const amt = parseFloat(t.amount) || 0;
+  return t.type === 'OUT' ? bal - amt : bal + amt;
+}, 0);
 transactions.sort((a, b) => {
 const da = toSafeDate(a.date);
 const db = toSafeDate(b.date);
@@ -2231,7 +2218,7 @@ yPos += 18;
 doc.setDrawColor(...headerColor); doc.setLineWidth(0.5);
 doc.line(14, yPos, pageW - 14, yPos);
 yPos += 5;
-if (transactions.length > 0) {
+if (transactions.length > 0 || priorTxns.length > 0) {
 doc.setFontSize(9); doc.setFont(undefined, 'bold'); doc.setTextColor(...headerColor);
 doc.text('PAYMENT TRANSACTIONS', 14, yPos);
 doc.setTextColor(80, 80, 80); doc.setFont(undefined, 'normal');
@@ -2319,18 +2306,41 @@ if (mergedTxns.length > 0) {
   yPos = doc.lastAutoTable.finalY + 6;
   if (yPos > 255) { doc.addPage(); yPos = 20; }
 }
-let runningBalance = 0;
-const txRunBal = { val: 0 };
+// ── Opening balance row (only when a time period is selected & prior txns exist) ──
+const hasPriorBalance = periodCutoff !== null && priorTxns.length > 0;
+// txRunBal starts at the opening balance so every subsequent row reflects the
+// true cumulative balance from the beginning of the account history.
+const txRunBal = { val: hasPriorBalance ? openingBalance : 0 };
 const txRows = normalTxns.map(t => buildTxRow(t, txRunBal));
+
+// Prepend the "Prior Balance" opening row when relevant
+if (hasPriorBalance) {
+  const obAbs = Math.abs(openingBalance);
+  const obDisplay = obAbs < 0.01 ? 'SETTLED' : fmtAmt(obAbs);
+  const obLabel = obAbs < 0.01
+    ? 'Settled'
+    : openingBalance > 0 ? 'Receivable (they owe)' : 'Payable (we owe)';
+  txRows.unshift([
+    'Prior',
+    `Opening Balance\n(All activity before this period)`,
+    '—',
+    '-',
+    '-',
+    obDisplay
+  ]);
+}
+
 const totalOut          = normalTxns.filter(t => t.type === 'OUT').reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
 const totalCashIn       = normalTxns.filter(t => t.type === 'IN' && !t.isPayable).reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
 const totalCreditPurch  = normalTxns.filter(t => t.type === 'IN' && t.isPayable).reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
 const totalIn           = totalCashIn + totalCreditPurch;
-const finalBal          = totalIn - totalOut;
+// Final balance = opening balance + period IN - period OUT
+const finalBal          = (hasPriorBalance ? openingBalance : 0) + totalIn - totalOut;
 let finalBalDisplay;
 if (Math.abs(finalBal) < 0.01) finalBalDisplay = 'SETTLED';
 else finalBalDisplay = fmtAmt(Math.abs(finalBal));
-if (normalTxns.length > 0) {
+const openingRowOffset  = hasPriorBalance ? 1 : 0; // row index shift for styling
+if (normalTxns.length > 0 || hasPriorBalance) {
   doc.setFontSize(8.5); doc.setFont(undefined, 'bold');
   doc.setTextColor(...headerColor);
   doc.text('INDIVIDUAL TRANSACTIONS', 14, yPos);
@@ -2353,29 +2363,53 @@ if (normalTxns.length > 0) {
       5: { cellWidth: 30, halign: 'center', fontStyle: 'bold' }
     },
     didParseCell: function(data) {
-      const isTotal = data.row.index === txRows.length - 1;
-      if (isTotal) { data.cell.styles.fontStyle='bold'; data.cell.styles.fillColor=[240,240,240]; data.cell.styles.fontSize=9; }
-      if (data.column.index===2 && !isTotal)
-        data.cell.styles.textColor = data.cell.text[0]==='OUT'?[220,53,69]:data.cell.text[0]==='CR'?[200,100,0]:[40,167,69];
-      if (data.column.index===5 && !isTotal) {
-        const txt=(data.cell.text||[]).join('');
-        if (txt.includes('SETTLED')) data.cell.styles.textColor=[100,100,100];
-        else if (txt.includes('OWE')) data.cell.styles.textColor=[220,53,69];
-        else data.cell.styles.textColor=[40,167,69];
+      const isOpeningRow = hasPriorBalance && data.row.index === 0;
+      const isTotal      = data.row.index === txRows.length - 1;
+      // Style the opening balance row distinctively
+      if (isOpeningRow) {
+        data.cell.styles.fillColor  = [220, 235, 255];
+        data.cell.styles.fontStyle  = 'bold';
+        data.cell.styles.textColor  = [30, 80, 160];
+        data.cell.styles.fontSize   = 8;
+      } else if (isTotal) {
+        data.cell.styles.fontStyle  = 'bold';
+        data.cell.styles.fillColor  = [240, 240, 240];
+        data.cell.styles.fontSize   = 9;
+      }
+      if (!isOpeningRow && !isTotal) {
+        if (data.column.index===2)
+          data.cell.styles.textColor = data.cell.text[0]==='OUT'?[220,53,69]:data.cell.text[0]==='CR'?[200,100,0]:[40,167,69];
+        if (data.column.index===5) {
+          const txt=(data.cell.text||[]).join('');
+          if (txt.includes('SETTLED')) data.cell.styles.textColor=[100,100,100];
+          else if (txt.includes('OWE')) data.cell.styles.textColor=[220,53,69];
+          else data.cell.styles.textColor=[40,167,69];
+        }
       }
     },
     margin: { left: 14, right: 14 }
   });
 }
-const afterTx = (normalTxns.length > 0 ? doc.lastAutoTable.finalY : yPos - 5) + 5;
-if (afterTx < 270) {
+const afterTx = ((normalTxns.length > 0 || hasPriorBalance) ? doc.lastAutoTable.finalY : yPos - 5) + 5;
+if (afterTx < 255) {
 doc.setFillColor(245, 245, 245);
-doc.roundedRect(14, afterTx, pageW - 28, totalCreditPurch > 0 ? 20 : 14, 2, 2, 'F');
+const summaryRows = totalCreditPurch > 0 ? 2 : 1;
+doc.roundedRect(14, afterTx, pageW - 28, summaryRows * 11 + 3, 2, 2, 'F');
 doc.setFontSize(8.5); doc.setFont(undefined, 'normal');
-doc.setTextColor(220, 53, 69);
-doc.text(`Total OUT: ${fmtAmt(totalOut)}`, 20, afterTx + 9);
-doc.setTextColor(40, 167, 69);
-doc.text(`Cash IN: ${fmtAmt(totalCashIn)}`, 75, afterTx + 9);
+if (hasPriorBalance && Math.abs(openingBalance) >= 0.01) {
+  doc.setTextColor(30, 80, 160);
+  const obSign = openingBalance > 0 ? '+' : '-';
+  doc.text(`Opening Bal: ${obSign}${fmtAmt(Math.abs(openingBalance))}`, 20, afterTx + 9);
+  doc.setTextColor(220, 53, 69);
+  doc.text(`Period OUT: ${fmtAmt(totalOut)}`, 75, afterTx + 9);
+  doc.setTextColor(40, 167, 69);
+  doc.text(`Period IN: ${fmtAmt(totalIn)}`, 125, afterTx + 9);
+} else {
+  doc.setTextColor(220, 53, 69);
+  doc.text(`Total OUT: ${fmtAmt(totalOut)}`, 20, afterTx + 9);
+  doc.setTextColor(40, 167, 69);
+  doc.text(`Cash IN: ${fmtAmt(totalCashIn)}`, 75, afterTx + 9);
+}
 if (totalCreditPurch > 0) {
 doc.setTextColor(200, 100, 0);
 doc.text(`Credit Purchases: ${fmtAmt(totalCreditPurch)}`, 20, afterTx + 17);
@@ -2385,7 +2419,7 @@ Math.abs(finalBal) < 0.01 ? 100 : finalBal < 0 ? 53 : 167,
 Math.abs(finalBal) < 0.01 ? 100 : finalBal < 0 ? 69 : 69);
 doc.setFont(undefined, 'bold');
 doc.text(`Net Balance: ${finalBalDisplay}`, 138, afterTx + 9);
-yPos = afterTx + (totalCreditPurch > 0 ? 24 : 18);
+yPos = afterTx + (summaryRows * 11 + 7);
 } else {
 yPos = afterTx + 5;
 }
@@ -2478,7 +2512,7 @@ if (txt === 'PENDING') data.cell.styles.textColor = [220, 53, 69];
 margin: { left: 14, right: 14 }
 });
 const afterMat = doc.lastAutoTable.finalY + 5;
-if (afterMat < 272) {
+if (afterMat < 265) {
 doc.setFillColor(255, 245, 230);
 doc.roundedRect(14, afterMat, pageW - 28, 14, 2, 2, 'F');
 doc.setFontSize(8.5); doc.setFont(undefined, 'normal');
@@ -2539,26 +2573,53 @@ await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/
 await new Promise(r => setTimeout(r, 200));
 }
 if (!window.jspdf || !window.jspdf.jsPDF) throw new Error("Failed to load PDF library. Please refresh and try again.");
-let transactions = customerSales.filter(s =>
-s &&
-s.customerName === customerName
-);
+// All transactions for this customer (all time, un-filtered)
+const allCustTxns = customerSales.filter(s => s && s.customerName === customerName);
 const now = new Date();
 const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+// Determine cutoff date for the selected period
+let custPeriodCutoff = null;
 if (range !== 'all') {
-transactions = transactions.filter(t => {
-if (t.transactionType === 'OLD_DEBT') return true;
-if (!t.date) return false;
-const d = new Date(t.date);
-switch(range) {
-case 'today': return d >= today;
-case 'week': { const w = new Date(today); w.setDate(w.getDate() - 7); return d >= w; }
-case 'month': { const m = new Date(today); m.setMonth(m.getMonth() - 1); return d >= m; }
-case 'year': { const y = new Date(today); y.setFullYear(y.getFullYear() - 1); return d >= y; }
-default: return true;
+  switch(range) {
+    case 'today':  custPeriodCutoff = today; break;
+    case 'week':   { const w = new Date(today); w.setDate(w.getDate() - 7);      custPeriodCutoff = w; break; }
+    case 'month':  { const m = new Date(today); m.setMonth(m.getMonth() - 1);    custPeriodCutoff = m; break; }
+    case 'year':   { const y = new Date(today); y.setFullYear(y.getFullYear()-1); custPeriodCutoff = y; break; }
+  }
 }
-});
-}
+// OLD_DEBT rows always belong to the opening of history, never to a period slice
+const custPriorTxns = custPeriodCutoff
+  ? allCustTxns.filter(t => {
+      if (t.transactionType === 'OLD_DEBT') return true; // always treated as prior
+      if (!t.date) return false;
+      return new Date(t.date) < custPeriodCutoff;
+    })
+  : [];
+let transactions = custPeriodCutoff
+  ? allCustTxns.filter(t => {
+      if (t.transactionType === 'OLD_DEBT') return false; // already in prior
+      if (!t.date) return false;
+      return new Date(t.date) >= custPeriodCutoff;
+    })
+  : allCustTxns;
+// Compute opening balance from prior transactions (debit = what they owe, credit = what they paid)
+const custOpeningBalance = custPriorTxns.reduce((bal, t) => {
+  const pt = t.paymentType || 'CASH';
+  const isOldDebt = t.transactionType === 'OLD_DEBT';
+  let debit = 0, credit = 0;
+  if (isOldDebt) {
+    debit = parseFloat(t.totalValue) || 0;
+    credit = parseFloat(t.partialPaymentReceived) || 0;
+  } else if (pt === 'CASH' || (pt === 'CREDIT' && t.creditReceived)) {
+    // settled — net zero effect on balance
+  } else if (pt === 'CREDIT' && !t.creditReceived) {
+    debit = parseFloat(t.totalValue) || 0;
+    credit = parseFloat(t.partialPaymentReceived) || 0;
+  } else if (pt === 'COLLECTION' || pt === 'PARTIAL_PAYMENT') {
+    credit = parseFloat(t.totalValue) || 0;
+  }
+  return bal + (debit - credit);
+}, 0);
 transactions.sort((a, b) => {
 if (a.isMerged && !b.isMerged) return -1;
 if (!a.isMerged && b.isMerged) return 1;
@@ -2579,7 +2640,7 @@ doc.rect(0, 0, pageW, 22, 'F');
 doc.setFontSize(16); doc.setFont(undefined, 'bold'); doc.setTextColor(255, 255, 255);
 doc.text('GULL AND ZUBAIR NASWAR DEALERS', pageW / 2, 10, { align: 'center' });
 doc.setFontSize(9); doc.setFont(undefined, 'normal');
-doc.text('Naswar Manufacturers & Dealers · Sales Tab Statement', pageW / 2, 17, { align: 'center' });
+doc.text('Naswar Manufacturers & Dealers', pageW / 2, 17, { align: 'center' });
 const rangeName = range === 'all' ? 'All Time' : range === 'today' ? 'Today' :
 range === 'week' ? 'This Week' : range === 'month' ? 'This Month' : 'This Year';
 doc.setFontSize(12); doc.setFont(undefined, 'bold'); doc.setTextColor(50, 50, 50);
@@ -2709,8 +2770,9 @@ if (mergedSalesTxns.length > 0) {
   yPos = doc.lastAutoTable.finalY + 6;
   if (yPos > 255) { doc.addPage(); yPos = 20; }
 }
+const custHasPrior = custPeriodCutoff !== null && custPriorTxns.length > 0;
+const txRunBal = { val: custHasPrior ? custOpeningBalance : 0 };
 const txRows = [];
-const txRunBal = { val: 0 };
 let totDebit = 0, totCredit = 0, totQty = 0;
 for (const t of normalSalesTxns) {
   const r = await buildSaleRow(t, txRunBal);
@@ -2719,8 +2781,18 @@ for (const t of normalSalesTxns) {
   totCredit += r.credit;
   totQty    += r.qty;
 }
-const finalBal = totDebit - totCredit;
-if (normalSalesTxns.length > 0) {
+// Prepend opening balance row when a period is selected and prior data exists
+if (custHasPrior) {
+  const obAbs = Math.abs(custOpeningBalance);
+  const obDisplay = obAbs < 0.01 ? 'SETTLED' : fmtAmt(obAbs);
+  txRows.unshift([
+    'Prior', '—',
+    'Opening Balance\n(All activity before this period)',
+    '-', '-', obDisplay
+  ]);
+}
+const finalBal = (custHasPrior ? custOpeningBalance : 0) + totDebit - totCredit;
+if (normalSalesTxns.length > 0 || custHasPrior) {
   doc.setFontSize(8.5); doc.setFont(undefined,'bold');
   doc.setTextColor(...hdrColor);
   doc.text('INDIVIDUAL TRANSACTIONS', 14, yPos);
@@ -2728,7 +2800,7 @@ if (normalSalesTxns.length > 0) {
   yPos += 5;
   txRows.push(['TOTALS','',`${fmtAmt(totQty)} kg total`,
     fmtAmt(totDebit),fmtAmt(totCredit),
-    Math.abs(finalBal)<0.01?'SETTLED':(finalBal>0?'DUE\n' +fmtAmt(finalBal):'OVERPAID\n' +fmtAmt(Math.abs(finalBal)))]);
+    Math.abs(finalBal)<0.01?'SETTLED':(finalBal>0?fmtAmt(finalBal):'OVERPAID\n' +fmtAmt(Math.abs(finalBal)))]);
   doc.autoTable({
     startY: yPos,
     head: [['Date', 'Type', 'Details', 'Debit (Sale)', 'Credit (Rcvd)', 'Balance']],
@@ -2742,37 +2814,58 @@ if (normalSalesTxns.length > 0) {
       4:{cellWidth:27,halign:'right',textColor:[40,167,69],fontStyle:'bold'},5:{cellWidth:26,halign:'center',fontStyle:'bold'}
     },
     didParseCell: function(data) {
+      const isOpeningRow = custHasPrior && data.row.index === 0;
       const isTotal = data.row.index === txRows.length - 1;
-      if (isTotal) { data.cell.styles.fontStyle='bold'; data.cell.styles.fillColor=[235,255,235]; data.cell.styles.fontSize=9; }
-      if (data.column.index===1&&!isTotal){
-        const txt=(data.cell.text||[]).join('');
-        if(txt.includes('CASH')) data.cell.styles.textColor=[40,167,69];
-        if(txt.includes('CREDIT')) data.cell.styles.textColor=[200,100,0];
-        if(txt.includes('COLLECTION')) data.cell.styles.textColor=[40,167,69];
-        if(txt.includes('PARTIAL')) data.cell.styles.textColor=[200,100,0];
-        if(txt.includes('OLD DEBT')) data.cell.styles.textColor=[220,53,69];
+      if (isOpeningRow) {
+        data.cell.styles.fillColor = [220, 235, 255];
+        data.cell.styles.fontStyle = 'bold';
+        data.cell.styles.textColor = [30, 80, 160];
+        data.cell.styles.fontSize  = 8;
+      } else if (isTotal) {
+        data.cell.styles.fontStyle='bold'; data.cell.styles.fillColor=[235,255,235]; data.cell.styles.fontSize=9;
       }
-      if (data.column.index===5&&!isTotal){
-        const txt=(data.cell.text||[]).join('');
-        if(txt==='SETTLED') data.cell.styles.textColor=[100,100,100];
-        else if(txt.includes('OVERPAID')) data.cell.styles.textColor=[40,167,69];
-        else data.cell.styles.textColor=[220,53,69];
+      if (!isOpeningRow && !isTotal) {
+        if (data.column.index===1){
+          const txt=(data.cell.text||[]).join('');
+          if(txt.includes('CASH')) data.cell.styles.textColor=[40,167,69];
+          if(txt.includes('CREDIT')) data.cell.styles.textColor=[200,100,0];
+          if(txt.includes('COLLECTION')) data.cell.styles.textColor=[40,167,69];
+          if(txt.includes('PARTIAL')) data.cell.styles.textColor=[200,100,0];
+          if(txt.includes('OLD DEBT')) data.cell.styles.textColor=[220,53,69];
+        }
+        if (data.column.index===5){
+          const txt=(data.cell.text||[]).join('');
+          if(txt==='SETTLED') data.cell.styles.textColor=[100,100,100];
+          else if(txt.includes('OVERPAID')) data.cell.styles.textColor=[40,167,69];
+          else data.cell.styles.textColor=[220,53,69];
+        }
       }
     },
     margin: { left: 14, right: 14 }
   });
 }
-const afterY = (normalSalesTxns.length > 0 ? doc.lastAutoTable.finalY : yPos - 5) + 5;
-if (afterY < 268) {
+const afterY = ((normalSalesTxns.length > 0 || custHasPrior) ? doc.lastAutoTable.finalY : yPos - 5) + 5;
+if (afterY < 252) {
+const custSummaryH = custHasPrior && Math.abs(custOpeningBalance) >= 0.01 ? 28 : 20;
 doc.setFillColor(245, 255, 245);
-doc.roundedRect(14, afterY, pageW - 28, 20, 2, 2, 'F');
+doc.roundedRect(14, afterY, pageW - 28, custSummaryH, 2, 2, 'F');
 doc.setDrawColor(...hdrColor); doc.setLineWidth(0.3);
-doc.roundedRect(14, afterY, pageW - 28, 20, 2, 2, 'S');
+doc.roundedRect(14, afterY, pageW - 28, custSummaryH, 2, 2, 'S');
 doc.setFontSize(8); doc.setFont(undefined, 'normal');
-doc.setTextColor(220, 53, 69);
-doc.text(`Total Debit (Sales): ${fmtAmt(totDebit)}`, 20, afterY + 7);
-doc.setTextColor(40, 167, 69);
-doc.text(`Total Credit (Rcvd): ${fmtAmt(totCredit)}`, 20, afterY + 14);
+if (custHasPrior && Math.abs(custOpeningBalance) >= 0.01) {
+  const obSign = custOpeningBalance > 0 ? '+' : '-';
+  doc.setTextColor(30, 80, 160);
+  doc.text(`Opening Balance: ${obSign}${fmtAmt(Math.abs(custOpeningBalance))}`, pageW / 2, afterY + 7, { align: 'center' });
+  doc.setTextColor(220, 53, 69);
+  doc.text(`Period Debit: ${fmtAmt(totDebit)}`, pageW / 4, afterY + 15, { align: 'center' });
+  doc.setTextColor(40, 167, 69);
+  doc.text(`Period Credit: ${fmtAmt(totCredit)}`, (pageW * 3) / 4, afterY + 15, { align: 'center' });
+} else {
+  doc.setTextColor(220, 53, 69);
+  doc.text(`Total Debit (Sales): ${fmtAmt(totDebit)}`, pageW / 4, afterY + 8, { align: 'center' });
+  doc.setTextColor(40, 167, 69);
+  doc.text(`Total Credit (Rcvd): ${fmtAmt(totCredit)}`, (pageW * 3) / 4, afterY + 8, { align: 'center' });
+}
 doc.setTextColor(Math.abs(finalBal) < 0.01 ? 100 : finalBal > 0 ? 220 : 40,
 Math.abs(finalBal) < 0.01 ? 100 : finalBal > 0 ? 53 : 167,
 Math.abs(finalBal) < 0.01 ? 100 : finalBal > 0 ? 69 : 69);
@@ -2780,7 +2873,7 @@ doc.setFont(undefined, 'bold');
 const balStr = Math.abs(finalBal) < 0.01 ? 'SETTLED'
 : finalBal > 0 ? `Outstanding Due: ${fmtAmt(finalBal)}`
 : `Overpaid by: ${fmtAmt(Math.abs(finalBal))}`;
-doc.text(balStr, 110, afterY + 10.5);
+doc.text(balStr, pageW / 2, afterY + (custHasPrior && Math.abs(custOpeningBalance) >= 0.01 ? 23 : 15), { align: 'center' });
 }
 } else {
 doc.setFont(undefined, 'normal'); doc.setFontSize(10); doc.setTextColor(150);
@@ -2875,7 +2968,7 @@ const SarimChart = (() => {
     if (!_bodyTip || !_bodyTip.isConnected) {
       _bodyTip = document.createElement('div');
       _bodyTip.className = 'sc-tooltip';
-      _bodyTip.style.cssText = 'display:none;position:fixed;pointer-events:none;z-index:9999;';
+      _bodyTip.style.cssText = 'display:none;position:fixed;pointer-events:none;z-index:10002;';
       document.body.appendChild(_bodyTip);
     }
     return _bodyTip;
@@ -4640,10 +4733,10 @@ saveFirestoreStats();
 const originalOpenDataMenu = window.openDataMenu;
 window.openDataMenu = function() {
 if (typeof updateSyncButton === 'function') updateSyncButton();
-if (typeof originalOpenDataMenu === 'function') {
+if (typeof performOneClickSync === 'function') {
+performOneClickSync().catch(e => console.error('[openDataMenu] sync error:', e));
+} else if (typeof originalOpenDataMenu === 'function') {
 originalOpenDataMenu();
-} else {
-document.getElementById('dataMenuOverlay').style.display = 'flex';
 }
 };
 const DeltaSync = {
@@ -5010,11 +5103,22 @@ const UUIDSyncRegistry = (() => {
   function skipDownload(col, id) {
     const sid = String(id);
 
+    // Already downloaded this session — skip
     const dn = _downloaded.get(col);
     if (dn && dn.has(sid)) return true;
 
+    // During any restore/full-download pass, never block on shard
     if (_newDeviceRestore) return false;
-    if (_isLocalOrigin(sid)) return true;
+
+    // For local-origin records: only skip if the record is NOT dirty (i.e. hasn't
+    // been modified locally since last upload). If it's dirty the cloud may have
+    // a newer version pushed from another device, so we must not skip it.
+    if (_isLocalOrigin(sid)) {
+      // If the record is flagged dirty in DeltaSync, let mergeArrays decide via
+      // compareRecordVersions — don't short-circuit here
+      if (typeof DeltaSync !== 'undefined' && DeltaSync.isDirtyId(col, sid)) return false;
+      return true;
+    }
     return false;
   }
 
@@ -5548,12 +5652,6 @@ const repSales = ensureArray(await sqliteStore.get('rep_sales'));
   }
   return revertedCount;
 }
-async function updateMfgPieChart() {
-await updateMfgCharts();
-}
-async function updateCustomerPieChart() {
-await updateCustomerCharts();
-}
 async function updateCompositionChart() {
 const _sdEl = document.getElementById('sellerSelect');
 if (_sdEl && _sdEl.value === 'COMBINED') {
@@ -5907,7 +6005,7 @@ stats.all.q += (item.net || 0); stats.all.p += (item.profit || 0); stats.all.c +
 stats.all.v += (item.totalSale || 0); stats.all.fu += (item.formulaUnits || 0); stats.all.fc += (item.formulaCost || 0);
 });
 const histMode = (currentProductionView === 'store') ? 'day' : (currentOverviewMode || 'day');
-const pageData = sortedDb.filter(item => {
+const filteredProduction = sortedDb.filter(item => {
 if (!item.date) return true;
 const [rowY, rowM, rowD] = item.date.split('-').map(Number);
 const rowDateObj = new Date(rowY, rowM - 1, rowD);
@@ -5918,22 +6016,13 @@ if (histMode === 'month') return rowY === sYear && rowM === sMonth;
 if (histMode === 'year') return rowY === sYear;
 return true;
 });
-const validPage = 1;
-const totalPages = 1;
-const totalItems = pageData.length;
-const cacheData = {
-pageData, stats, selectedDate, totalPages, totalItems, validPage
-};
-renderProductionFromCache(cacheData);
-}
-async function renderProductionFromCache(cached) {
-const { pageData, stats, selectedDate, totalPages, totalItems, validPage } = cached;
+const totalItems = filteredProduction.length;
 const histContainer = document.getElementById('prodHistoryList');
 if (totalItems === 0) {
 histContainer.replaceChildren(Object.assign(document.createElement('p'), {textContent:'No records found for this selection.',style:'text-align:center;color:var(--text-muted);width:100%;font-size:0.85rem'}));
 } else {
 const fragment = document.createDocumentFragment();
-pageData.forEach(async item => {
+filteredProduction.forEach(async item => {
 const isSelected = item.date === selectedDate;
 const highlightClass = isSelected ? 'highlight-card' : '';
 const dateDisplay = isSelected ? `${formatDisplayDate(item.date)} (Selected)` : formatDisplayDate(item.date);
@@ -5962,9 +6051,11 @@ div.innerHTML = `
 ${currentProductionView === 'combined' ? `<span class="store-badge ${storeBadgeClass}">${esc(storeLabel)}</span>` : ''}
 ${returnBadge}
 ${item.isMerged ? '' : paymentBadge}
-<h4>${dateDisplay} @ ${esc(item.time || '')}${mergedBadge}</h4>
-${item.managedBy ? `<span style="display:inline-flex;align-items:center;gap:4px;margin:2px 0 5px;padding:2px 9px;font-size:0.65rem;font-weight:700;letter-spacing:0.04em;color:var(--warning);background:rgba(255,179,0,0.10);border:1px solid rgba(255,179,0,0.28);border-radius:999px;">${esc(item.managedBy)}</span><br>` : ''}
-${item.createdBy ? `${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(item) : ''}<br>` : ''}
+<div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-bottom:4px;">
+<h4 style="margin:0;">${dateDisplay} @ ${esc(item.time || '')}${mergedBadge}</h4>
+${item.managedBy ? `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 9px;font-size:0.65rem;font-weight:700;letter-spacing:0.04em;color:var(--warning);background:rgba(255,179,0,0.10);border:1px solid rgba(255,179,0,0.28);border-radius:999px;">${esc(item.managedBy)}</span>` : ''}
+${item.createdBy && typeof _creatorBadgeHtml === 'function' ? _creatorBadgeHtml(item) : ''}
+</div>
 ${item.isReturn ? `<p style="color:var(--accent-emerald); font-size:0.75rem; font-style:italic;">${item.isMerged ? 'Merged returns by' : 'Returned by'} ${esc(item.returnedBy || 'Representative')}</p>` : ''}
 <p><span>Net Weight:</span> <span class="qty-val">${safeValue(item.net).toFixed(2)} kg</span></p>
 <p><span>Cost Price:</span> <span class="cost-val">${safeValue(item.cp).toFixed(2)}/kg</span></p>
@@ -6050,37 +6141,7 @@ const tbody = document.getElementById('entity-table-body');
 const filterInput = document.getElementById('entity-list-filter');
 const filter = filterInput ? String(filterInput.value).toLowerCase() : '';
 if (!tbody) return;
-try {
-const freshEntities = await sqliteStore.get('payment_entities', []);
-if (Array.isArray(freshEntities)) {
-const entityMap = new Map(freshEntities.map(e => [e.id, e]));
-if (Array.isArray(paymentEntities)) {
-paymentEntities.forEach(e => {
-if (!entityMap.has(e.id)) {
-entityMap.set(e.id, e);
-}
-});
-}
-const refreshedEntities = Array.from(entityMap.values());
-await sqliteStore.set('payment_entities', refreshedEntities);
-}
-const freshTransactions = await sqliteStore.get('payment_transactions', []);
-if (Array.isArray(freshTransactions)) {
-const txMap = new Map(freshTransactions.map(t => [t.id, t]));
-if (Array.isArray(paymentTransactions)) {
-paymentTransactions.forEach(t => {
-if (!txMap.has(t.id)) {
-txMap.set(t.id, t);
-}
-});
-}
-const mergedTx = Array.from(txMap.values());
-await sqliteStore.set('payment_transactions', mergedTx);
-}
-} catch (error) {
-console.error('Payment transaction failed.', _safeErr(error));
-showToast('Payment transaction failed.', 'error');
-}
+
 
 try {
 const _freshInv = await sqliteStore.get('factory_inventory_data', []);
@@ -6105,42 +6166,16 @@ const balance = balances[entity.id] || 0;
 if (balance > 0) totalPayables += balance;
 else totalReceivables += Math.abs(balance);
 });
-const pageEntities = matchedEntities;
-const validPage = 1;
-const totalPages = 1;
 const totalItems = matchedEntities.length;
-const startIndex = 0;
-const endIndex = matchedEntities.length;
-const entitiesData = {
-pageEntities,
-balances,
-totalReceivables,
-totalPayables,
-totalItems,
-totalPages,
-validPage
-};
-if (entitiesData && entitiesData.pageEntities) {
-renderEntitiesFromCache(entitiesData, tbody);
-} else {
-tbody.innerHTML = `<tr><td class="u-text-center u-text-danger" colspan="4" >Failed to load entity data</td></tr>`;
-}
-}
-function renderEntitiesFromCache(data, tbody) {
-if (!data) {
-tbody.innerHTML = `<tr><td class="u-text-center u-text-danger" colspan="4" >Error loading entities</td></tr>`;
-return;
-}
-const { pageEntities, balances, totalReceivables, totalPayables, totalItems, totalPages, validPage } = data;
-if (!pageEntities || !Array.isArray(pageEntities) || !balances) {
-tbody.innerHTML = `<tr><td class="u-text-center u-text-danger" colspan="4" >Invalid entity data</td></tr>`;
+if (!matchedEntities || !Array.isArray(matchedEntities) || !balances) {
+tbody.innerHTML = `<tr><td class="u-text-center u-text-danger" colspan="3" >Invalid entity data</td></tr>`;
 return;
 }
 if (totalItems === 0) {
-tbody.replaceChildren(Object.assign(document.createElement('tr'), {innerHTML:'<td colspan="4" style="text-align:center;padding:15px;color:var(--text-muted)">No entities found</td>'}));
+tbody.replaceChildren(Object.assign(document.createElement('tr'), {innerHTML:'<td colspan="3" style="text-align:center;padding:15px;color:var(--text-muted)">No entities found</td>'}));
 } else {
 const fragment = document.createDocumentFragment();
-pageEntities.forEach(entity => {
+matchedEntities.forEach(entity => {
 const safeName = String(entity.name || 'Unknown Entity');
 const balance = balances[entity.id] || 0;
 let balanceHtml = '';
@@ -6152,23 +6187,14 @@ balanceHtml = `<span class="u-text-emerald u-fw-800" >Receivable: ${fmtAmt(Math.
 balanceHtml = `<span class="u-text-muted" >Settled</span>`;
 }
 const tr = document.createElement('tr');
-const safeNameForClick = safeName.replace(/'/g, "\\'");
+tr.style.cursor = 'pointer';
 tr.innerHTML = `
-<td style="text-align:left;">
-<div class="u-fw-700" >${esc(safeName)}</div>
+<td style="text-align:left;" onclick="openEntityDetailsOverlay('${esc(entity.id)}')">
+<div class="u-fw-700">${esc(safeName)}</div>
+<div style="font-size:0.62rem;color:var(--accent);margin-top:3px;cursor:pointer;" onclick="event.stopPropagation(); editEntityBasicInfo('${esc(entity.id)}')">✎ Edit info</div>
 </td>
-<td style="text-align:right;">${balanceHtml}</td>
+<td style="text-align:right; cursor:pointer;" onclick="openEntityDetailsOverlay('${esc(entity.id)}')">${balanceHtml}</td>
 <td style="text-align:right; font-size:0.75rem;">${phoneActionHTML(entity.phone)}</td>
-<td class="u-text-center" >
-<button class="btn-theme" style="padding:4px 12px; font-size:0.75rem; border-radius:999px; margin-right: 5px;"
-onclick="editEntityBasicInfo('${esc(entity.id)}')" title="Edit entity details">
-Edit
-</button>
-<button class="btn-theme" style="padding:4px 12px; font-size:0.75rem; border-radius:999px; background: var(--accent); color: white; border:none;"
-onclick="openEntityDetailsOverlay('${esc(entity.id)}')" title="View transactions">
-Transactions
-</button>
-</td>
 `;
 fragment.appendChild(tr);
 });
@@ -6308,7 +6334,7 @@ async function promptVerifiedBackupPassword({ title = 'Confirm Password', subtit
   if (!currentUser) return null;
   return new Promise((resolve) => {
     const modal = document.createElement('div');
-    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;z-index:200001;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;z-index:10300;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);';
     modal.innerHTML = `
     <div class="liquid-card" style="max-width:370px;width:92%;padding:28px 24px;text-align:center;">
       <div style="font-size:1.6rem;margin-bottom:8px;">🔐</div>
@@ -6459,7 +6485,7 @@ let decPassword = null;
 if (!decPassword) {
 decPassword = await new Promise((resolve) => {
 const modal = document.createElement('div');
-modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;z-index:20000;';
+modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;z-index:10300;';
 modal.innerHTML = `
 <div class="liquid-card" style="max-width:360px;width:90%;padding:30px;text-align:center;">
 <h3 style="margin:0 0 8px 0;color:var(--text-main);">Enter Password to Decrypt</h3>
@@ -7111,7 +7137,7 @@ if (selectedTab) {
 selectedTab.classList.remove('hidden');
 void selectedTab.offsetHeight;
 }
-const tabButtons = document.querySelectorAll('.tab-btn');
+const tabButtons = document.querySelectorAll('.sidebar-nav-btn');
 tabButtons.forEach((btn) => {
 const onclickVal = btn.getAttribute('onclick') || '';
 btn.classList.toggle('active', onclickVal.includes("'" + tab + "'") || onclickVal.includes('"' + tab + '"'));
@@ -7155,6 +7181,7 @@ initFactoryTab();
 'payments': async () => {
 await syncPaymentsTab();
 await refreshPaymentTab();
+setTimeout(() => { if (typeof renderUnifiedTable === 'function') renderUnifiedTable(1); }, 150);
 },
 'rep': async () => {
 await new Promise(async resolve => {
@@ -7179,7 +7206,6 @@ console.warn('[showTab] tab load error:', e && e.message || e);
 }, 50);
 }
 function handleRepTabUI() {
-const repHeader = document.getElementById('rep-header');
 const adminControls = document.getElementById('admin-rep-controls');
 const adminAnalytics = document.getElementById('admin-rep-analytics');
 const newTransCard = document.getElementById('rep-new-transaction-card');
@@ -7199,7 +7225,6 @@ const adminDate = document.getElementById('admin-rep-date');
 if (mainDate && adminDate) {
 adminDate.value = mainDate.value;
 }
-if (repHeader) repHeader.style.display = 'none';
 if (newTransCard) newTransCard.style.display = 'none';
 if (typeof calculateRepAnalytics === 'function') {
 calculateRepAnalytics();
@@ -7220,7 +7245,6 @@ if (adminControls) adminControls.style.display = 'none';
 if (adminAnalytics) adminAnalytics.style.display = 'none';
 const manageRepsBtnRep = document.getElementById('btn-manage-reps');
 if (manageRepsBtnRep) manageRepsBtnRep.style.display = 'none';
-if (repHeader) repHeader.style.display = 'flex';
 if (newTransCard) newTransCard.style.display = 'block';
 if (typeof renderRepCustomerTable === 'function') {
 renderRepCustomerTable();
@@ -8492,20 +8516,7 @@ if (_isAdminColl) return true;
 if (_isRepLinked && (item.paymentType === 'COLLECTION' || item.paymentType === 'PARTIAL_PAYMENT')) return true;
 return item.paymentType !== 'PARTIAL_PAYMENT' && item.paymentType !== 'COLLECTION';
 });
-const pageData = displayData;
-const validPage = 1;
-const totalPages = 1;
 const totalItems = displayData.length;
-const cacheData = {
-pageData, stats, selectedDate, totalPages, totalItems, validPage
-};
-renderSalesFromCache(cacheData);
-}
-async function renderSalesFromCache(cached) {
-if (!cached) {
-return;
-}
-const { pageData, stats, selectedDate, totalPages, totalItems, validPage } = cached;
 const updateStatDisplay = (prefix, stat) => {
 const qtyEl = document.getElementById(`cust-${prefix}-qty`);
 const valueEl = document.getElementById(`cust-${prefix}-value`);
@@ -8529,7 +8540,7 @@ if (totalItems === 0) {
 histContainer.replaceChildren(Object.assign(document.createElement('p'), {textContent:'No sales found.',style:'text-align:center;color:var(--text-muted);width:100%;font-size:0.85rem'}));
 } else {
 const fragment = document.createDocumentFragment();
-pageData.forEach(async item => {
+displayData.forEach(async item => {
 const isSelected = item.date === selectedDate;
 const highlightClass = isSelected ? 'highlight-card' : '';
 const dateDisplay = isSelected ? `${formatDisplayDate(item.date)} (Selected)` : formatDisplayDate(item.date);
@@ -8583,8 +8594,11 @@ ${deleteBtnHtml}
 } else if (isAdminCollItem) {
 card.innerHTML = `
 <div class="payment-badge collection" style="background:rgba(5,150,105,0.15);color:var(--accent-emerald);border:1px solid rgba(5,150,105,0.3);">COLLECTION</div>
-<div class="customer-name" style="margin-top:12px;">${esc(item.customerName)} ${mergedBadge}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(item) : ''}</div>
-<h4 style="margin-top:5px;font-size:0.85rem;color:var(--text-muted);">${dateDisplay}</h4>
+<div class="customer-name" style="margin-top:12px;">${esc(item.customerName)} ${mergedBadge}</div>
+<div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-top:5px;margin-bottom:2px;">
+<h4 style="margin:0;font-size:0.85rem;color:var(--text-muted);">${dateDisplay}</h4>
+${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(item) : ''}
+</div>
 <hr>
 <p><span>Amount Collected:</span> <span class="profit-val">${fmtAmt(safeValue(item.totalValue))}</span></p>
 ${deleteBtnHtml}
@@ -8592,8 +8606,11 @@ ${deleteBtnHtml}
 } else {
 card.innerHTML = `
 <div class="payment-badge ${badgeClass}">${esc(badgeText)}</div>
-<div class="customer-name" style="margin-top: 12px;">${esc(item.customerName)} ${repBadge} ${mergedBadge}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(item) : ''}</div>
-<h4 style="margin-top: 5px; font-size: 0.85rem; color: var(--text-muted);">${dateDisplay}</h4>
+<div class="customer-name" style="margin-top: 12px;">${esc(item.customerName)} ${repBadge} ${mergedBadge}</div>
+<div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-top:5px;margin-bottom:2px;">
+<h4 style="margin:0;font-size:0.85rem;color:var(--text-muted);">${dateDisplay}</h4>
+${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(item) : ''}
+</div>
 <div class="supply-tag ${supplyTagClass}">Supply: ${supplyTagText}</div>
 <hr>
 <p><span>Quantity:</span> <span class="qty-val">${safeValue(item.quantity).toFixed(2)} kg</span></p>
@@ -9786,33 +9803,22 @@ card.style.display = 'none';
 });
 }
 async function openEntityManagement() {
-const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
-const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
-const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
 editingEntityId = null;
-document.getElementById('entityName').value = '';
-document.getElementById('entityPhone').value = '';
-document.getElementById('entityWallet').value = '';
+const _en = document.getElementById('entityName'); if (_en) _en.value = '';
+const _ep = document.getElementById('entityPhone'); if (_ep) _ep.value = '';
+const _ew = document.getElementById('entityWallet'); if (_ew) _ew.value = '';
 const _entMT1 = document.getElementById('entityManagementModalTitle'); if (_entMT1) _entMT1.innerText = 'Add New Entity';
-requestAnimationFrame(() => {
-document.body.style.overflow = 'hidden';
-document.documentElement.style.overflow = 'hidden';
-document.getElementById('entityManagementOverlay').style.display = 'flex';
-});
+const _delBtn = document.getElementById('deleteEntityBtn'); if (_delBtn) { _delBtn.classList.add('u-hidden'); _delBtn.style.display = 'none'; }
+if (typeof openStandaloneScreen === 'function') openStandaloneScreen('add-entity-screen');
 }
 async function closeEntityManagement() {
+if (typeof closeStandaloneScreen === 'function') closeStandaloneScreen('add-entity-screen');
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
-requestAnimationFrame(() => {
-document.body.style.overflow = '';
-document.documentElement.style.overflow = '';
-const _entMOClose = document.getElementById('entityManagementOverlay');
-if (_entMOClose) { _entMOClose.style.display = 'none'; _entMOClose.style.zIndex = ''; }
-const detailsOverlay = document.getElementById('entityDetailsOverlay');
-if (detailsOverlay && detailsOverlay.style.display === 'flex' && currentEntityId) {
+const detailsScreen = document.getElementById('entity-details-screen');
+if (detailsScreen && detailsScreen.style.display !== 'none' && currentEntityId) {
 const entity = paymentEntities.find(e => String(e.id) === String(currentEntityId));
 if (entity) renderEntityOverlayContent(entity);
 }
-});
 }
 async function saveEntity() {
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
@@ -9892,11 +9898,7 @@ document.getElementById('entityName').value = entity.name;
 document.getElementById('entityPhone').value = entity.phone || '';
 document.getElementById('entityWallet').value = entity.wallet || '';
 const _entMT2 = document.getElementById('entityManagementModalTitle'); if (_entMT2) _entMT2.innerText = 'Edit Entity Info';
-requestAnimationFrame(() => {
-document.body.style.overflow = 'hidden';
-document.documentElement.style.overflow = 'hidden';
-const _entMO = document.getElementById('entityManagementOverlay'); if (_entMO) _entMO.style.display = 'flex';
-});
+if (typeof openStandaloneScreen === 'function') openStandaloneScreen('add-entity-screen');
 }
 }
 async function refreshPaymentTab(force = false) {
@@ -10001,7 +10003,7 @@ try { calculatePaymentSummaries(); } catch (e) {
 showToast('Calculation failed.', 'error');
 console.error('calculatePaymentSummaries error:', _safeErr(e));
 }
-try { renderUnifiedTable(); } catch (e) {
+try { await renderUnifiedTable(); } catch (e) {
 showToast('Calculation failed.', 'error');
 console.error('renderUnifiedTable error:', _safeErr(e));
 }
@@ -10036,8 +10038,11 @@ card.className = `card liquid-card${isSettled ? ' is-settled-record' : ''}`;
 if (transaction.date) card.setAttribute('data-date', transaction.date);
 card.innerHTML = `
 <span class="transaction-badge ${badgeClass}">${badgeText}</span>
-<h4>${formatDisplayDate(transaction.date)} @ ${esc(transaction.time || 'N/A')}</h4>
-<div class="customer-name">${esc(entityName)}${mergedBadge}${settledBadge}${creatorBadge}</div>
+<div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-bottom:4px;">
+<h4 style="margin:0;">${formatDisplayDate(transaction.date)} @ ${esc(transaction.time || 'N/A')}</h4>
+${creatorBadge}
+</div>
+<div class="customer-name">${esc(entityName)}${mergedBadge}${settledBadge}</div>
 <p><span>Type:</span> <span>${esc(entityType)}</span></p>
 <p><span>Description:</span> <span>${esc(transaction.description || 'No description')}</span></p>
 <hr>
@@ -10775,38 +10780,9 @@ filteredExpenses = filteredExpenses.filter(e => e.category === categoryFilter);
 const periodTotal = filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
 const allTimeTotal = expenseRecords.reduce((sum, e) => sum + e.amount, 0);
 filteredExpenses.sort((a, b) => new Date(b.date) - new Date(a.date));
-const pageExpenses = filteredExpenses;
-const validPage = 1;
-const totalPages = 1;
 const totalItems = filteredExpenses.length;
-const startIndex = 0;
-const endIndex = filteredExpenses.length;
-const expensesData = {
-pageExpenses,
-periodTotal,
-allTimeTotal,
-totalItems,
-totalPages,
-validPage
-};
-if (expensesData && expensesData.pageExpenses) {
-renderExpensesFromCache(expensesData, tbody, totalEl, totalAllEl);
-} else {
-tbody.innerHTML = `<tr><td class="u-empty-state-danger" colspan="5" >Failed to load expense data</td></tr>`;
-if (totalEl) totalEl.textContent = '0.00';
-if (totalAllEl) totalAllEl.textContent = '0.00';
-}
-}
-function renderExpensesFromCache(data, tbody, totalEl, totalAllEl) {
-if (!data) {
-tbody.innerHTML = `<tr><td class="u-empty-state-danger" colspan="5" >Error loading expenses</td></tr>`;
-if (totalEl) totalEl.textContent = '0.00';
-if (totalAllEl) totalAllEl.textContent = '0.00';
-return;
-}
-const { pageExpenses, periodTotal, allTimeTotal, totalItems, totalPages, validPage } = data;
-if (!pageExpenses || !Array.isArray(pageExpenses)) {
-tbody.innerHTML = `<tr><td class="u-empty-state-danger" colspan="5" >Invalid expense data</td></tr>`;
+if (!filteredExpenses || !Array.isArray(filteredExpenses)) {
+tbody.innerHTML = `<tr><td class="u-empty-state-danger" colspan="4" >Invalid expense data</td></tr>`;
 if (totalEl) totalEl.textContent = '0.00';
 if (totalAllEl) totalAllEl.textContent = '0.00';
 return;
@@ -10816,14 +10792,14 @@ if (totalAllEl) totalAllEl.textContent = `${fmtAmt(allTimeTotal)}`;
 if (totalItems === 0) {
 tbody.innerHTML = `
 <tr>
-<td class="u-empty-state-md" colspan="5" >
+<td class="u-empty-state-md" colspan="4" >
 No expenses found for selected period
 </td>
 </tr>`;
 return;
 }
 const fragment = document.createDocumentFragment();
-pageExpenses.forEach(expense => {
+filteredExpenses.forEach(expense => {
 const categoryColor = getCategoryColor(expense.category);
 const categoryLabel = getCategoryLabel(expense.category);
 const formattedDate = formatExpenseDate(expense.date);
@@ -11120,48 +11096,16 @@ if (a.type === 'entity' && b.type !== 'entity') return 1;
 if (a.type !== 'entity' && b.type === 'entity') return -1;
 return b.date - a.date;
 });
-const pageRows = rows;
-const validPage = 1;
-const totalPages = 1;
 const totalItems = rows.length;
-const startIndex = 0;
-const endIndex = rows.length;
-const unifiedData = {
-rows: pageRows,
-totalAmount,
-totalReceivables,
-totalPayables,
-totalSupplierPayables,
-totalEntityPayables,
-totalExpenses,
-viewMode,
-totalItems,
-page,
-totalPages
-};
-if (unifiedData && unifiedData.rows) {
-renderUnifiedFromCache(unifiedData, tbody, totalSpan, footerLabel, summaryDiv);
-} else {
-tbody.innerHTML = `<tr><td class="u-empty-state-danger" colspan="5" >Failed to load records</td></tr>`;
-if (totalSpan) totalSpan.textContent = '0.00';
-}
-}
-function renderUnifiedFromCache(data, tbody, totalSpan, footerLabel, summaryDiv) {
-if (!data) {
-tbody.innerHTML = `<tr><td class="u-empty-state-danger" colspan="5" >Error loading records</td></tr>`;
-if (totalSpan) totalSpan.textContent = '0.00';
-return;
-}
-const { rows, totalAmount, totalReceivables, totalPayables, totalSupplierPayables, totalEntityPayables, totalExpenses, viewMode, totalItems, page, totalPages } = data;
 if (!rows || !Array.isArray(rows)) {
-tbody.innerHTML = `<tr><td class="u-empty-state-danger" colspan="5" >Invalid data format</td></tr>`;
+tbody.innerHTML = `<tr><td class="u-empty-state-danger" colspan="4" >Invalid data format</td></tr>`;
 if (totalSpan) totalSpan.textContent = '0.00';
 return;
 }
 if (rows.length === 0) {
 tbody.innerHTML = `
 <tr>
-<td class="u-empty-state-md" colspan="5" >
+<td class="u-empty-state-md" colspan="4" >
 No records found matching your filters
 </td>
 </tr>`;
@@ -11174,9 +11118,10 @@ tr.style.cssText = 'border-bottom: 1px solid var(--glass-border); transition: ba
 tr.onmouseover = function() { this.style.background = 'var(--highlight-bg)'; };
 tr.onmouseout = function() { this.style.background = row.type === 'entity' ? 'var(--input-bg)' : 'transparent'; };
 if (row.type === 'transaction') {
+tr.onclick = function(e) { if (!e.target.closest('a,button')) openExpenseEntityDetails(row.id); };
 tr.innerHTML = `
 <td style="padding: 8px 4px; font-size: 0.7rem; white-space: nowrap;">${row.dateStr}</td>
-<td style="padding: 8px 4px; font-weight: 600; font-size: 0.8rem;">
+<td style="padding: 8px 4px; font-weight: 600; font-size: 0.8rem; cursor:pointer;" onclick="openExpenseEntityDetails('${esc(row.id)}')">
 ${esc(row.name)}
 <div style="display: inline-block; margin-left: 6px;">
 <span style="background: ${row.typeLabel === 'EXPENSE' ? 'var(--warning)' : 'var(--accent)'}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.55rem; font-weight: 700;">
@@ -11187,19 +11132,15 @@ ${row.typeLabel}
 <td style="padding: 8px 4px; font-size: 0.7rem; color: var(--text-muted);">${phoneActionHTML(row.contact)}</td>
 <td style="padding: 8px 4px; text-align: right; font-weight: 700; color: ${row.color}; white-space: nowrap; font-size: 0.75rem;">
 ${row.amountStr}
-</td>
-<td style="padding: 6px 4px; text-align: center;">
-<button class="tbl-action-btn" onclick="openExpenseEntityDetails('${esc(row.id)}')">
-Edit
-</button>
 </td>`;
 } else {
 tr.style.background = 'var(--input-bg)';
+tr.onclick = function(e) { if (!e.target.closest('a,button')) openEntityDetailsOverlay(row.id); };
 tr.innerHTML = `
 <td style="padding: 8px 4px; font-size: 0.7rem; white-space: nowrap; color: var(--text-main);">
 ${row.dateStr}
 </td>
-<td style="padding: 8px 4px; font-weight: 700; font-size: 0.8rem; color: ${row.nameColor};">
+<td style="padding: 8px 4px; font-weight: 700; font-size: 0.8rem; color: ${row.nameColor}; cursor:pointer;" onclick="openEntityDetailsOverlay('${esc(row.id)}')">
 ${esc(row.name)}
 <div style="font-size: 0.6rem; margin-top: 2px;">
 <span style="background: ${row.amountColor}; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.55rem; font-weight: 600;">
@@ -11210,16 +11151,18 @@ ${row.balanceLabel}
 <td style="padding: 8px 4px; font-size: 0.7rem; color: var(--text-muted);">${phoneActionHTML(row.contact)}</td>
 <td style="padding: 8px 4px; text-align: right; font-weight: 700; color: ${row.amountColor}; white-space: nowrap; font-size: 0.75rem;">
 ${row.amountStr}
-</td>
-<td style="padding: 6px 4px; text-align: center;">
-<button class="tbl-action-btn" onclick="openEntityDetailsOverlay('${esc(row.id)}')">
-Edit
-</button>
 </td>`;
 }
 return tr;
 }
+const _unifiedContainer = document.getElementById('unified-table-container');
+const _paymentsTab = document.getElementById('tab-payments');
+const _tabHidden = _paymentsTab && _paymentsTab.classList.contains('hidden');
+if (_tabHidden && _unifiedContainer) {
+
+} else {
 GNDVirtualScroll.mount('unified-table-container', rows, buildUnifiedRow, tbody);
+}
 if (viewMode === 'entities') {
 if (footerLabel) footerLabel.textContent = 'Net Balance:';
 if (totalSpan) {
@@ -11463,14 +11406,14 @@ else if (txt === 'PAYOR') data.cell.styles.textColor = [40,167,69];
 margin: { left: 14, right: 14 }
 });
 const afterY = doc.lastAutoTable.finalY + 6;
-if (afterY < 275) {
+if (afterY < 265) {
 doc.setFontSize(8); doc.setFont(undefined,'normal'); doc.setTextColor(100,100,100);
 doc.text(
 `Total Payables: ${fmtAmt(totPayable)} | Total Receivables: ${fmtAmt(totReceivable)} | Net Position: ${fmtAmt(Math.abs(totReceivable - totPayable))} ${totReceivable > totPayable ? '(IN OUR FAVOR)' : '(NET PAYABLE)'}`,
 14, afterY
 );
 const hasMergedEntries = Object.keys(entityMergedInfo).length > 0;
-if (hasMergedEntries && afterY + 7 < 280) {
+if (hasMergedEntries && afterY + 7 < 272) {
 doc.setFillColor(245, 235, 255);
 doc.roundedRect(14, afterY + 6, pageW - 28, 9, 1.5, 1.5, 'F');
 doc.setFontSize(7.5); doc.setFont(undefined,'bold'); doc.setTextColor(126, 34, 206);
@@ -11661,20 +11604,12 @@ if (qDesc) qDesc.value = '';
 const rangeEl = document.getElementById('expenseOverlayRange');
 if (rangeEl) rangeEl.value = 'all';
 requestAnimationFrame(() => {
-document.body.style.overflow = 'hidden';
-document.documentElement.style.overflow = 'hidden';
-const overlayEl = document.getElementById('expenseDetailsOverlay');
-if (overlayEl) overlayEl.style.display = 'flex';
+if (typeof openStandaloneScreen === 'function') openStandaloneScreen('expense-details-screen');
 });
 renderExpenseOverlayContent();
 }
 function closeExpenseDetailsOverlay() {
-requestAnimationFrame(() => {
-document.body.style.overflow = '';
-document.documentElement.style.overflow = '';
-const overlayEl = document.getElementById('expenseDetailsOverlay');
-if (overlayEl) overlayEl.style.display = 'none';
-});
+if (typeof closeStandaloneScreen === 'function') closeStandaloneScreen('expense-details-screen');
 currentExpenseOverlayName = null;
 refreshPaymentTab();
 }
@@ -11762,8 +11697,8 @@ async function deleteExpenseFromOverlay(expenseId) {
 const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
 await deleteExpense(expenseId);
-const overlayEl = document.getElementById('expenseDetailsOverlay');
-if (overlayEl && overlayEl.style.display === 'flex' && currentExpenseOverlayName) {
+const overlayEl = document.getElementById('expense-details-screen');
+if (overlayEl && overlayEl.style.display !== 'none' && currentExpenseOverlayName) {
 renderExpenseOverlayContent();
 }
 }
@@ -12198,31 +12133,13 @@ async function openDataMenu() {
 if (appMode === 'rep') {
 return;
 }
-const adminSection = document.getElementById('admin-controls-section');
-if (adminSection) {
-adminSection.style.display = 'block';
-}
-
 if (typeof updateSyncButton === 'function') updateSyncButton();
-requestAnimationFrame(() => {
-document.body.style.overflow = 'hidden';
-document.documentElement.style.overflow = 'hidden';
-document.getElementById('dataMenuOverlay').style.display = 'flex';
-});
-const lastSync = await sqliteStore.get('last_synced');
-const display = document.getElementById('lastSyncDisplay');
-if (display) {
-display.textContent = lastSync ?
-`Last Cloud Sync: ${new Date(lastSync).toLocaleString()}` :
-'Not synced yet';
+if (typeof performOneClickSync === 'function') {
+performOneClickSync().catch(e => console.error('[openDataMenu] sync error:', e));
 }
 }
 function closeDataMenu() {
-requestAnimationFrame(() => {
-document.body.style.overflow = '';
-document.documentElement.style.overflow = '';
-document.getElementById('dataMenuOverlay').style.display = 'none';
-});
+
 }
 const _recoveredThisSession = new Set();
 async function purgeRecoveredId(id, collectionName, cleanRecord, newId) {
@@ -12442,24 +12359,61 @@ const RECYCLE_RECOVERABLE_COLLECTIONS = new Set([
   'sales_customers','rep_customers','entities'
 ]);
 async function openRecycleBin() {
-const deletionRecords = ensureArray(await sqliteStore.get('deletion_records'));
-const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
-  closeDataMenu();
-  requestAnimationFrame(() => {
-    document.body.style.overflow = 'hidden';
-    document.documentElement.style.overflow = 'hidden';
-    const overlay = document.getElementById('recycleBinOverlay');
-    if (overlay) overlay.style.display = 'flex';
-  });
-  await renderRecycleBin();
+if (typeof openStandaloneScreen === 'function') openStandaloneScreen('recycle-bin-screen');
+// Determine which filter to apply based on active app mode
+const MODE_TO_RECYCLE_FILTER = {
+  'production': 'tab_production',
+  'factory':    'tab_factory',
+  'rep':        'tab_rep',
+  'sales':      'tab_sales',
+  'userrole':   null, // determined by assigned tabs
+  'admin':      null, // show all
+};
+const mode = window.appMode || 'admin';
+let defaultFilter = 'all';
+if (mode === 'userrole') {
+  const tabs = window._assignedUserTabs || [];
+  if (tabs.length === 1) {
+    const singleTabMap = {
+      'prod':     'tab_production',
+      'factory':  'tab_factory',
+      'rep':      'tab_rep',
+      'sales':    'tab_sales',
+      'calc':     'tab_calculator',
+      'payments': 'tab_payments',
+    };
+    defaultFilter = singleTabMap[tabs[0]] || 'all';
+  }
+} else {
+  defaultFilter = MODE_TO_RECYCLE_FILTER[mode] || 'all';
+}
+// Update filter dropdown: hide options not relevant to locked mode
+const filterSel = document.getElementById('recycleBinFilter');
+if (filterSel) {
+  const allowedFilters = new Set();
+  allowedFilters.add('all');
+  if (mode === 'admin') {
+    // All options visible
+    Array.from(filterSel.options).forEach(opt => { opt.style.display = ''; });
+  } else if (mode === 'userrole') {
+    const tabs = window._assignedUserTabs || [];
+    const tabToFilter = { prod:'tab_production', factory:'tab_factory', rep:'tab_rep', sales:'tab_sales', calc:'tab_calculator', payments:'tab_payments' };
+    tabs.forEach(t => { if (tabToFilter[t]) allowedFilters.add(tabToFilter[t]); });
+    Array.from(filterSel.options).forEach(opt => {
+      opt.style.display = allowedFilters.has(opt.value) ? '' : 'none';
+    });
+  } else {
+    if (defaultFilter !== 'all') allowedFilters.add(defaultFilter);
+    Array.from(filterSel.options).forEach(opt => {
+      opt.style.display = allowedFilters.has(opt.value) ? '' : 'none';
+    });
+  }
+  filterSel.value = defaultFilter;
+}
+await renderRecycleBin(defaultFilter);
 }
 function closeRecycleBin() {
-  requestAnimationFrame(() => {
-    document.body.style.overflow = '';
-    document.documentElement.style.overflow = '';
-    const overlay = document.getElementById('recycleBinOverlay');
-    if (overlay) overlay.style.display = 'none';
-  });
+if (typeof closeStandaloneScreen === 'function') closeStandaloneScreen('recycle-bin-screen');
 }
 async function renderRecycleBin(filterCollection = 'all') {
   const container = document.getElementById('recycleBinList');
@@ -12641,14 +12595,27 @@ async function renderRecycleBin(filterCollection = 'all') {
           }
         }
       }
-      if (!displayName) {
-        const snap = _captureRecordSnapshot(rec.id, col);
-        if (snap.displayName) {
-          displayName   = snap.displayName;
-          displayDetail = snap.displayDetail;
-          displayAmount = snap.displayAmount;
-        }
-      }
+      // Extract user role / rep badges from snapshot
+      const _snap = rec.snapshot || {};
+      const _rbCreatedBy = _snap.createdBy || rec.createdBy || null;
+      const _rbManagedBy = _snap.managedBy || rec.managedBy || null;
+      const _rbSalesRep  = _snap.salesRep  || rec.salesRep  || null;
+      const _rbCreatorBadge = _rbCreatedBy
+        ? `<span style="display:inline-flex;align-items:center;padding:2px 7px;font-size:0.62rem;font-weight:700;letter-spacing:0.04em;color:#06b6d4;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.30);border-radius:999px;white-space:nowrap;">${esc(_rbCreatedBy)}</span>`
+        : '';
+      const _rbManagedBadge = _rbManagedBy
+        ? `<span style="display:inline-flex;align-items:center;padding:2px 7px;font-size:0.62rem;font-weight:700;letter-spacing:0.04em;color:var(--warning);background:rgba(255,179,0,0.10);border:1px solid rgba(255,179,0,0.28);border-radius:999px;white-space:nowrap;">${esc(_rbManagedBy)}</span>`
+        : '';
+      const _rbRepBadge = (_rbSalesRep && !_rbCreatedBy)
+        ? `<span style="display:inline-flex;align-items:center;padding:2px 7px;font-size:0.62rem;font-weight:700;letter-spacing:0.04em;color:var(--accent);background:rgba(37,99,235,0.10);border:1px solid rgba(37,99,235,0.25);border-radius:999px;white-space:nowrap;">${esc(_rbSalesRep.split(' ')[0])}</span>`
+        : '';
+      const _rbBadgesHtml = [_rbManagedBadge, _rbCreatorBadge, _rbRepBadge].filter(Boolean).join('');
+      // Deleted-by badge: show who deleted this record (role or rep name)
+      const _rbDeletedByRaw = rec.deleted_by || null;
+      const _rbDeletedByBadge = (_rbDeletedByRaw && _rbDeletedByRaw !== 'user')
+        ? `<span style="display:inline-flex;align-items:center;gap:3px;padding:2px 7px;font-size:0.62rem;font-weight:700;letter-spacing:0.04em;color:#f87171;background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.28);border-radius:999px;white-space:nowrap;"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>del by ${esc(_rbDeletedByRaw)}</span>`
+        : '';
+
       const nameHtml = displayName
         ? `<span style="font-size:0.88rem;font-weight:700;color:var(--text-main);">${esc(displayName)}</span>`
         : `<span style="font-size:0.82rem;font-weight:600;color:var(--text-muted);font-style:italic;">${esc(RECYCLE_BIN_COLLECTION_LABELS[col] || col)} — name unavailable</span>`;
@@ -12679,6 +12646,7 @@ async function renderRecycleBin(filterCollection = 'all') {
             ${detailHtml}
             ${syncBadge}
           </div>
+          ${ (_rbBadgesHtml || _rbDeletedByBadge) ? `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-top:4px;margin-bottom:2px;">${_rbBadgesHtml}${_rbDeletedByBadge}</div>` : ''}
           <div style="font-size:0.68rem;color:var(--text-muted);">
             Deleted ${daysAgo === 0 ? 'today' : daysAgo + 'd ago'} · ${deletedDate} · expires in ${expiresIn}d
           </div>
@@ -13310,17 +13278,28 @@ return false;
 }
 }
 window.forceAppModeFromCloud = forceAppModeFromCloud;
+function updateSystemName() {
+const el = document.getElementById('system-name-display');
+if (!el) return;
+if (appMode === 'admin' || !appMode) {
+el.textContent = 'MAHMOOD KHAN';
+} else if (appMode === 'rep') {
+el.textContent = (currentRepProfile || 'Sales Rep').toUpperCase();
+} else if (appMode === 'production') {
+el.textContent = (window._assignedManagerName || 'Production Manager').toUpperCase();
+} else if (appMode === 'factory') {
+el.textContent = (window._assignedManagerName || 'Factory Manager').toUpperCase();
+} else if (appMode === 'userrole') {
+el.textContent = (window._assignedManagerName || 'User').toUpperCase();
+}
+}
 function lockToRepMode() {
-const nav = document.querySelector('.nav-tabs');
-if (nav) nav.style.display = 'none';
+document.querySelectorAll('.sidebar-nav-btn').forEach(btn => {
+if (btn.id !== 'snav-rep') btn.style.display = 'none';
+});
 const cloudMenuBtn = document.getElementById('cloudMenuBtn');
 if (cloudMenuBtn) cloudMenuBtn.style.display = 'none';
-const repHeader = document.getElementById('rep-header');
-if (repHeader) {
-const nameEl = document.getElementById('current-rep-name-display');
-if (nameEl) nameEl.textContent = (currentRepProfile || 'Sales Rep').toUpperCase();
-repHeader.style.display = 'flex';
-}
+updateSystemName();
 ['prod', 'sales', 'calc', 'factory', 'payments'].forEach(t => {
 const el = document.getElementById('tab-' + t);
 if (el) { el.classList.add('hidden'); el.style.display = 'none'; }
@@ -13338,18 +13317,14 @@ if (newTransCard) newTransCard.style.display = 'block';
 if (typeof refreshRepUI === 'function') refreshRepUI();
 }
 function lockToProductionMode() {
-const nav = document.querySelector('.nav-tabs');
-if (nav) nav.style.display = 'none';
+document.querySelectorAll('.sidebar-nav-btn').forEach(btn => {
+if (btn.id !== 'snav-prod') btn.style.display = 'none';
+});
 const cloudMenuBtn = document.getElementById('cloudMenuBtn');
 if (cloudMenuBtn) cloudMenuBtn.style.display = 'none';
 const manageRepsBtn = document.getElementById('btn-manage-reps');
 if (manageRepsBtn) manageRepsBtn.style.display = 'none';
-const prodHeader = document.getElementById('prod-locked-header');
-if (prodHeader) {
-const nameEl = document.getElementById('prod-locked-name-display');
-if (nameEl) nameEl.textContent = (window._assignedManagerName || 'Production Manager').toUpperCase();
-prodHeader.style.display = 'flex';
-}
+updateSystemName();
 ['sales', 'calc', 'factory', 'payments', 'rep'].forEach(t => {
 const el = document.getElementById('tab-' + t);
 if (el) { el.classList.add('hidden'); el.style.display = 'none'; }
@@ -13369,20 +13344,18 @@ const pBlock = document.getElementById('prod-profit-block');
 if (pBlock) pBlock.style.display = 'none';
 const spField = document.getElementById('prod-sale-price-field');
 if (spField) spField.style.display = 'none';
+const dynCost = document.getElementById('dynamic-cost-display');
+if (dynCost) dynCost.style.display = 'none';
 }
 function lockToFactoryMode() {
-const nav = document.querySelector('.nav-tabs');
-if (nav) nav.style.display = 'none';
+document.querySelectorAll('.sidebar-nav-btn').forEach(btn => {
+if (btn.id !== 'snav-factory') btn.style.display = 'none';
+});
 const cloudMenuBtn = document.getElementById('cloudMenuBtn');
 if (cloudMenuBtn) cloudMenuBtn.style.display = 'none';
 const manageRepsBtn = document.getElementById('btn-manage-reps');
 if (manageRepsBtn) manageRepsBtn.style.display = 'none';
-const factoryHeader = document.getElementById('factory-locked-header');
-if (factoryHeader) {
-const nameEl = document.getElementById('factory-locked-name-display');
-if (nameEl) nameEl.textContent = (window._assignedManagerName || 'Factory Manager').toUpperCase();
-factoryHeader.style.display = 'flex';
-}
+updateSystemName();
 ['prod', 'sales', 'calc', 'payments', 'rep'].forEach(t => {
 const el = document.getElementById('tab-' + t);
 if (el) { el.classList.add('hidden'); el.style.display = 'none'; }
@@ -13407,8 +13380,6 @@ const formulaDisplay = document.getElementById('factoryFormulaDisplay');
 if (formulaDisplay) formulaDisplay.style.display = 'none';
 }
 }
-function _showModeBanner(tabLabel, personName, modeClass, icon) {
-}
 function lockToUserRoleMode() {
 const assignedTabs = window._assignedUserTabs || [];
 const userName = window._assignedManagerName || 'User';
@@ -13416,21 +13387,7 @@ const allTabs = ['prod','sales','calc','factory','payments','rep'];
 ['cloudMenuBtn','btn-manage-reps'].forEach(id => {
 const el = document.getElementById(id); if (el) el.style.display = 'none';
 });
-const bannerMap = {
-prod: { headerId:'prod-locked-header', nameId:'prod-locked-name-display' },
-factory: { headerId:'factory-locked-header', nameId:'factory-locked-name-display' },
-sales: { headerId:'sales-locked-header', nameId:'sales-locked-name-display' },
-payments: { headerId:'payments-locked-header', nameId:'payments-locked-name-display' },
-};
-assignedTabs.forEach(t => {
-const b = bannerMap[t]; if (!b) return;
-const hdr = document.getElementById(b.headerId);
-if (hdr) {
-const nm = document.getElementById(b.nameId);
-if (nm) nm.textContent = userName.toUpperCase();
-hdr.style.display = 'flex';
-}
-});
+updateSystemName();
 allTabs.forEach(t => {
 const el = document.getElementById('tab-' + t);
 if (el) { el.classList.add('hidden'); el.style.removeProperty('display'); }
@@ -13445,6 +13402,8 @@ const el = document.getElementById(id); if (el) el.style.display = 'none';
 ['prod-formula-cost-block','prod-profit-block','prod-sale-price-field'].forEach(id => {
 const el = document.getElementById(id); if (el) el.style.display = 'none';
 });
+const dynCostEl = document.getElementById('dynamic-cost-display');
+if (dynCostEl) dynCostEl.style.display = 'none';
 document.querySelectorAll('#tab-prod .section.liquid-card').forEach(sec => {
 if (sec.id !== 'production-entry-section') sec.style.display = 'none';
 });
@@ -13549,7 +13508,7 @@ if (tab === 'rep' || !adminTabs.includes(tab)) {
 if (typeof originalShowTab === 'function') originalShowTab(tab);
 }
 };
-document.querySelectorAll('.tab-btn').forEach(btn => {
+document.querySelectorAll('.sidebar-nav-btn').forEach(btn => {
 btn.style.display = 'none';
 });
 } else if (appMode === 'userrole') {
@@ -13570,15 +13529,12 @@ const _us = document.getElementById('payments-unified-section');
 if (_us) _us.style.display = 'none';
 }
 };
-const btnMap = { PRODUCTION:'prod', SALES:'sales', CALCULATOR:'calc',
-FACTORY:'factory', PAYMENTS:'payments', 'REP SALES':'rep' };
 if (allowedTabs.length <= 1) {
-const nav = document.querySelector('.nav-tabs');
-if (nav) nav.style.display = 'none';
+document.querySelectorAll('.sidebar-nav-btn').forEach(btn => { btn.style.display = 'none'; });
 } else {
-document.querySelectorAll('.tab-btn').forEach(btn => {
-const tid = btnMap[btn.textContent.trim()];
-btn.style.display = (tid && allowedTabs.includes(tid)) ? '' : 'none';
+document.querySelectorAll('.sidebar-nav-btn').forEach(btn => {
+const tid = btn.id.replace('snav-', '');
+btn.style.display = (allowedTabs.includes(tid)) ? '' : 'none';
 });
 }
 window._userRoleAllowedTabs = allowedTabs;
@@ -13591,7 +13547,7 @@ return;
 }
 if (typeof originalShowTabProd === 'function') originalShowTabProd(tab);
 };
-document.querySelectorAll('.tab-btn').forEach(btn => {
+document.querySelectorAll('.sidebar-nav-btn').forEach(btn => {
 btn.style.display = 'none';
 });
 } else if (appMode === 'factory') {
@@ -13603,13 +13559,14 @@ return;
 }
 if (typeof originalShowTabFactory === 'function') originalShowTabFactory(tab);
 };
-document.querySelectorAll('.tab-btn').forEach(btn => {
+document.querySelectorAll('.sidebar-nav-btn').forEach(btn => {
 btn.style.display = 'none';
 });
 }
 }
 async function unlockAdminMode() {
 appMode = 'admin';
+updateSystemName();
 window._assignedManagerName = null;
 window._assignedUserTabs = [];
 window._userRoleAllowedTabs = [];
@@ -13635,9 +13592,7 @@ setTimeout(() => {
 location.reload();
 }, 2000);
 }
-function unlockToAdminMode() {
-unlockAdminMode();
-}
+
 async function deleteRepTransaction(id) {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 if (!id || !validateUUID(id)) {
@@ -14192,25 +14147,35 @@ updateConnectionStatus();
 (function() {
 const threshold = 80;
 let startY = 0;
+let startScrollBottom = 0;
 let isPulling = false;
 const _anyOverlayOpen = () =>
 document.querySelector('.factory-overlay[style*="flex"], .factory-overlay[style*="block"], .settings-overlay.active') !== null;
 window._ptrTouchStart = (e) => {
 if (_anyOverlayOpen()) { isPulling = false; return; }
-if (window.scrollY === 0) { startY = e.touches[0].clientY; isPulling = true; }
+const scrollEl = document.scrollingElement || document.documentElement;
+startY = e.touches[0].clientY;
+startScrollBottom = scrollEl.scrollTop + scrollEl.clientHeight;
+isPulling = true;
 };
 window._ptrTouchMove = (e) => {
 if (!isPulling) return;
 if (_anyOverlayOpen()) { isPulling = false; return; }
-const diff = e.touches[0].clientY - startY;
-if (diff > 0 && window.scrollY === 0) e.preventDefault();
+const scrollEl = document.scrollingElement || document.documentElement;
+const draggedDown = e.touches[0].clientY - startY;
+const scrolledToBottom = scrollEl.scrollTop + scrollEl.clientHeight >= scrollEl.scrollHeight - 2;
+if (draggedDown > 8 && scrolledToBottom) e.preventDefault();
 };
 window._ptrTouchEnd = async (e) => {
 if (!isPulling) return;
 isPulling = false;
 if (_anyOverlayOpen()) return;
-const diff = e.changedTouches[0].clientY - startY;
-if (diff < threshold || window.scrollY !== 0) return;
+const scrollEl = document.scrollingElement || document.documentElement;
+const endY = e.changedTouches[0].clientY;
+const draggedDown = endY - startY;
+const halfScreen = window.innerHeight / 2;
+const scrolledToBottom = scrollEl.scrollTop + scrollEl.clientHeight >= scrollEl.scrollHeight - 2;
+if (draggedDown < halfScreen || !scrolledToBottom) return;
 if (navigator.vibrate) navigator.vibrate([12, 8, 20]);
 showToast('↻ Syncing…', 'info', 12000);
 const result = await performOneClickSync(true);
@@ -14512,12 +14477,6 @@ console.error('saveSalesRepsList error:', _safeErr(e));
 showToast('Failed to save team list. Please try again.', 'error');
 }
 }
-async function saveProductionManagersList() {
-await saveUserRolesList();
-}
-async function saveFactoryManagersList() {
-await saveUserRolesList();
-}
 async function saveUserRolesList() {
 try {
 await sqliteStore.set('user_roles_list', userRolesList);
@@ -14707,34 +14666,41 @@ showToast(`${name} removed`, 'info');
 }
 function openManageRepsModal() {
 renderManageRepsList();
-const modal = document.getElementById('manage-reps-modal');
-if (!modal) return;
-document.body.style.overflow = 'hidden';
-document.documentElement.style.overflow = 'hidden';
-modal.classList.add('open');
+if (typeof openStandaloneScreen === 'function') openStandaloneScreen('sales-rep-screen');
 }
 function closeManageRepsModal() {
-const modal = document.getElementById('manage-reps-modal');
-if (!modal) return;
-modal.classList.remove('open');
-document.body.style.overflow = '';
-document.documentElement.style.overflow = '';
+if (typeof closeStandaloneScreen === 'function') {
+closeStandaloneScreen('sales-rep-screen');
+closeStandaloneScreen('user-roles-screen');
+closeStandaloneScreen('app-accounts-screen');
+}
 }
 const _overlayStack = (() => {
   const _registry = {
-    'factorySettingsOverlay':      { closeFn: () => closeFactorySettings(),          contentSel: '.factory-overlay-card' },
-    'factoryInventoryOverlay':     { closeFn: () => closeFactoryInventoryModal(),     contentSel: '.factory-overlay-card' },
-    'entityManagementOverlay':     { closeFn: () => closeEntityManagement(),          contentSel: '.factory-overlay-card' },
-    'entityDetailsOverlay':        { closeFn: () => closeEntityDetailsOverlay(),      contentSel: '.factory-overlay-card' },
-    'expenseDetailsOverlay':       { closeFn: () => closeExpenseDetailsOverlay(),     contentSel: '.factory-overlay-card' },
-    'customerManagementOverlay':   { closeFn: () => closeCustomerManagement(),        contentSel: '.factory-overlay-card' },
-    'customerEditOverlay':         { closeFn: () => closeCustomerEditModal(),         contentSel: '.factory-overlay-card' },
-    'repCustomerManagementOverlay':{ closeFn: () => closeRepCustomerManagement(),     contentSel: '.factory-overlay-card' },
-    'repCustomerEditOverlay':      { closeFn: () => closeRepCustomerEditModal(),      contentSel: '.factory-overlay-card' },
-    'dataMenuOverlay':             { closeFn: () => closeDataMenu(),                  contentSel: '.factory-overlay-card' },
-    'recycleBinOverlay':           { closeFn: () => closeRecycleBin(),                contentSel: '.factory-overlay-card' },
+    'formula-standard-screen':     { closeFn: () => closeStandaloneScreen('formula-standard-screen'), contentSel: '.screen-body' },
+    'formula-asaan-screen':        { closeFn: () => closeStandaloneScreen('formula-asaan-screen'),    contentSel: '.screen-body' },
+    'raw-material-screen':         { closeFn: () => closeStandaloneScreen('raw-material-screen'),     contentSel: '.screen-body' },
+    'add-entity-screen':           { closeFn: () => closeStandaloneScreen('add-entity-screen'),       contentSel: '.screen-body' },
+    'sales-rep-screen':            { closeFn: () => closeStandaloneScreen('sales-rep-screen'),        contentSel: '.screen-body' },
+    'user-roles-screen':           { closeFn: () => closeStandaloneScreen('user-roles-screen'),       contentSel: '.screen-body' },
+    'app-accounts-screen':         { closeFn: () => closeStandaloneScreen('app-accounts-screen'),     contentSel: '.screen-body' },
+    'sync-data-screen':            { closeFn: () => closeStandaloneScreen('sync-data-screen'),        contentSel: '.screen-body' },
+    'backup-restore-screen':       { closeFn: () => closeStandaloneScreen('backup-restore-screen'),   contentSel: '.screen-body' },
+    'recycle-bin-screen':          { closeFn: () => closeStandaloneScreen('recycle-bin-screen'),      contentSel: '.screen-body' },
+    'theme-screen':                { closeFn: () => closeStandaloneScreen('theme-screen'),            contentSel: '.screen-body' },
+    'db-structure-screen':         { closeFn: () => closeStandaloneScreen('db-structure-screen'),     contentSel: '.screen-body' },
+    'logout-screen':               { closeFn: () => closeStandaloneScreen('logout-screen'),           contentSel: '.screen-body' },
+    'device-display-screen':       { closeFn: () => closeStandaloneScreen('device-display-screen'),   contentSel: '.screen-body' },
+    'close-financial-year-screen': { closeFn: () => closeStandaloneScreen('close-financial-year-screen'), contentSel: '.screen-body' },
+    'entity-details-screen':       { closeFn: () => closeStandaloneScreen('entity-details-screen'),          contentSel: '.screen-body' },
+    'expense-details-screen':      { closeFn: () => closeStandaloneScreen('expense-details-screen'),         contentSel: '.screen-body' },
+    'customer-management-screen':  { closeFn: () => closeStandaloneScreen('customer-management-screen'),     contentSel: '.screen-body' },
+    'customer-edit-screen':        { closeFn: () => closeStandaloneScreen('customer-edit-screen'),           contentSel: '.screen-body' },
+    'rep-customer-management-screen': { closeFn: () => closeStandaloneScreen('rep-customer-management-screen'), contentSel: '.screen-body' },
+    'rep-customer-edit-screen':    { closeFn: () => closeStandaloneScreen('rep-customer-edit-screen'),       contentSel: '.screen-body' },
+    'entity-details-screen':       { closeFn: () => closeStandaloneScreen('entity-details-screen'),          contentSel: '.screen-body' },
+    'expense-details-screen':      { closeFn: () => closeStandaloneScreen('expense-details-screen'),         contentSel: '.screen-body' },
     'entityTransactionsOverlay':   { closeFn: () => closeEntityTransactions(),        contentSel: '.factory-overlay-card' },
-    'manage-reps-modal':           { closeFn: () => closeManageRepsModal(),           contentSel: '#manage-reps-card'     },
   };
   function _openLayers() {
     const open = [];
@@ -14758,20 +14724,6 @@ const _overlayStack = (() => {
     top.closeFn();
     return true;
   }
-  document.addEventListener('click', function(e) {
-    if (document.querySelector('.glass-confirm-backdrop') || window._glassConfirmClosing) return;
-    const layers = _openLayers();
-    if (layers.length === 0) return;
-    const top = layers[layers.length - 1];
-    const contentEl = top.el.querySelector(top.contentSel);
-    if (contentEl && contentEl.contains(e.target)) return;
-    if (layers.length > 1) {
-      const secondTop = layers[layers.length - 2];
-      const secondContent = secondTop.el.querySelector(secondTop.contentSel);
-      if (secondContent && secondContent.contains(e.target)) return;
-    }
-    top.closeFn();
-  }, true);
   document.addEventListener('keydown', function(e) {
     if (e.key !== 'Escape') return;
     if (document.querySelector('.glass-confirm-backdrop') || window._glassConfirmClosing) return;
@@ -14901,7 +14853,7 @@ const existing = document.getElementById('backup-analysis-modal');
 if (existing) existing.remove();
 const modal = document.createElement('div');
 modal.id = 'backup-analysis-modal';
-modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;z-index:10001;padding:16px;';
+modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;z-index:10300;padding:16px;';
 const rowsHtml = reportLines.map(line => {
 if (line.type === 'section') {
 return `<div style="font-size:0.65rem;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:0.08em;margin:14px 0 6px 0;padding-top:10px;border-top:1px solid var(--glass-border);">${esc(line.label)}</div>`;
@@ -15344,12 +15296,20 @@ if (typeof window.deviceCommandsUnsubscribe === 'function') {
 try { window.deviceCommandsUnsubscribe(); } catch (_) {}
 window.deviceCommandsUnsubscribe = null;
 }
+
+// Retry state — reset each time listenForDeviceCommands is called fresh
+if (!window._deviceCmdRetryAttempts) window._deviceCmdRetryAttempts = 0;
+if (!window._deviceCmdRetrying) window._deviceCmdRetrying = false;
+
 try {
 const deviceId = await getDeviceId();
 const userRef = firebaseDB.collection('users').doc(currentUser.uid);
 const deviceRef = userRef.collection('devices').doc(deviceId);
-const unsubscribe = deviceRef.onSnapshot((doc) => {
+
+const unsubscribe = deviceRef.onSnapshot({ includeMetadataChanges: false }, (doc) => {
 try {
+// Ignore cache hits and locally-pending writes — only process confirmed server data
+if (doc.metadata.fromCache || doc.metadata.hasPendingWrites) return;
 if (!doc.exists) return;
 const data = doc.data();
 if (!data || !data.targetMode || !data.targetModeTimestamp) return;
@@ -15372,21 +15332,54 @@ const lastProcessed = window.lastProcessedCommandTimestamp || 0;
 if (commandTimestamp > lastProcessed) {
 applyRemoteModeChange(effectiveMode, data.commandSource || 'remote', resolvedName, resolvedUserTabs);
 window.lastProcessedCommandTimestamp = commandTimestamp;
+// Reset retry counter on any successful server event
+window._deviceCmdRetryAttempts = 0;
 }
 } catch (snapErr) {
-console.warn('Device command snapshot handler error:', _safeErr(snapErr));
+console.warn('[device] command snapshot handler error:', _safeErr(snapErr));
 }
 }, (error) => {
-console.warn('Device command listener error — will retry in 15s:', _safeErr(error));
-
+const _code = error && error.code;
+console.warn('[device] command listener error:', _code, _safeErr(error));
 window.deviceCommandsUnsubscribe = null;
+
+// Don't retry unrecoverable auth/permission errors
+if (_code === 'permission-denied' || _code === 'failed-precondition') {
+console.warn('[device] stopping device listener — unrecoverable error:', _code);
+window._deviceCmdRetryAttempts = 0;
+window._deviceCmdRetrying = false;
+return;
+}
+
+// Guard against overlapping concurrent retry attempts
+if (window._deviceCmdRetrying) return;
+window._deviceCmdRetryAttempts = (window._deviceCmdRetryAttempts || 0) + 1;
+const MAX_DEVICE_RETRIES = 8;
+if (window._deviceCmdRetryAttempts > MAX_DEVICE_RETRIES) {
+console.warn('[device] max retries reached — giving up device listener');
+window._deviceCmdRetryAttempts = 0;
+window._deviceCmdRetrying = false;
+return;
+}
+// Exponential backoff: 5s, 10s, 20s, 40s … capped at 120s
+const delay = Math.min(5000 * Math.pow(2, window._deviceCmdRetryAttempts - 1), 120000);
+window._deviceCmdRetrying = true;
 setTimeout(() => {
-if (firebaseDB && currentUser) listenForDeviceCommands().catch(e => console.warn('listenForDeviceCommands retry failed:', _safeErr(e)));
-}, 15000);
+window._deviceCmdRetrying = false;
+if (firebaseDB && currentUser) {
+listenForDeviceCommands().catch(e => {
+window._deviceCmdRetrying = false;
+console.warn('[device] listenForDeviceCommands retry failed:', _safeErr(e));
+});
+}
+}, delay);
 });
 window.deviceCommandsUnsubscribe = unsubscribe;
+// Reset retry counter on clean attach
+window._deviceCmdRetryAttempts = 0;
+window._deviceCmdRetrying = false;
 } catch (error) {
-console.error('listenForDeviceCommands failed:', _safeErr(error));
+console.error('[device] listenForDeviceCommands failed:', _safeErr(error));
 }
 }
 async function applyRemoteModeChange(targetMode, source, repName = null, userTabs = null) {
@@ -15458,7 +15451,7 @@ showToast(repName ? `Locked to Production: ${repName}` : 'Device locked to Produ
 if (typeof lockToFactoryMode === 'function') lockToFactoryMode();
 showToast(repName ? `Locked to Factory: ${repName}` : 'Device locked to Factory mode', 'info', 4000);
 } else if (targetMode === 'admin') {
-if (typeof unlockToAdminMode === 'function') unlockToAdminMode();
+if (typeof unlockAdminMode === 'function') unlockAdminMode();
 if (typeof notifyDataChange === 'function') notifyDataChange('all');
 showToast('Device unlocked to Admin mode', 'info', 4000);
 }

@@ -142,30 +142,19 @@ if (loadedTracking && 'standard' in loadedTracking && 'asaan' in loadedTracking)
 } catch (error) {
 showToast('Error loading factory settings. Using defaults.', 'warning');
 }
-requestAnimationFrame(() => {
-document.body.style.overflow = 'hidden';
-document.documentElement.style.overflow = 'hidden';
-requestAnimationFrame(() => {
-document.body.style.overflow = 'hidden';
-document.documentElement.style.overflow = 'hidden';
-const _fsOv = document.getElementById('factorySettingsOverlay');
-if (_fsOv) _fsOv.style.display = 'flex';
-});
-});
 await renderFactorySettingsRows();
 }
 
 function closeFactorySettings() {
-requestAnimationFrame(() => {
-document.body.style.overflow = '';
-document.documentElement.style.overflow = '';
-document.getElementById('factorySettingsOverlay').style.display = 'none';
-});
+if (typeof closeStandaloneScreen === 'function') {
+closeStandaloneScreen('formula-standard-screen');
+closeStandaloneScreen('formula-asaan-screen');
+}
 }
 
 function selectFactoryStore(store, el) {
 currentFactorySettingsStore = store;
-document.querySelectorAll('#factorySettingsOverlay .factory-store-opt').forEach(o => o.classList.remove('active'));
+document.querySelectorAll('.factory-store-opt').forEach(o => o.classList.remove('active'));
 if (el) el.classList.add('active');
 const container = document.getElementById('factoryRawMaterialsContainer');
 if (container) container.style.opacity = '0.35';
@@ -175,8 +164,10 @@ requestAnimationFrame(() => { if (container) container.style.opacity = '1'; });
 }
 
 async function refreshFactorySettingsOverlay() {
-const overlay = document.getElementById('factorySettingsOverlay');
-if (overlay && overlay.style.display === 'flex') {
+const stdScreen = document.getElementById('formula-standard-screen');
+const asaanScreen = document.getElementById('formula-asaan-screen');
+const isOpen = (stdScreen && stdScreen.style.display !== 'none') || (asaanScreen && asaanScreen.style.display !== 'none');
+if (isOpen) {
 const container = document.getElementById('factoryRawMaterialsContainer');
 const liveRows = container ? Array.from(container.querySelectorAll('.factory-formula-grid')) : [];
 const liveState = liveRows.map(row => ({
@@ -235,6 +226,41 @@ _setFS1('factorySettingsRawCostPerUnit', await formatCurrency(totalRawCost));
 _setFS1('factorySettingsPerUnit', await formatCurrency(perUnitCost));
 _setFS1('factorySettingsAvailableUnits', available);
 _setFS1('factorySettingsSalesCostPerKg', await formatCurrency(salesCostPerKg));
+const asaanScreen = document.getElementById('formula-asaan-screen');
+if (asaanScreen && asaanScreen.style.display !== 'none') {
+const acpuA = document.getElementById('additional-cost-per-unit-asaan');
+const cafA = document.getElementById('cost-adjustment-factor-asaan');
+const spSA = document.getElementById('sale-price-standard-asaan');
+const spAO = document.getElementById('sale-price-asaan-only');
+const asaanAdditionalCost = factoryAdditionalCosts['asaan'] || 0;
+const asaanAdjustmentFactor = factoryCostAdjustmentFactor['asaan'] || 1;
+if (acpuA) acpuA.value = asaanAdditionalCost;
+if (cafA) cafA.value = asaanAdjustmentFactor;
+if (spSA) spSA.value = factorySalePrices.standard || 0;
+if (spAO) spAO.value = factorySalePrices.asaan || 0;
+const asaanContainer = document.getElementById('factoryRawMaterialsContainerAsaan');
+if (asaanContainer) {
+asaanContainer.replaceChildren();
+const asaanFormula = factoryDefaultFormulas['asaan'] || [];
+let asaanRawCost = 0, asaanWeight = 0;
+if (asaanFormula.length > 0) {
+for (const ing of asaanFormula) {
+asaanRawCost += (ing.cost * ing.quantity);
+asaanWeight += ing.quantity;
+await createFactorySettingRow(asaanContainer, ing.id, ing.quantity, ing.cost, ing.name, factoryInventoryData);
+}
+}
+const asaanAvailable = factoryUnitTracking['asaan']?.available || 0;
+const asaanPerUnit = asaanRawCost + asaanAdditionalCost;
+const asaanSalesCostPerKg = asaanAdjustmentFactor > 0 ? asaanPerUnit / asaanAdjustmentFactor : asaanPerUnit;
+const safeAsaanWeight = parseFloat(asaanWeight) || 0;
+_setFS1('factorySettingsUnitWeightAsaan', safeNumber(safeAsaanWeight, 0).toFixed(2) + ' kg');
+_setFS1('factorySettingsRawCostPerUnitAsaan', await formatCurrency(asaanRawCost));
+_setFS1('factorySettingsPerUnitAsaan', await formatCurrency(asaanPerUnit));
+_setFS1('factorySettingsAvailableUnitsAsaan', asaanAvailable);
+_setFS1('factorySettingsSalesCostPerKgAsaan', await formatCurrency(asaanSalesCostPerKg));
+}
+}
 }
 
 async function createFactorySettingRow(container, selectedId = '', qtyVal = '', costVal = null, savedName = '', inventoryData = null) {
@@ -242,10 +268,7 @@ const factoryInventoryData = inventoryData !== null ? inventoryData : ensureArra
 let currentCost = costVal !== null ? costVal : 0;
 const div = document.createElement('div');
 div.className = 'factory-formula-grid';
-const col1 = document.createElement('div'); col1.className = 'u-flex-col';
-const lbl1 = document.createElement('label');
-lbl1.style.cssText = 'font-size:0.6rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em;';
-lbl1.textContent = 'Material';
+
 const sel = document.createElement('select');
 sel.className = 'factory-mat-select';
 sel.onchange = function() { updateFactoryRowCost(this); };
@@ -253,7 +276,6 @@ const defaultOpt = document.createElement('option');
 defaultOpt.value = '';
 defaultOpt.textContent = 'Select Material';
 sel.appendChild(defaultOpt);
-let foundInInventory = false;
 factoryInventoryData.forEach(i => {
 const opt = document.createElement('option');
 opt.value = String(i.id);
@@ -261,40 +283,41 @@ opt.dataset.cost = String(i.cost);
 opt.textContent = i.name;
 sel.appendChild(opt);
 if (String(i.id) === String(selectedId)) {
-foundInInventory = true;
 if (costVal === null) currentCost = i.cost;
 }
 });
 
-col1.appendChild(lbl1);
-col1.appendChild(sel);
-const col2 = document.createElement('div'); col2.className = 'u-flex-col';
-const lbl2 = document.createElement('label');
-lbl2.style.cssText = 'font-size:0.6rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em;';
-lbl2.textContent = 'Cost (Per Unit)';
 const costInput = document.createElement('input');
 costInput.type = 'number';
 costInput.className = 'factory-mat-cost';
+costInput.placeholder = 'Cost';
 costInput.value = currentCost;
 costInput.readOnly = true;
-costInput.style.cssText = 'background:rgba(0,0,0,0.05);color:var(--text-muted);';
-col2.appendChild(lbl2);
-col2.appendChild(costInput);
-const col3 = document.createElement('div'); col3.className = 'u-flex-col';
-const lbl3 = document.createElement('label');
-lbl3.style.cssText = 'font-size:0.6rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em;';
-lbl3.textContent = 'Qty (kg)';
+costInput.style.cssText = 'background:rgba(0,0,0,0.05);color:var(--text-muted);cursor:default;';
+
 const qtyInput = document.createElement('input');
 qtyInput.type = 'number';
 qtyInput.className = 'factory-mat-qty';
+qtyInput.placeholder = 'Qty (kg)';
 qtyInput.value = qtyVal;
-qtyInput.placeholder = '0';
-col3.appendChild(lbl3);
-col3.appendChild(qtyInput);
-div.appendChild(col1);
-div.appendChild(col2);
-div.appendChild(col3);
+qtyInput.oninput = function() { updateFactoryFormulasSummary(); };
+
+const delBtn = document.createElement('button');
+delBtn.type = 'button';
+delBtn.className = 'factory-row-del-btn';
+delBtn.innerHTML = '&times;';
+delBtn.title = 'Remove row';
+delBtn.onclick = function() {
+div.remove();
+updateFactoryFormulasSummary();
+};
+
+div.appendChild(sel);
+div.appendChild(costInput);
+div.appendChild(qtyInput);
+div.appendChild(delBtn);
 container.appendChild(div);
+
 if (selectedId) {
 const targetId = String(selectedId).trim();
 let matched = false;
@@ -505,16 +528,6 @@ showToast('Formula saved successfully!', 'success', 3000);
 }
 
 function openFactoryInventoryModal() {
-requestAnimationFrame(() => {
-document.body.style.overflow = 'hidden';
-document.documentElement.style.overflow = 'hidden';
-requestAnimationFrame(() => {
-document.body.style.overflow = 'hidden';
-document.documentElement.style.overflow = 'hidden';
-const _fiOv = document.getElementById('factoryInventoryOverlay');
-if (_fiOv) _fiOv.style.display = 'flex';
-});
-});
 const _facInvT1 = document.getElementById('factoryInventoryModalTitle');
 if (_facInvT1) _facInvT1.innerText = 'Add Raw Material';
 const _delBtnHide = document.getElementById('deleteFactoryInventoryBtn');
@@ -532,14 +545,11 @@ qtyInput.addEventListener('input', updateFactoryKgCalculation);
 conversionInput.addEventListener('input', updateFactoryKgCalculation);
 costInput.addEventListener('input', updateFactoryKgCalculation);
 }
+if (typeof openStandaloneScreen === 'function') openStandaloneScreen('raw-material-screen');
 }
 
 function closeFactoryInventoryModal() {
-requestAnimationFrame(() => {
-document.body.style.overflow = '';
-document.documentElement.style.overflow = '';
-document.getElementById('factoryInventoryOverlay').style.display = 'none';
-});
+if (typeof closeStandaloneScreen === 'function') closeStandaloneScreen('raw-material-screen');
 }
 
 function clearFactoryInventoryForm() {
@@ -823,7 +833,8 @@ const itemId = esc(item.id);
 const itemName = esc(item.name);
 const tr = document.createElement('tr');
 tr.style.borderBottom = '1px solid var(--glass-border)';
-tr.innerHTML = `<td style="padding:8px 2px;"><div style="font-weight:600;font-size:0.8rem;color:var(--text-main);">${itemName}</div>${supplierHtml}</td><td style="text-align:center;padding:8px 2px;">${quantityHtml}</td><td style="text-align:right;padding:8px 2px;font-size:0.75rem;color:var(--text-muted);">${costHtml}</td><td style="text-align:right;padding:8px 2px;font-size:0.8rem;font-weight:700;color:var(--accent);">${totalValueStr}</td><td style="text-align:center;padding:6px 2px;"><button class="tbl-action-btn" onclick="editFactoryInventoryItem('${itemId}')">Edit</button></td>`;
+tr.style.cursor = 'pointer';
+tr.innerHTML = `<td style="padding:8px 2px; cursor:pointer;" onclick="editFactoryInventoryItem('${itemId}')"><div style="font-weight:600;font-size:0.8rem;color:var(--accent);">${itemName}</div>${supplierHtml}</td><td style="text-align:center;padding:8px 2px;">${quantityHtml}</td><td style="text-align:right;padding:8px 2px;font-size:0.75rem;color:var(--text-muted);">${costHtml}</td><td style="text-align:right;padding:8px 2px;font-size:0.8rem;font-weight:700;color:var(--accent);">${totalValueStr}</td>`;
 prebuiltRows.push(tr);
 }
 GNDVirtualScroll.mount('vs-scroller-factory-inventory', prebuiltRows, function(el) { return el; }, tbody);
@@ -1208,15 +1219,17 @@ const div = document.createElement('div');
 div.className = 'factory-history-item';
 if (entry.date) div.setAttribute('data-date', entry.date);
 div.innerHTML = `
-<div style="display:flex;justify-content:space-between;margin-bottom:8px;border-bottom:1px solid var(--glass-border);padding-bottom:5px;">
+<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:5px;margin-bottom:8px;border-bottom:1px solid var(--glass-border);padding-bottom:5px;">
+<div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;">
 <span class="u-fs-sm2 u-text-muted">${dateStr}</span>
+${entry.managedBy ? `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 9px;font-size:0.65rem;font-weight:700;letter-spacing:0.04em;color:var(--accent-purple);background:rgba(206,147,216,0.10);border:1px solid rgba(206,147,216,0.28);border-radius:999px;">${esc(entry.managedBy)}</span>` : ''}
+${entry.createdBy && typeof _creatorBadgeHtml === 'function' ? _creatorBadgeHtml(entry) : ''}
+</div>
 <div style="display:flex;gap:6px;align-items:center;">
 ${_mergedBadgeHtml(entry)}
 <span class="factory-badge ${badgeClass}">${esc(storeLabel)}</span>
 </div>
 </div>
-${entry.managedBy ? `<div style="margin-bottom:8px;"><span style="display:inline-flex;align-items:center;gap:4px;padding:2px 9px;font-size:0.65rem;font-weight:700;letter-spacing:0.04em;color:var(--accent-purple);background:rgba(206,147,216,0.10);border:1px solid rgba(206,147,216,0.28);border-radius:999px;">${esc(entry.managedBy)}</span></div>` : ''}
-${entry.createdBy ? `<div style="margin-bottom:8px;">${typeof _creatorBadgeHtml === 'function' ? _creatorBadgeHtml(entry) : ''}</div>` : ''}
 <div class="factory-summary-row"><span class="factory-summary-label">Units Produced</span><span class="qty-val">${entry.units}</span></div>
 <div class="factory-summary-row"><span class="factory-summary-label">Material Cost</span><span class="cost-val">${await formatCurrency(entry.materialsCost || 0)}</span></div>
 ${totalAdditionalCost > 0 ? `<div class="factory-summary-row"><span class="factory-summary-label">Additional Cost</span><span class="cost-val">${await formatCurrency(totalAdditionalCost)}</span></div>` : ''}

@@ -637,25 +637,41 @@ const filteredCustomers = sortedCustomers.filter(name => {
 if (!filter) return true;
 return name && typeof name === 'string' && name.toLowerCase().includes(filter);
 });
-const pageCustomers = filteredCustomers;
-const validPage = 1;
-const totalPages = 1;
 const totalItems = filteredCustomers.length;
-const startIndex = 0;
-const endIndex = filteredCustomers.length;
-const repCustomersData = {
-pageCustomers,
-custMap,
-totalItems,
-totalPages,
-validPage,
-repSales,
-repCustomers
-};
-if (repCustomersData && repCustomersData.pageCustomers) {
-renderRepCustomersFromCache(repCustomersData, tbody);
+if (!filteredCustomers || !Array.isArray(filteredCustomers) || !custMap) {
+tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:20px; color:var(--danger);">Invalid customer data</td></tr>`;
+} else if (totalItems === 0) {
+if (Object.keys(custMap).length === 0) {
+tbody.innerHTML = `<tr><td class="u-empty-state-md" colspan="5" >No customers yet. Add your first sale to get started!</td></tr>`;
 } else {
-tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; padding:20px; color:var(--danger);">Failed to load customer data</td></tr>`;
+const filterInput = document.getElementById('rep-filter');
+const filter = filterInput ? filterInput.value : '';
+tbody.innerHTML = `<tr><td class="u-empty-state-md" colspan="5" >No customers match "${esc(filter)}"</td></tr>`;
+}
+} else {
+function buildRepCustomerRow(name) {
+const customerData = custMap[name];
+const customerTransactions = repSales.filter(s =>
+s.customerName === name &&
+s.salesRep === currentRepProfile
+);
+const latestTransaction = customerTransactions.sort((a, b) => b.timestamp - a.timestamp)[0];
+const displayDate = latestTransaction?.date ? formatDisplayDate(latestTransaction.date) : '-';
+const repContact = repCustomers.find(c => c && c.name && c.name.toLowerCase() === name.toLowerCase());
+const phone = repContact?.phone || latestTransaction?.customerPhone || '-';
+const tr = document.createElement('tr');
+tr.style.borderBottom = '1px solid var(--glass-border)';
+const safeNameForAttr = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+tr.innerHTML = `
+<td class="u-table-td">${displayDate}</td>
+<td style="padding: 8px 2px; font-size: 0.8rem; color: var(--accent); font-weight: 600; cursor:pointer;" onclick="event.stopPropagation(); openRepCustomerManagement('${safeNameForAttr}')">${esc(name)}</td>
+<td class="u-table-td">${phoneActionHTML(phone)}</td>
+<td style="padding: 8px 2px; text-align: right; font-size: 0.8rem; color: ${customerData.debt > 1 ? 'var(--warning)' : 'var(--accent-emerald)'}; font-weight: 700;">
+${customerData.debt.toLocaleString()}
+</td>`;
+return tr;
+}
+GNDVirtualScroll.mount('vs-scroller-rep-customers', filteredCustomers, buildRepCustomerRow, tbody);
 }
 let repTotalCreditSales = 0;
 let repTotalCollections = 0;
@@ -672,78 +688,17 @@ _setRepH('rep-customers-total-credit', fmtAmt(totalOutstanding));
 _setRepH('rep-customers-total-credit-sales', fmtAmt(repTotalCreditSales));
 _setRepH('rep-customers-total-collections', fmtAmt(repTotalCollections));
 }
-async function renderRepCustomersFromCache(data, tbody) {
-if (!data) {
-tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:20px; color:var(--danger);">Error loading customers</td></tr>`;
-return;
-}
-const { pageCustomers, custMap, totalItems, totalPages, validPage, repSales, repCustomers } = data;
-if (!pageCustomers || !Array.isArray(pageCustomers) || !custMap) {
-tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:20px; color:var(--danger);">Invalid customer data</td></tr>`;
-return;
-}
-if (totalItems === 0) {
-if (Object.keys(custMap).length === 0) {
-tbody.innerHTML = `<tr><td class="u-empty-state-md" colspan="5" >No customers yet. Add your first sale to get started!</td></tr>`;
-} else {
-const filterInput = document.getElementById('rep-filter');
-const filter = filterInput ? filterInput.value : '';
-tbody.innerHTML = `<tr><td class="u-empty-state-md" colspan="5" >No customers match "${esc(filter)}"</td></tr>`;
-}
-return;
-}
-function buildRepCustomerRow(name) {
-const customerData = custMap[name];
-const customerTransactions = repSales.filter(s =>
-s.customerName === name &&
-s.salesRep === currentRepProfile
-);
-const latestTransaction = customerTransactions.sort((a, b) => b.timestamp - a.timestamp)[0];
-const displayDate = latestTransaction?.date ? formatDisplayDate(latestTransaction.date) : '-';
-const repContact = repCustomers.find(c => c && c.name && c.name.toLowerCase() === name.toLowerCase());
-const phone = repContact?.phone || latestTransaction?.customerPhone || '-';
-const tr = document.createElement('tr');
-tr.style.borderBottom = '1px solid var(--glass-border)';
-const safeNameForAttr = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-tr.innerHTML = `
-<td class="u-table-td">${displayDate}</td>
-<td style="padding: 8px 2px; font-size: 0.8rem; color: var(--text-main); font-weight: 600;">${esc(name)}</td>
-<td class="u-table-td">${phoneActionHTML(phone)}</td>
-<td style="padding: 8px 2px; text-align: right; font-size: 0.8rem; color: ${customerData.debt > 1 ? 'var(--warning)' : 'var(--accent-emerald)'}; font-weight: 700;">
-${customerData.debt.toLocaleString()}
-</td>
-<td style="padding: 6px 2px; text-align: center;">
-<button class="tbl-action-btn" onclick="event.stopPropagation(); openRepCustomerManagement('${safeNameForAttr}')">View</button>
-</td>`;
-return tr;
-}
-GNDVirtualScroll.mount('vs-scroller-rep-customers', pageCustomers, buildRepCustomerRow, tbody);
-}
+
 async function openRepCustomerManagement(customerName) {
-const repSales = ensureArray(await sqliteStore.get('rep_sales'));
-const repCustomers = ensureArray(await sqliteStore.get('rep_customers'));
 currentManagingRepCustomer = customerName;
 const _repMCT = document.getElementById('repManageCustomerTitle'); if (_repMCT) _repMCT.innerText = customerName;
 const _repBulk = document.getElementById('repBulkPaymentAmount'); if (_repBulk) _repBulk.value = '';
-requestAnimationFrame(() => {
-document.body.style.overflow = 'hidden';
-document.documentElement.style.overflow = 'hidden';
-requestAnimationFrame(() => {
-document.body.style.overflow = 'hidden';
-document.documentElement.style.overflow = 'hidden';
-const _rcmOverlay = document.getElementById('repCustomerManagementOverlay');
-if (_rcmOverlay) _rcmOverlay.style.display = 'flex';
-});
-});
+if (typeof openStandaloneScreen === 'function') openStandaloneScreen('rep-customer-management-screen');
 await renderRepCustomerTransactions(customerName);
 }
 async function closeRepCustomerManagement() {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
-requestAnimationFrame(() => {
-document.body.style.overflow = '';
-document.documentElement.style.overflow = '';
-document.getElementById('repCustomerManagementOverlay').style.display = 'none';
-});
+if (typeof closeStandaloneScreen === 'function') closeStandaloneScreen('rep-customer-management-screen');
 currentManagingRepCustomer = null;
 setTimeout(async () => {
 try {
@@ -850,8 +805,7 @@ const headerTitle = document.getElementById('repManageCustomerTitle');
 headerTitle.innerHTML = `
 <div style="display:flex; align-items:center; gap:8px;">
 <span>${esc(name)}</span>
-<button class="btn-theme" style="padding:2px 6px; font-size:0.8rem; border:1px solid var(--accent); color:var(--accent); border-radius:50%;"
-onclick="openRepCustomerEditModal('${esc(name).split("'").join("\\\'")}')" title="Edit Contact Info"></button>
+<button class="sidebar-settings-btn" style="width:auto;padding:5px 10px;font-size:0.75rem;color:var(--accent);background:rgba(29,233,182,0.07);border-radius:8px;border:1px solid rgba(29,233,182,0.25);display:inline-flex;align-items:center;gap:5px;" onclick="openRepCustomerEditModal('${esc(name).split("'").join("\\'")}')" title="Edit Contact Info"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>Edit</button>
 </div>
 <div style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal; margin-top:4px;">
 ${phone ? phoneActionHTML(phone) : 'No Phone'} ${address ? `| ◆ ${esc(address)}` : ''}
@@ -977,18 +931,10 @@ const oldDebitValue = existingOldDebtTx ? (existingOldDebtTx.totalValue || 0) : 
 document.getElementById('rep-edit-cust-phone').value = contact?.phone || saleRecord?.customerPhone || '';
 document.getElementById('rep-edit-cust-address').value = contact?.address || '';
 document.getElementById('rep-edit-cust-old-debit').value = oldDebitValue;
-requestAnimationFrame(() => {
-document.body.style.overflow = 'hidden';
-document.documentElement.style.overflow = 'hidden';
-document.getElementById('repCustomerEditOverlay').style.display = 'flex';
-});
+if (typeof openStandaloneScreen === 'function') openStandaloneScreen('rep-customer-edit-screen');
 }
 function closeRepCustomerEditModal() {
-requestAnimationFrame(() => {
-document.body.style.overflow = '';
-document.documentElement.style.overflow = '';
-document.getElementById('repCustomerEditOverlay').style.display = 'none';
-});
+if (typeof closeStandaloneScreen === 'function') closeStandaloneScreen('rep-customer-edit-screen');
 }
 async function saveRepCustomerDetails() {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
@@ -1098,8 +1044,8 @@ await new Promise(r => setTimeout(r, 350));
 if (nameChanged && currentManagingRepCustomer && currentManagingRepCustomer.toLowerCase() === originalName.toLowerCase()) {
 currentManagingRepCustomer = name;
 }
-const overlay = document.getElementById('repCustomerManagementOverlay');
-if (overlay && overlay.style.display === 'flex') await renderRepCustomerTransactions(currentManagingRepCustomer || name);
+const overlay = document.getElementById('rep-customer-management-screen');
+if (overlay && overlay.style.display !== 'none') await renderRepCustomerTransactions(currentManagingRepCustomer || name);
 if (typeof renderRepCustomerTable === 'function') renderRepCustomerTable();
 notifyDataChange('rep');
 triggerAutoSync();
@@ -1177,9 +1123,8 @@ if (btn) btn.disabled = false;
 async function exportRepCustomerToPDF() {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 const repCustomers = ensureArray(await sqliteStore.get('rep_customers'));
-const titleElement = document.getElementById('repManageCustomerTitle');
-if (!titleElement) { showToast('No rep customer selected', 'warning'); return; }
-const customerName = titleElement.innerText.trim();
+if (!currentManagingRepCustomer) { showToast('No rep customer selected', 'warning'); return; }
+const customerName = currentManagingRepCustomer.trim();
 if (!customerName) { showToast('No rep customer selected', 'warning'); return; }
 const rangeSelect = document.getElementById('repCustomerPdfRange');
 const range = rangeSelect ? rangeSelect.value : 'all';
@@ -1191,25 +1136,52 @@ await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/
 await new Promise(r => setTimeout(r, 200));
 }
 if (!window.jspdf || !window.jspdf.jsPDF) throw new Error('Failed to load PDF library. Please refresh and try again.');
-let transactions = repSales.filter(s =>
-s.customerName === customerName && s.salesRep === currentRepProfile
-);
+// All transactions for this rep customer (all time, un-filtered)
+const allRepCustTxns = repSales.filter(s => s.customerName === customerName && s.salesRep === currentRepProfile);
 const now = new Date();
 const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+// Determine cutoff date for the selected period
+let repPeriodCutoff = null;
 if (range !== 'all') {
-transactions = transactions.filter(t => {
-if (t.transactionType === 'OLD_DEBT') return true;
-if (!t.date) return false;
-const d = new Date(t.date);
-switch(range) {
-case 'today': return d >= today;
-case 'week': { const w = new Date(today); w.setDate(w.getDate() - 7); return d >= w; }
-case 'month': { const m = new Date(today); m.setMonth(m.getMonth() - 1); return d >= m; }
-case 'year': { const y = new Date(today); y.setFullYear(y.getFullYear() - 1); return d >= y; }
-default: return true;
+  switch(range) {
+    case 'today':  repPeriodCutoff = today; break;
+    case 'week':   { const w = new Date(today); w.setDate(w.getDate() - 7);      repPeriodCutoff = w; break; }
+    case 'month':  { const m = new Date(today); m.setMonth(m.getMonth() - 1);    repPeriodCutoff = m; break; }
+    case 'year':   { const y = new Date(today); y.setFullYear(y.getFullYear()-1); repPeriodCutoff = y; break; }
+  }
 }
-});
-}
+const repPriorTxns = repPeriodCutoff
+  ? allRepCustTxns.filter(t => {
+      if (t.transactionType === 'OLD_DEBT') return true; // always treated as prior
+      if (!t.date) return false;
+      return new Date(t.date) < repPeriodCutoff;
+    })
+  : [];
+let transactions = repPeriodCutoff
+  ? allRepCustTxns.filter(t => {
+      if (t.transactionType === 'OLD_DEBT') return false; // already in prior
+      if (!t.date) return false;
+      return new Date(t.date) >= repPeriodCutoff;
+    })
+  : allRepCustTxns;
+// Compute opening balance from prior transactions
+const repOpeningBalance = repPriorTxns.reduce((bal, t) => {
+  const pt = t.paymentType || 'CASH';
+  const isOldDebt = t.transactionType === 'OLD_DEBT';
+  let debit = 0, credit = 0;
+  if (isOldDebt) {
+    debit = parseFloat(t.totalValue) || 0;
+    credit = parseFloat(t.partialPaymentReceived) || 0;
+  } else if (pt === 'CASH' || (pt === 'CREDIT' && t.creditReceived)) {
+    // settled — net zero
+  } else if (pt === 'CREDIT' && !t.creditReceived) {
+    debit = parseFloat(t.totalValue) || 0;
+    credit = parseFloat(t.partialPaymentReceived) || 0;
+  } else if (pt === 'COLLECTION' || pt === 'PARTIAL_PAYMENT') {
+    credit = parseFloat(t.totalValue) || 0;
+  }
+  return bal + (debit - credit);
+}, 0);
 transactions.sort((a, b) => {
 if (a.isMerged && !b.isMerged) return -1;
 if (!a.isMerged && b.isMerged) return 1;
@@ -1230,7 +1202,7 @@ doc.rect(0, 0, pageW, 22, 'F');
 doc.setFontSize(16); doc.setFont(undefined, 'bold'); doc.setTextColor(255, 255, 255);
 doc.text('GULL AND ZUBAIR NASWAR DEALERS', pageW / 2, 10, { align: 'center' });
 doc.setFontSize(9); doc.setFont(undefined, 'normal');
-doc.text('Naswar Manufacturers & Dealers · Rep Sales Statement', pageW / 2, 17, { align: 'center' });
+doc.text('Naswar Manufacturers & Dealers', pageW / 2, 17, { align: 'center' });
 const rangeName = range === 'all' ? 'All Time' : range === 'today' ? 'Today' :
 range === 'week' ? 'This Week' : range === 'month' ? 'This Month' : 'This Year';
 doc.setFontSize(12); doc.setFont(undefined, 'bold'); doc.setTextColor(50, 50, 50);
@@ -1300,8 +1272,9 @@ debit>0?'Rs '+fmtAmt(debit):'-', credit>0?'Rs '+fmtAmt(credit):'-', balDisplay],
 debit, credit, qty: t.quantity||0 };
 };
 const normalTxns = transactions.filter(t => !t.isMerged);
+const repHasPrior = repPeriodCutoff !== null && repPriorTxns.length > 0;
+const txRunBal = { val: repHasPrior ? repOpeningBalance : 0 };
 const txRows = [];
-const txRunBal = { val: 0 };
 let totDebit = 0, totCredit = 0, totQty = 0;
 for (const t of normalTxns) {
 const r = buildRow(t, txRunBal);
@@ -1310,10 +1283,20 @@ totDebit += r.debit;
 totCredit += r.credit;
 totQty += r.qty;
 }
-const finalBal = totDebit - totCredit;
+// Prepend opening balance row when a period is selected and prior data exists
+if (repHasPrior) {
+  const obAbs = Math.abs(repOpeningBalance);
+  const obDisplay = obAbs < 0.01 ? 'SETTLED' : 'Rs ' + fmtAmt(obAbs);
+  txRows.unshift([
+    'Prior', '—',
+    'Opening Balance\n(All activity before this period)',
+    '-', '-', obDisplay
+  ]);
+}
+const finalBal = (repHasPrior ? repOpeningBalance : 0) + totDebit - totCredit;
 txRows.push(['TOTALS', '', `${fmtAmt(totQty)} kg total`,
 'Rs '+fmtAmt(totDebit), 'Rs '+fmtAmt(totCredit),
-Math.abs(finalBal)<0.01?'SETTLED':(finalBal>0?'DUE\nRs '+fmtAmt(finalBal):'OVERPAID\nRs '+fmtAmt(Math.abs(finalBal)))]);
+Math.abs(finalBal)<0.01?'SETTLED':(finalBal>0?'Rs '+fmtAmt(finalBal):'OVERPAID\nRs '+fmtAmt(Math.abs(finalBal)))]);
 doc.autoTable({
 startY: yPos,
 head: [['Date', 'Type', 'Details', 'Debit (Sale)', 'Credit (Rcvd)', 'Balance']],
@@ -1327,36 +1310,57 @@ columnStyles: {
 4:{cellWidth:27,halign:'right',textColor:[40,167,69],fontStyle:'bold'},5:{cellWidth:26,halign:'center',fontStyle:'bold'}
 },
 didParseCell: function(data) {
+const isOpeningRow = repHasPrior && data.row.index === 0;
 const isTotal = data.row.index === txRows.length - 1;
-if (isTotal) { data.cell.styles.fontStyle='bold'; data.cell.styles.fillColor=[235,230,255]; data.cell.styles.fontSize=9; }
-if (data.column.index===1&&!isTotal){
-const txt=(data.cell.text||[]).join('');
-if(txt.includes('CASH')) data.cell.styles.textColor=[40,167,69];
-if(txt.includes('CREDIT')) data.cell.styles.textColor=[200,100,0];
-if(txt.includes('COLLECTION')) data.cell.styles.textColor=[40,167,69];
-if(txt.includes('PARTIAL')) data.cell.styles.textColor=[200,100,0];
-if(txt.includes('OLD DEBT')) data.cell.styles.textColor=[220,53,69];
+if (isOpeningRow) {
+  data.cell.styles.fillColor = [220, 235, 255];
+  data.cell.styles.fontStyle = 'bold';
+  data.cell.styles.textColor = [30, 80, 160];
+  data.cell.styles.fontSize  = 8;
+} else if (isTotal) {
+  data.cell.styles.fontStyle='bold'; data.cell.styles.fillColor=[235,230,255]; data.cell.styles.fontSize=9;
 }
-if (data.column.index===5&&!isTotal){
-const txt=(data.cell.text||[]).join('');
-if(txt==='SETTLED') data.cell.styles.textColor=[100,100,100];
-else if(txt.includes('OVERPAID')) data.cell.styles.textColor=[40,167,69];
-else data.cell.styles.textColor=[220,53,69];
+if (!isOpeningRow && !isTotal) {
+  if (data.column.index===1){
+    const txt=(data.cell.text||[]).join('');
+    if(txt.includes('CASH')) data.cell.styles.textColor=[40,167,69];
+    if(txt.includes('CREDIT')) data.cell.styles.textColor=[200,100,0];
+    if(txt.includes('COLLECTION')) data.cell.styles.textColor=[40,167,69];
+    if(txt.includes('PARTIAL')) data.cell.styles.textColor=[200,100,0];
+    if(txt.includes('OLD DEBT')) data.cell.styles.textColor=[220,53,69];
+  }
+  if (data.column.index===5){
+    const txt=(data.cell.text||[]).join('');
+    if(txt==='SETTLED') data.cell.styles.textColor=[100,100,100];
+    else if(txt.includes('OVERPAID')) data.cell.styles.textColor=[40,167,69];
+    else data.cell.styles.textColor=[220,53,69];
+  }
 }
 },
 margin: { left: 14, right: 14 }
 });
-const afterY = doc.lastAutoTable.finalY + 5;
-if (afterY < 268) {
+const afterY = ((normalTxns.length > 0 || repHasPrior) ? doc.lastAutoTable.finalY : yPos - 5) + 5;
+if (afterY < 252) {
+const repBoxH = repHasPrior && Math.abs(repOpeningBalance) >= 0.01 ? 28 : 20;
 doc.setFillColor(240, 235, 255);
-doc.roundedRect(14, afterY, pageW - 28, 20, 2, 2, 'F');
+doc.roundedRect(14, afterY, pageW - 28, repBoxH, 2, 2, 'F');
 doc.setDrawColor(...hdrColor); doc.setLineWidth(0.3);
-doc.roundedRect(14, afterY, pageW - 28, 20, 2, 2, 'S');
+doc.roundedRect(14, afterY, pageW - 28, repBoxH, 2, 2, 'S');
 doc.setFontSize(8); doc.setFont(undefined, 'normal');
-doc.setTextColor(220, 53, 69);
-doc.text(`Total Debit (Sales): Rs ${fmtAmt(totDebit)}`, 20, afterY + 7);
-doc.setTextColor(40, 167, 69);
-doc.text(`Total Credit (Rcvd): Rs ${fmtAmt(totCredit)}`, 20, afterY + 14);
+if (repHasPrior && Math.abs(repOpeningBalance) >= 0.01) {
+  const repObSign = repOpeningBalance > 0 ? '+' : '-';
+  doc.setTextColor(30, 80, 160);
+  doc.text(`Opening Balance: ${repObSign}Rs ${fmtAmt(Math.abs(repOpeningBalance))}`, pageW / 2, afterY + 7, { align: 'center' });
+  doc.setTextColor(220, 53, 69);
+  doc.text(`Period Debit: Rs ${fmtAmt(totDebit)}`, pageW / 4, afterY + 15, { align: 'center' });
+  doc.setTextColor(40, 167, 69);
+  doc.text(`Period Credit: Rs ${fmtAmt(totCredit)}`, (pageW * 3) / 4, afterY + 15, { align: 'center' });
+} else {
+  doc.setTextColor(220, 53, 69);
+  doc.text(`Total Debit (Sales): Rs ${fmtAmt(totDebit)}`, pageW / 4, afterY + 8, { align: 'center' });
+  doc.setTextColor(40, 167, 69);
+  doc.text(`Total Credit (Rcvd): Rs ${fmtAmt(totCredit)}`, (pageW * 3) / 4, afterY + 8, { align: 'center' });
+}
 doc.setFont(undefined, 'bold');
 const balStr = Math.abs(finalBal) < 0.01 ? 'SETTLED'
 : finalBal > 0 ? `Outstanding Due: Rs ${fmtAmt(finalBal)}`
@@ -1364,7 +1368,7 @@ const balStr = Math.abs(finalBal) < 0.01 ? 'SETTLED'
 doc.setTextColor(Math.abs(finalBal)<0.01?100:finalBal>0?220:40,
 Math.abs(finalBal)<0.01?100:finalBal>0?53:167,
 Math.abs(finalBal)<0.01?100:69);
-doc.text(balStr, 110, afterY + 10.5);
+doc.text(balStr, pageW / 2, afterY + (repHasPrior && Math.abs(repOpeningBalance) >= 0.01 ? 23 : 15), { align: 'center' });
 }
 } else {
 doc.setFont(undefined, 'normal'); doc.setFontSize(10); doc.setTextColor(150);
@@ -1466,8 +1470,10 @@ ${qtyAmount}
 </div>
 </div>
 <div style="text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 5px;">
-<div class="u-fs-sm u-text-muted" >
-${esc(item.time || '')}
+<div style="display:flex;align-items:center;gap:5px;justify-content:flex-end;flex-wrap:wrap;">
+<span class="u-fs-sm u-text-muted">${esc(item.time || '')}</span>
+${item.createdBy && typeof _creatorBadgeHtml === 'function' ? _creatorBadgeHtml(item) : ''}
+${item.salesRep && !item.createdBy ? `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;font-size:0.62rem;font-weight:700;color:var(--accent);background:rgba(37,99,235,0.10);border:1px solid rgba(37,99,235,0.25);border-radius:999px;">${esc(item.salesRep.split(' ')[0])}</span>` : ''}
 </div>
 </div>
 </div>
