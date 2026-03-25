@@ -169,9 +169,11 @@ function _showUpdateDialog(reg) {
     var waiting = reg.waiting;
     if (waiting) {
       waiting.postMessage({ type: 'SKIP_WAITING' });
+    } else {
+      // No waiting SW — just reload directly
+      sessionStorage.setItem('_swJustUpdated', '1');
+      window.location.reload();
     }
-    sessionStorage.setItem('_swJustUpdated', '1');
-    setTimeout(function() { window.location.reload(); }, 500);
   });
 }
 
@@ -200,6 +202,24 @@ if ('serviceWorker' in navigator) {
           }
         });
       });
+
+      // After skipWaiting, wait for the controller to actually change before reloading.
+      // This prevents the race condition where reload fires before the new SW takes control.
+      var _reloading = false;
+      navigator.serviceWorker.addEventListener('controllerchange', function() {
+        if (_reloading) return;
+        if (!window._swConfirmed) return;
+        _reloading = true;
+        window.location.reload();
+      });
+
+      // Re-check for updates when user returns to the app after being away
+      document.addEventListener('visibilitychange', function() {
+        if (document.visibilityState === 'visible') reg.update();
+      });
+
+      // Also check every 30 minutes in case the tab stays open
+      setInterval(function() { reg.update(); }, 30 * 60 * 1000);
 
     }).catch(function(e) { console.error('[SW]', e); });
   });

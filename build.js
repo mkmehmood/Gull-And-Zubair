@@ -107,7 +107,7 @@ const ASSETS_TO_CACHE_BLOCK =
 ];`;
 
 let sw = read(join(ROOT, 'sw.js'));
-sw = sw.replace(/const BUILD_HASH = '[^']+';/, `const BUILD_HASH = 'naswar-dealer-${coreHash}';`);
+sw = sw.replace(/const BUILD_HASH = '[^']+';/, `const BUILD_HASH = 'naswar-dealer-${coreHash}-${new Date().toISOString().slice(0,10).replace(/-/g,'')}';`);
 sw = sw.replace(/const ASSETS_TO_CACHE = \[[\s\S]*?\];/, ASSETS_TO_CACHE_BLOCK);
 write(join(DIST, 'sw.js'), sw);
 
