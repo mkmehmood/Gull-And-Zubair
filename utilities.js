@@ -580,6 +580,7 @@ showToast('Sync failed. Check your connection.', 'error');
 }
 }, AUTO_SYNC_DELAY);
 }
+
 async function updateSettingTimestamp(settingName) {
 const timestamp = getTimestamp();
 await sqliteStore.set(`${settingName}_timestamp`, timestamp);
@@ -701,6 +702,7 @@ requestAnimationFrame(() => processSync());
 }
 }
 }
+
 function getCurrentActiveTab() {
 if (!document.getElementById('tab-prod').classList.contains('hidden')) return 'prod';
 if (!document.getElementById('tab-sales').classList.contains('hidden')) return 'sales';
@@ -709,6 +711,7 @@ if (!document.getElementById('tab-factory').classList.contains('hidden')) return
 if (!document.getElementById('tab-payments').classList.contains('hidden')) return 'payments';
 return 'prod';
 }
+
 function syncCoreDisplays() {
 try {
 if (typeof updateUnitsAvailableIndicator === 'function') {
@@ -725,6 +728,7 @@ console.error('Calculation failed.', _safeErr(error));
 showToast('Calculation failed.', 'error');
 }
 }
+
 async function syncCalculatorTab() {
 try {
 if (typeof loadSalesData === 'function') await loadSalesData(currentCompMode);
@@ -735,6 +739,7 @@ showToast('Failed to load sales data.', 'error');
 if (typeof loadSalesData === 'function') setTimeout(() => loadSalesData(currentCompMode), 500);
 }
 }
+
 async function syncFactoryTab() {
 try {
 if (typeof syncFactoryProductionStats === 'function') await syncFactoryProductionStats();
@@ -748,6 +753,7 @@ showToast('Failed to render data.', 'error');
 if (typeof updateFactoryUnitsAvailableStats === 'function') setTimeout(updateFactoryUnitsAvailableStats, 500);
 }
 }
+
 async function syncPaymentsTab() {
 try {
 if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
@@ -758,6 +764,7 @@ showToast('Payment tab refresh failed.', 'error');
 if (typeof refreshPaymentTab === 'function') setTimeout(refreshPaymentTab, 500);
 }
 }
+
 async function syncProductionTab() {
 try {
 if (typeof refreshUI === 'function') refreshUI();
@@ -769,6 +776,7 @@ showToast('UI refresh failed.', 'error');
 if (typeof refreshUI === 'function') setTimeout(refreshUI, 500);
 }
 }
+
 async function syncSalesTab() {
 try {
 if (typeof calculateCustomerSale === 'function') calculateCustomerSale();
@@ -779,6 +787,7 @@ showToast('Customer data operation failed.', 'error');
 if (typeof refreshCustomerSales === 'function') setTimeout(refreshCustomerSales, 500);
 }
 }
+
 async function syncRepTab() {
 try {
 if (typeof renderRepCustomerTable === 'function') await renderRepCustomerTable();
@@ -789,6 +798,7 @@ showToast('Rep tab refresh failed.', 'error');
 if (typeof renderRepCustomerTable === 'function') setTimeout(renderRepCustomerTable, 500);
 }
 }
+
 function stopPeriodicSync() {
 }
 const RefreshDebouncer = {
@@ -937,12 +947,14 @@ let _uiState = { ..._UI_DEFAULTS };
 function getUI(key) {
   return _uiState[key] !== undefined ? _uiState[key] : _UI_DEFAULTS[key];
 }
+
 function setUI(key, val) {
   _uiState[key] = val;
   if (typeof sqliteStore !== 'undefined') {
     sqliteStore.set(_UI_STATE_KEY, _uiState).catch(() => {});
   }
 }
+
 async function loadUIState() {
   if (typeof sqliteStore === 'undefined') return;
   try {
@@ -1011,8 +1023,10 @@ document.getElementById('splash-author').textContent = `— ${randomQuote.author
 setTimeout(() => {
 }, 3800);
 }
+
 function updatePaymentStatusVisibility() {
 }
+
 async function recordEntry() {
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
 const stockReturns = ensureArray(await sqliteStore.get('stock_returns'));
@@ -1112,11 +1126,6 @@ db.push(newEntry);
 await unifiedSave('mfg_pro_pkr', db, newEntry);
 notifyDataChange('production');
 emitSyncUpdate({ mfg_pro_pkr: null});
-if (typeof saveRecordToFirestore === 'function') {
-saveRecordToFirestore('mfg_pro_pkr', newEntry).catch(e =>
-console.warn('[Production] Background Firestore push failed (will retry):', _safeErr(e))
-);
-}
 } catch (error) {
 db.pop();
 showToast(" Failed to save production entry. Please try again.", "error");
@@ -1146,6 +1155,7 @@ calculateNetCash();
 calculateCashTracker();
 showToast("Production record saved successfully!", "success");
 }
+
 function _dedupDeletionRecordsLocal(arr) {
   if (!Array.isArray(arr)) return [];
   const seen = new Map();
@@ -1163,6 +1173,7 @@ function _dedupDeletionRecordsLocal(arr) {
   });
   return Array.from(seen.values());
 }
+
 async function registerDeletion(id, collectionName = 'unknown', preDeletedRecord = null) {
 return (window._syncQueue || { run: f => f() }).run(async () => {
 const deletionRecords = ensureArray(await sqliteStore.get('deletion_records'));
@@ -1287,6 +1298,7 @@ await uploadDeletionToCloud(deletionRecord);
 await cleanupOldDeletions();
 });
 }
+
 async function _captureRecordSnapshot(id, collectionName) {
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
@@ -1533,6 +1545,7 @@ data: null
 }
 }
 }
+
 async function cleanupOldDeletions() {
 const deletionRecords = ensureArray(await sqliteStore.get('deletion_records'));
 const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
@@ -1565,6 +1578,7 @@ console.warn('[cleanupOldDeletions] cloud cleanup failed, will retry when online
 }
 }
 }
+
 async function openEntityDetailsOverlay(id) {
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
@@ -1578,21 +1592,25 @@ setQuickEntityType('OUT');
 await renderEntityOverlayContent(entity);
 if (typeof openStandaloneScreen === 'function') openStandaloneScreen('entity-details-screen');
 }
+
 function closeEntityDetailsOverlay() {
 if (typeof closeStandaloneScreen === 'function') closeStandaloneScreen('entity-details-screen');
 currentEntityId = null;
 refreshPaymentTab();
 }
+
 function openEditEntityFromDetails() {
 const id = currentEntityId;
 if (!id) return;
 editEntityBasicInfo(id);
 }
+
 function setQuickEntityType(type) {
 currentQuickType = type;
 document.getElementById('quick-type-out').className = `toggle-opt ${type === 'OUT' ? 'active' : ''}`;
 document.getElementById('quick-type-in').className = `toggle-opt ${type === 'IN' ? 'active' : ''}`;
 }
+
 async function renderEntityOverlayContent(entity) {
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
@@ -1698,6 +1716,7 @@ _entityFrag.appendChild(item);
 });
 list.replaceChildren(_entityFrag);
 }
+
 function filterEntityManagementHistory() {
 const term = document.getElementById('entity-trans-search').value.toLowerCase();
 const items = document.querySelectorAll('#entityManagementHistoryList .cust-history-item');
@@ -1706,6 +1725,7 @@ const text = item.innerText.toLowerCase();
 item.style.display = text.includes(term) ? 'flex' : 'none';
 });
 }
+
 async function saveQuickEntityTransaction() {
 const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
@@ -1721,10 +1741,26 @@ return;
 }
 if (!currentEntityId) return;
 const entity = paymentEntities.find(e => String(e.id) === String(currentEntityId));
+if (!entity) {
+showToast('Entity not found. Please refresh and try again.', 'error');
+return;
+}
+if (currentQuickType === 'OUT') {
+const _sqetAvail = await getAvailableCashInHand();
+if (_sqetAvail < amount) {
+showToast(`Insufficient cash in hand. Available: ${fmtAmt(Math.max(0, _sqetAvail))} — Required: ${fmtAmt(amount)}`, 'error', 5000);
+return;
+}
+}
 try {
 const now = new Date();
+const _sqetHours = now.getHours();
+const _sqetMins = now.getMinutes();
+const _sqetSecs = now.getSeconds();
+const _sqetAmpm = _sqetHours >= 12 ? 'PM' : 'AM';
+const _sqetH12 = (_sqetHours % 12) || 12;
+const timeString = `${String(_sqetH12).padStart(2,'0')}:${String(_sqetMins).padStart(2,'0')}:${String(_sqetSecs).padStart(2,'0')} ${_sqetAmpm}`;
 const dateStr = now.toISOString().split('T')[0];
-const timeString = now.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
 let txnId = generateUUID('pay');
 if (!validateUUID(txnId)) {
 txnId = generateUUID('pay');
@@ -1807,6 +1843,7 @@ showToast("Transaction saved successfully", "success");
 showToast('Failed to save transaction. Please try again.', 'error');
 }
 }
+
 async function _restorePayableFromDeletedTransaction(tx, allTransactions, allInventory) {
 if (!tx || !tx.isPayable) return false;
 const factoryInventoryData = allInventory || ensureArray(await sqliteStore.get('factory_inventory_data'));
@@ -1875,6 +1912,7 @@ return true;
 }
 return false;
 }
+
 async function deleteEntityTransaction(id) {
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
@@ -1929,6 +1967,7 @@ showToast('Failed to delete transaction. Please try again.', 'error');
 }
 }
 }
+
 async function deleteCurrentEntity() {
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
@@ -1973,15 +2012,13 @@ ensureRecordIntegrity(mat, true);
 await unifiedSave('factory_inventory_data', factoryInventoryData, mat);
 }
 const txsToDelete = _entityTxs.slice();
-const txIdsToDelete = new Set(txsToDelete.map(t => t.id));
-const filteredTx = paymentTransactions.filter(t => !txIdsToDelete.has(t.id));
-await saveWithTracking('payment_transactions', filteredTx);
-await Promise.all(txsToDelete.map(tx => registerDeletion(tx.id, 'transactions', tx)));
-void Promise.all(txsToDelete.map(tx => deleteRecordFromFirestore('payment_transactions', tx.id).catch(() => {})));
-await registerDeletion(_entityToDel.id, 'entities', _entityToDel);
+let filteredTx = paymentTransactions.slice();
+for (const tx of txsToDelete) {
+filteredTx = filteredTx.filter(t => t.id !== tx.id);
+await unifiedDelete('payment_transactions', filteredTx, tx.id, { strict: true }, tx);
+}
 const filteredEntities = paymentEntities.filter(e => String(e.id) !== String(currentEntityId));
-await saveWithTracking('payment_entities', filteredEntities);
-deleteRecordFromFirestore('payment_entities', _entityToDel.id).catch(() => {});
+await unifiedDelete('payment_entities', filteredEntities, _entityToDel.id, { strict: true }, _entityToDel);
 notifyDataChange('entities');
 if (typeof calculateNetCash === 'function') calculateNetCash();
 if (typeof calculateCashTracker === 'function') calculateCashTracker();
@@ -1993,6 +2030,7 @@ showToast(`"${_entityName}" and all its transactions deleted.`, 'success');
 showToast('Failed to delete entity. Please try again.', 'error');
 }
 }
+
 async function exportEntityData() {
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
 let csvContent = "data:text/csv;charset=utf-8,";
@@ -2015,6 +2053,7 @@ link.click();
 document.body.removeChild(link);
 showToast("Entity list exported", "success");
 }
+
 function _pdfMergedPeriodLabel(record) {
   const ms = record.mergedSummary;
   const dr = ms && ms.dateRange;
@@ -2037,10 +2076,12 @@ function _pdfMergedPeriodLabel(record) {
   }
   return 'Prev. Year';
 }
+
 function _pdfMergedCountLabel(record) {
   const cnt = record.mergedRecordCount || (record.mergedSummary && record.mergedSummary.recordCount);
   return cnt ? `${cnt} txn${cnt !== 1 ? 's' : ''} merged` : 'year-end merge';
 }
+
 function _pdfDrawMergedSectionHeader(doc, yPos, pageW, label) {
   const purpleLight = [245, 235, 255];
   const purpleDark  = [126, 34, 206];
@@ -2147,12 +2188,10 @@ await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/
 await new Promise(r => setTimeout(r, 200));
 }
 if (!window.jspdf || !window.jspdf.jsPDF) throw new Error("Failed to load PDF library. Please refresh and try again.");
-// All transactions for this entity (all time)
 const allEntityTxns = paymentTransactions.filter(t => String(t.entityId) === String(entity.id) && !t.isExpense);
 const now = new Date();
 const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-// Determine cutoff date for the selected period
-let periodCutoff = null; // null means 'all' — no prior-balance concept
+let periodCutoff = null;
 if (range !== 'all') {
   switch(range) {
     case 'today':  periodCutoff = today; break;
@@ -2161,16 +2200,12 @@ if (range !== 'all') {
     case 'year':   { const y = new Date(today); y.setFullYear(y.getFullYear()-1);  periodCutoff = y; break; }
   }
 }
-// priorTxns  = transactions BEFORE the period → used to compute opening balance
-// transactions = transactions WITHIN the period → shown in the table
 const priorTxns = periodCutoff
   ? allEntityTxns.filter(t => { if (!t.date) return false; return new Date(t.date) < periodCutoff; })
   : [];
 let transactions = periodCutoff
   ? allEntityTxns.filter(t => { if (!t.date) return false; return new Date(t.date) >= periodCutoff; })
   : allEntityTxns;
-// Opening balance: net of all activity strictly before the selected period.
-// Positive = net IN (they owe us / credit balance); Negative = net OUT (we owe them).
 const openingBalance = priorTxns.reduce((bal, t) => {
   const amt = parseFloat(t.amount) || 0;
   return t.type === 'OUT' ? bal - amt : bal + amt;
@@ -2306,14 +2341,10 @@ if (mergedTxns.length > 0) {
   yPos = doc.lastAutoTable.finalY + 6;
   if (yPos > 255) { doc.addPage(); yPos = 20; }
 }
-// ── Opening balance row (only when a time period is selected & prior txns exist) ──
 const hasPriorBalance = periodCutoff !== null && priorTxns.length > 0;
-// txRunBal starts at the opening balance so every subsequent row reflects the
-// true cumulative balance from the beginning of the account history.
 const txRunBal = { val: hasPriorBalance ? openingBalance : 0 };
 const txRows = normalTxns.map(t => buildTxRow(t, txRunBal));
 
-// Prepend the "Prior Balance" opening row when relevant
 if (hasPriorBalance) {
   const obAbs = Math.abs(openingBalance);
   const obDisplay = obAbs < 0.01 ? 'SETTLED' : fmtAmt(obAbs);
@@ -2334,12 +2365,11 @@ const totalOut          = normalTxns.filter(t => t.type === 'OUT').reduce((s, t)
 const totalCashIn       = normalTxns.filter(t => t.type === 'IN' && !t.isPayable).reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
 const totalCreditPurch  = normalTxns.filter(t => t.type === 'IN' && t.isPayable).reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
 const totalIn           = totalCashIn + totalCreditPurch;
-// Final balance = opening balance + period IN - period OUT
 const finalBal          = (hasPriorBalance ? openingBalance : 0) + totalIn - totalOut;
 let finalBalDisplay;
 if (Math.abs(finalBal) < 0.01) finalBalDisplay = 'SETTLED';
 else finalBalDisplay = fmtAmt(Math.abs(finalBal));
-const openingRowOffset  = hasPriorBalance ? 1 : 0; // row index shift for styling
+const openingRowOffset  = hasPriorBalance ? 1 : 0;
 if (normalTxns.length > 0 || hasPriorBalance) {
   doc.setFontSize(8.5); doc.setFont(undefined, 'bold');
   doc.setTextColor(...headerColor);
@@ -2365,7 +2395,6 @@ if (normalTxns.length > 0 || hasPriorBalance) {
     didParseCell: function(data) {
       const isOpeningRow = hasPriorBalance && data.row.index === 0;
       const isTotal      = data.row.index === txRows.length - 1;
-      // Style the opening balance row distinctively
       if (isOpeningRow) {
         data.cell.styles.fillColor  = [220, 235, 255];
         data.cell.styles.fontStyle  = 'bold';
@@ -2553,6 +2582,7 @@ if (pageCount === 1) {
 showToast("Error generating PDF: " + error.message, "error");
 }
 }
+
 async function exportCustomerToPDF() {
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
 const salesCustomers = ensureArray(await sqliteStore.get('sales_customers'));
@@ -2573,11 +2603,9 @@ await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/
 await new Promise(r => setTimeout(r, 200));
 }
 if (!window.jspdf || !window.jspdf.jsPDF) throw new Error("Failed to load PDF library. Please refresh and try again.");
-// All transactions for this customer (all time, un-filtered)
 const allCustTxns = customerSales.filter(s => s && s.customerName === customerName);
 const now = new Date();
 const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-// Determine cutoff date for the selected period
 let custPeriodCutoff = null;
 if (range !== 'all') {
   switch(range) {
@@ -2587,22 +2615,20 @@ if (range !== 'all') {
     case 'year':   { const y = new Date(today); y.setFullYear(y.getFullYear()-1); custPeriodCutoff = y; break; }
   }
 }
-// OLD_DEBT rows always belong to the opening of history, never to a period slice
 const custPriorTxns = custPeriodCutoff
   ? allCustTxns.filter(t => {
-      if (t.transactionType === 'OLD_DEBT') return true; // always treated as prior
+      if (t.transactionType === 'OLD_DEBT') return true;
       if (!t.date) return false;
       return new Date(t.date) < custPeriodCutoff;
     })
   : [];
 let transactions = custPeriodCutoff
   ? allCustTxns.filter(t => {
-      if (t.transactionType === 'OLD_DEBT') return false; // already in prior
+      if (t.transactionType === 'OLD_DEBT') return false;
       if (!t.date) return false;
       return new Date(t.date) >= custPeriodCutoff;
     })
   : allCustTxns;
-// Compute opening balance from prior transactions (debit = what they owe, credit = what they paid)
 const custOpeningBalance = custPriorTxns.reduce((bal, t) => {
   const pt = t.paymentType || 'CASH';
   const isOldDebt = t.transactionType === 'OLD_DEBT';
@@ -2611,7 +2637,6 @@ const custOpeningBalance = custPriorTxns.reduce((bal, t) => {
     debit = parseFloat(t.totalValue) || 0;
     credit = parseFloat(t.partialPaymentReceived) || 0;
   } else if (pt === 'CASH' || (pt === 'CREDIT' && t.creditReceived)) {
-    // settled — net zero effect on balance
   } else if (pt === 'CREDIT' && !t.creditReceived) {
     debit = parseFloat(t.totalValue) || 0;
     credit = parseFloat(t.partialPaymentReceived) || 0;
@@ -2781,7 +2806,6 @@ for (const t of normalSalesTxns) {
   totCredit += r.credit;
   totQty    += r.qty;
 }
-// Prepend opening balance row when a period is selected and prior data exists
 if (custHasPrior) {
   const obAbs = Math.abs(custOpeningBalance);
   const obDisplay = obAbs < 0.01 ? 'SETTLED' : fmtAmt(obAbs);
@@ -3165,6 +3189,7 @@ event.target.classList.add('active');
 calculateCashTracker();
 if (typeof calculateNetCash === 'function') calculateNetCash();
 }
+
 async function calculateCashTracker() {
 const salesHistory = ensureArray(await sqliteStore.get('noman_history'));
 const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
@@ -3341,14 +3366,15 @@ const elCreditTotal = document.getElementById('credit-total');
 if (elCreditTotal) elCreditTotal.textContent = `${fmtAmt(safeValue(totalCredits))}`;
 return finalTotals;
 }
+
 function updateEconomicDashboardWithNetValues(totals, totalCredits) {
 const operatingCashFlow = totals.productionValue - totals.totalSoldValue + totals.salesTabCash + totals.calculatorCash;
 const operatingCashElement = document.getElementById('operatingCashFlow');
 if (operatingCashElement) {
 operatingCashElement.textContent = `${fmtAmt(safeValue(operatingCashFlow))}`;
 }
-document.getElementById('cashDetailDirectSales').textContent = `${fmtAmt(safeValue(totals.salesTabCash))}`;
-document.getElementById('cashDetailRepCollections').textContent = `${fmtAmt(safeValue(totals.calculatorCash))}`;
+{ const _el_cashDetailDirectSales = document.getElementById('cashDetailDirectSales'); if (_el_cashDetailDirectSales) _el_cashDetailDirectSales.textContent = `${fmtAmt(safeValue(totals.salesTabCash))}`; }
+{ const _el_cashDetailRepCollections = document.getElementById('cashDetailRepCollections'); if (_el_cashDetailRepCollections) _el_cashDetailRepCollections.textContent = `${fmtAmt(safeValue(totals.calculatorCash))}`; }
 const creditTotalElement = document.getElementById('formulaSalesCredit');
 if (creditTotalElement) {
 creditTotalElement.textContent = `${fmtAmt(safeValue(totalCredits))}`;
@@ -3362,6 +3388,7 @@ if (productionValueElement) {
 productionValueElement.textContent = `${fmtAmt(safeValue(totals.productionValue))}`;
 }
 }
+
 async function openEntityTransactions(entityId) {
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
@@ -3421,6 +3448,7 @@ document.documentElement.style.overflow = 'hidden';
 document.getElementById('entityTransactionsOverlay').style.display = 'flex';
 });
 }
+
 function closeEntityTransactions() {
 requestAnimationFrame(() => {
 document.body.style.overflow = '';
@@ -3467,6 +3495,13 @@ const entity = paymentEntities.find(e => String(e.id) === String(entityId));
 if (!entity) {
 showToast("Selected entity not found", 'error');
 return;
+}
+if (type === 'OUT') {
+const _spAvailCash = await getAvailableCashInHand();
+if (_spAvailCash < amount) {
+showToast(`Insufficient cash in hand. Available: ${fmtAmt(Math.max(0, _spAvailCash))} — Required: ${fmtAmt(amount)}`, 'error', 5000);
+return;
+}
 }
 const now = new Date();
 let hours = now.getHours();
@@ -3622,6 +3657,7 @@ showToast(" Failed to delete transaction. Please try again.", "error");
 }
 }
 }
+
 async function filterPaymentHistory() {
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
@@ -3637,6 +3673,66 @@ card.style.display = 'none';
 }
 });
 }
+
+async function getAvailableCashInHand() {
+// Uses the exact same logic as calculateCashTracker in 'all' mode
+// so the blocking threshold matches what the UI displays.
+const _gacBatch = await sqliteStore.getBatch([
+'noman_history','mfg_pro_pkr','customer_sales','payment_transactions','expenses',
+'factory_production_history'
+]);
+const _gacSalesHistory = ensureArray(_gacBatch.get('noman_history'));
+const _gacDb = ensureArray(_gacBatch.get('mfg_pro_pkr'));
+const _gacCustomerSales = ensureArray(_gacBatch.get('customer_sales'));
+const _gacPayTx = ensureArray(_gacBatch.get('payment_transactions'));
+const _gacExpenses = ensureArray(_gacBatch.get('expenses'));
+const _gacProdHistory = ensureArray(_gacBatch.get('factory_production_history'));
+let _gacProdVal = 0;
+_gacDb.forEach(item => {
+if (item.isReturn) return;
+_gacProdVal += (item.totalSale || 0);
+});
+let _gacSalesCash = 0;
+_gacCustomerSales.forEach(sale => {
+const isRepLinked = sale.salesRep && sale.salesRep !== 'NONE';
+const _saleVal = sale.totalValue || 0;
+if (sale.isMerged && sale.mergedSummary) {
+_gacSalesCash += (sale.mergedSummary.cashSales || 0);
+} else if (sale.paymentType === 'CREDIT' && !sale.creditReceived) {
+// credit only — no cash
+} else if (isRepLinked) {
+// rep sales — no direct cash
+} else {
+if (sale.paymentType === 'CASH' || sale.creditReceived) _gacSalesCash += _saleVal;
+else if (sale.paymentType === 'COLLECTION') _gacSalesCash += _saleVal;
+else if (sale.paymentType === 'PARTIAL_PAYMENT') _gacSalesCash += _saleVal;
+}
+});
+let _gacCalcCash = 0;
+_gacSalesHistory.forEach(item => { _gacCalcCash += (item.received || 0); });
+let _gacPayIn = 0, _gacPayOut = 0, _gacExp = 0;
+_gacPayTx.forEach(tx => {
+if (tx.isPayable && tx.type === 'IN') return;
+if (tx.type === 'IN') {
+_gacPayIn += (parseFloat(tx.amount) || 0);
+} else if (tx.type === 'OUT') {
+if (tx.isExpense && tx.category === 'operating') {
+_gacExp += (parseFloat(tx.amount) || 0);
+} else if (!tx.isExpense) {
+_gacPayOut += (parseFloat(tx.amount) || 0);
+}
+}
+});
+// Only count merged expense records — non-merged ones are already in payment_transactions
+_gacExpenses.forEach(exp => {
+if (exp.isMerged === true && exp.category === 'operating') _gacExp += (parseFloat(exp.amount) || 0);
+});
+_gacProdHistory.forEach(entry => {
+if (!entry.isMerged) _gacExp += (parseFloat(entry.additionalCost) || 0);
+});
+return _gacProdVal + _gacSalesCash + _gacCalcCash + _gacPayIn - _gacPayOut - _gacExp;
+}
+
 async function calculateNetCash() {
 const _cncBatch = await sqliteStore.getBatch([
 'noman_history','factory_unit_tracking','payment_transactions','payment_entities',
@@ -3923,6 +4019,7 @@ return indicators;
 return null;
 }
 }
+
 function updateEconomicDashboard(indicators) {
 const _econMode = typeof currentCashTrackerMode !== 'undefined' ? currentCashTrackerMode : 'all';
 const netCashValueElement = document.getElementById('netCashValue');
@@ -3938,16 +4035,16 @@ if (operatingCashElement) {
 operatingCashElement.textContent = `${fmtAmt(safeValue(indicators.operatingCashFlow))}`;
 }
 document.getElementById('cashDetailDirectSales').textContent = `${fmtAmt(safeValue(indicators.cashDetails.directSales))}`;
-document.getElementById('cashDetailProductionCash').textContent = `${fmtAmt(safeValue(indicators.cashDetails.productionCash))}`;
+{ const _el_cashDetailProductionCash = document.getElementById('cashDetailProductionCash'); if (_el_cashDetailProductionCash) _el_cashDetailProductionCash.textContent = `${fmtAmt(safeValue(indicators.cashDetails.productionCash))}`; }
 document.getElementById('cashDetailRepCollections').textContent = `${fmtAmt(safeValue(indicators.cashDetails.repCollections))}`;
-document.getElementById('cashDetailPaymentsIn').textContent = `${fmtAmt(safeValue(indicators.cashDetails.paymentsIn))}`;
-document.getElementById('cashDetailPaymentsOut').textContent = `${fmtAmt(safeValue(indicators.cashDetails.paymentsOut))}`;
+{ const _el_cashDetailPaymentsIn = document.getElementById('cashDetailPaymentsIn'); if (_el_cashDetailPaymentsIn) _el_cashDetailPaymentsIn.textContent = `${fmtAmt(safeValue(indicators.cashDetails.paymentsIn))}`; }
+{ const _el_cashDetailPaymentsOut = document.getElementById('cashDetailPaymentsOut'); if (_el_cashDetailPaymentsOut) _el_cashDetailPaymentsOut.textContent = `${fmtAmt(safeValue(indicators.cashDetails.paymentsOut))}`; }
 const cashDetailOpExpEl = document.getElementById('cashDetailOperatingExpenses');
 if (cashDetailOpExpEl) cashDetailOpExpEl.textContent = `${fmtAmt(safeValue(indicators.cashDetails.operatingExpenses))}`;
-document.getElementById('cashDetailNet').textContent = `${fmtAmt(safeValue(indicators.cashInHand))}`;
-document.getElementById('formulaProdTotal').textContent = `${fmtAmt(safeValue(indicators.assets.cash))}`;
-document.getElementById('formulaRawMaterials').textContent = `${fmtAmt(safeValue(indicators.assets.rawMaterials))}`;
-document.getElementById('formulaUnitsValue').textContent = `${fmtAmt(safeValue(indicators.assets.formulaUnits))}`;
+{ const _el_cashDetailNet = document.getElementById('cashDetailNet'); if (_el_cashDetailNet) _el_cashDetailNet.textContent = `${fmtAmt(safeValue(indicators.cashInHand))}`; }
+{ const _el_formulaProdTotal = document.getElementById('formulaProdTotal'); if (_el_formulaProdTotal) _el_formulaProdTotal.textContent = `${fmtAmt(safeValue(indicators.assets.cash))}`; }
+{ const _el_formulaRawMaterials = document.getElementById('formulaRawMaterials'); if (_el_formulaRawMaterials) _el_formulaRawMaterials.textContent = `${fmtAmt(safeValue(indicators.assets.rawMaterials))}`; }
+{ const _el_formulaUnitsValue = document.getElementById('formulaUnitsValue'); if (_el_formulaUnitsValue) _el_formulaUnitsValue.textContent = `${fmtAmt(safeValue(indicators.assets.formulaUnits))}`; }
 const salesReceivablesEl = document.getElementById('salesReceivables');
 const calculatorReceivablesEl = document.getElementById('calculatorReceivables');
 const formulaReceivablesEl = document.getElementById('formulaReceivables');
@@ -3971,7 +4068,7 @@ workingCapitalElement.style.color = indicators.workingCapital < 0 ? 'var(--dange
 indicators.workingCapital < 50000 ? 'var(--warning)' :
 'var(--accent-emerald)';
 }
-document.getElementById('formulaFinal').textContent = `${fmtAmt(safeValue(indicators.totalEnterpriseValue))}`;
+{ const _el_formulaFinal = document.getElementById('formulaFinal'); if (_el_formulaFinal) _el_formulaFinal.textContent = `${fmtAmt(safeValue(indicators.totalEnterpriseValue))}`; }
 const currentRatioElement = document.getElementById('formulaCalcDisc');
 if (currentRatioElement) {
 const currentRatio = safeNumber(parseFloat(indicators.liquidityRatios?.currentRatio), 0);
@@ -4066,6 +4163,10 @@ return;
 const costData = await calculateSalesCost(store, quantity);
 const totalCost = costData.totalCost;
 const _effectiveSalePrice = await getEffectiveSalePriceForCustomer(name, store);
+if (!_effectiveSalePrice || _effectiveSalePrice <= 0) {
+showToast('⚠ Sale price not configured for this store. Set prices in Factory Formulas before recording sales.', 'warning', 5000);
+return;
+}
 const totalValue = quantity * _effectiveSalePrice;
 const profit = totalValue - totalCost;
 const existingCustomer = customerSales.find(s => s && s.customerName && name && s.customerName.toLowerCase() === name.toLowerCase());
@@ -4142,8 +4243,7 @@ const validatedRecord = ensureRecordIntegrity(saleRecord);
 const salesSnapshot = [...customerSales];
 try {
 customerSales.push(validatedRecord);
-await saveWithTracking('customer_sales', customerSales, validatedRecord);
-saveRecordToFirestore('customer_sales', validatedRecord).catch(() => {});
+await unifiedSave('customer_sales', customerSales, validatedRecord);
 try {
 const _scName = validatedRecord.customerName;
 const _scPhone = validatedRecord.customerPhone || '';
@@ -4153,8 +4253,7 @@ if (_scIdx === -1) {
 const _scContact = { id: generateUUID('cust'), name: _scName, phone: _scPhone, address: '', oldDebit: 0, customSalePrice: 0, createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
 if (!Array.isArray(salesCustomers)) salesCustomers = [];
 salesCustomers.push(_scContact);
-await saveWithTracking('sales_customers', salesCustomers, _scContact);
-saveRecordToFirestore('sales_customers', _scContact).catch(() => {});
+await unifiedSave('sales_customers', salesCustomers, _scContact);
 }
 }
 } catch (_scErr) { console.warn('Auto-register sales customer failed:', _safeErr(_scErr)); }
@@ -4181,7 +4280,7 @@ showToast(` Sale recorded successfully! ${name} - ${safeNumber(quantity, 0).toFi
 customerSales.length = 0;
 customerSales.push(...salesSnapshot);
 try {
-await saveWithTracking('customer_sales', customerSales);
+await unifiedSave('customer_sales', customerSales);
 } catch (rollbackError) {
 console.error('UI refresh failed.', _safeErr(rollbackError));
 showToast('UI refresh failed.', 'error');
@@ -4223,6 +4322,7 @@ updateCollectionPreview();
 calculateCustomerSale();
 }
 }
+
 function updateCollectionPreview() {
 if (custTransactionMode !== 'collection') return;
 const creditEl = document.getElementById('customer-current-credit');
@@ -4263,6 +4363,44 @@ const btn = document.getElementById('btn-save-cust-transaction');
 if (btn) { if (btn.disabled) return; btn.disabled = true; }
 const restoreBtn = () => { if (btn) btn.disabled = false; };
 try {
+let _custOutstanding = 0;
+try {
+const _custHistory = customerSales.filter(s =>
+s && s.currentRepProfile === 'admin' &&
+s.customerName && s.customerName.toLowerCase() === name.toLowerCase()
+);
+for (const s of _custHistory) {
+if (s.transactionType === 'OLD_DEBT') {
+if (!s.creditReceived) _custOutstanding += (parseFloat(s.totalValue) || 0) - (s.partialPaymentReceived || 0);
+} else if (s.paymentType === 'CREDIT' && !s.creditReceived) {
+if (s.isMerged && typeof s.creditValue === 'number') {
+_custOutstanding += s.creditValue;
+} else {
+_custOutstanding += (typeof getSaleTransactionValue === 'function' ? (await getSaleTransactionValue(s)) : (parseFloat(s.totalValue) || 0)) - (s.partialPaymentReceived || 0);
+}
+} else if (s.paymentType === 'COLLECTION' || s.paymentType === 'PARTIAL_PAYMENT') {
+_custOutstanding -= (s.totalValue || 0);
+}
+}
+_custOutstanding = Math.max(0, _custOutstanding);
+} catch (_e) { _custOutstanding = -1; }
+if (_custOutstanding === 0) {
+showToast(`${name} has no outstanding credit balance. Collections can only be recorded against existing unpaid credit.`, 'error', 5000);
+restoreBtn();
+return;
+} else if (_custOutstanding > 0 && amount > _custOutstanding) {
+const _overAmt = amount - _custOutstanding;
+const _proceed = await showGlassConfirm(
+`⚠ Over-collection Warning!
+
+${name} only owes ${fmtAmt(_custOutstanding)}.
+You are collecting ${fmtAmt(amount)} — an overpayment of ${fmtAmt(_overAmt)}.
+
+This will exceed the outstanding balance. Proceed only if this is an advance payment.`,
+{ title: '⚠ Over-collection Warning', confirmText: 'Collect Anyway', cancelText: 'Cancel' }
+);
+if (!_proceed) { restoreBtn(); return; }
+}
 let gpsCoords = null;
 try {
 gpsCoords = await Promise.race([
@@ -4308,8 +4446,7 @@ const validated = ensureRecordIntegrity(collRecord);
 const snapshot = [...customerSales];
 try {
 customerSales.push(validated);
-await saveWithTracking('customer_sales', customerSales, validated);
-saveRecordToFirestore('customer_sales', validated).catch(() => {});
+await unifiedSave('customer_sales', customerSales, validated);
 notifyDataChange('sales');
 triggerAutoSync();
 if (typeof calculateCashTracker === 'function') calculateCashTracker();
@@ -4328,7 +4465,7 @@ showToast(` Collection of ${fmtAmt(amount)} recorded for ${name}`, 'success');
 } catch (error) {
 customerSales.length = 0;
 customerSales.push(...snapshot);
-try { await saveWithTracking('customer_sales', customerSales); } catch (_) {}
+try { await unifiedSave('customer_sales', customerSales); } catch (_) {}
 showToast('Failed to save collection. Please try again.', 'error');
 }
 } finally {
@@ -4355,6 +4492,7 @@ case 'STORE_C': return 'ASAAN';
 default: return storeCode;
 }
 }
+
 async function getAvailableStoresForDate(date) {
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
 const stockReturns = ensureArray(await sqliteStore.get('stock_returns'));
@@ -4366,6 +4504,7 @@ stores.add(getStoreLabel(production.store));
 });
 return Array.from(stores).join(', ') || 'None';
 }
+
 async function calculateSalesCost(store, quantity) {
 const factoryDefaultFormulas = (await sqliteStore.get('factory_default_formulas')) || {};
 const factoryAdditionalCosts = (await sqliteStore.get('factory_additional_costs')) || {};
@@ -4392,6 +4531,7 @@ totalCost: totalCost,
 totalValue: totalValue
 };
 }
+
 async function calculateCustomerSale() {
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
 const stockReturns = ensureArray(await sqliteStore.get('stock_returns'));
@@ -4450,6 +4590,7 @@ inventoryWarning.style.background = 'rgba(5, 150, 105, 0.1)';
 }
 }
 }
+
 function selectSalesRep(btn, value) {
 document.querySelectorAll('#sales-rep-toggle-group .toggle-opt').forEach(b => b.classList.remove('active'));
 btn.classList.add('active');
@@ -4457,12 +4598,14 @@ document.getElementById('sales-rep-value').value = value;
 autoFillCustomerName();
 calculateCustomerSale();
 }
+
 function selectSupplyStore(btn, value) {
 document.querySelectorAll('#btn-supply-store-a, #btn-supply-store-b, #btn-supply-store-c').forEach(b => b.classList.remove('active'));
 btn.classList.add('active');
 document.getElementById('supply-store-value').value = value;
 calculateCustomerSale();
 }
+
 function selectPaymentType(btn, value) {
 if (!btn) return;
 document.querySelectorAll('#btn-payment-cash, #btn-payment-credit').forEach(b => b.classList.remove('active'));
@@ -4470,12 +4613,14 @@ btn.classList.add('active');
 document.getElementById('payment-type-value').value = value;
 calculateCustomerSale();
 }
+
 function selectRepPaymentType(btn, value) {
 document.querySelectorAll('#btn-rep-pay-credit, #btn-rep-pay-cash').forEach(b => b.classList.remove('active'));
 btn.classList.add('active');
 document.getElementById('rep-payment-value').value = value;
 calculateRepSalePreview();
 }
+
 function autoFillCustomerName() {
 const salesRepValue = document.getElementById('sales-rep-value').value;
 const nameInput = document.getElementById('cust-name');
@@ -4504,6 +4649,7 @@ infoDisplay.classList.add('hidden');
 }
 }
 }
+
 function createInventoryWarningElement() {
 const warningDiv = document.createElement('div');
 warningDiv.id = 'inventory-warning';
@@ -4578,8 +4724,7 @@ delete relatedSale.creditReceivedDate;
 }
 relatedSale.updatedAt = getTimestamp();
 ensureRecordIntegrity(relatedSale, true);
-await saveWithTracking('customer_sales', customerSales, relatedSale);
-saveRecordToFirestore('customer_sales', relatedSale).catch(() => {});
+await unifiedSave('customer_sales', customerSales, relatedSale);
 }
 }
 const customerSalesFiltered = customerSales.filter(s => s.id !== id);
@@ -4603,6 +4748,7 @@ showToast(" Failed to delete sale. Please try again.", "error");
 }
 }
 }
+
 async function calculateSales() {
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
@@ -4658,6 +4804,7 @@ firestoreStats = { reads: 0, writes: 0, history: [], lastReset: Date.now() };
 firestoreStats = { reads: 0, writes: 0, history: [], lastReset: Date.now() };
 }
 }
+
 function saveFirestoreStats() {
 sqliteStore.set('firestore_stats', firestoreStats).catch(() => {});
 }
@@ -4701,6 +4848,7 @@ function _checkFirestoreCostThresholds() {
     showToast('\u26A0\uFE0F Firestore writes at ' + w.toLocaleString() + ' today \u2014 80\u202f% of 20\u202f000/day free tier used', 'warning', 6000);
   }
 }
+
 function buildFirestoreCostEstimate(estimatedReads, estimatedWrites) {
   const totalR = firestoreStats.reads  + estimatedReads;
   const totalW = firestoreStats.writes + estimatedWrites;
@@ -4714,18 +4862,21 @@ function buildFirestoreCostEstimate(estimatedReads, estimatedWrites) {
   }
   return lines.join('\n');
 }
+
 function trackFirestoreRead(count = 1) {
 checkAndAutoResetFirestoreStats();
 firestoreStats.reads += count;
 saveFirestoreStats();
 _checkFirestoreCostThresholds();
 }
+
 function trackFirestoreWrite(count = 1) {
 checkAndAutoResetFirestoreStats();
 firestoreStats.writes += count;
 saveFirestoreStats();
 _checkFirestoreCostThresholds();
 }
+
 function resetFirestoreStats() {
 firestoreStats = { reads: 0, writes: 0, history: [], lastReset: Date.now() };
 saveFirestoreStats();
@@ -5185,10 +5336,12 @@ const signOutBtn = document.createElement('button');
 }
 }
 }
+
 function removeSignOutButton() {
 const btn = document.getElementById('cloud-signout-btn');
 if (btn) btn.remove();
 }
+
 function handleReturnQtyInput() {
 const retQty = parseFloat(document.getElementById('returnedQuantity').value) || 0;
 const section = document.getElementById('returnStoreSection');
@@ -5199,6 +5352,7 @@ section.classList.add('hidden');
 }
 if (typeof calculateSales === 'function') calculateSales();
 }
+
 function handleExpiredQtyInput() {
 const expQty = parseFloat(document.getElementById('expiredQuantity').value) || 0;
 const section = document.getElementById('expiredSection');
@@ -5209,6 +5363,7 @@ section.classList.add('hidden');
 }
 if (typeof calculateSales === 'function') calculateSales();
 }
+
 function handleTripleTap(el, targetTab) {
 const now = Date.now();
 const TAP_WINDOW = 600;
@@ -5220,6 +5375,7 @@ el._tapTimes = [];
 showTab(targetTab);
 }
 }
+
 async function saveTransaction() {
 const salesHistory = ensureArray(await sqliteStore.get('noman_history'));
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
@@ -5249,11 +5405,17 @@ selectedStore = { value: window._returnStore };
 const costPerKg = (await getCostPriceForStore('STORE_A')) || 0;
 const salePrice = await getSalePriceForStore('STORE_A');
 if(!date) return showToast('Please select a date', 'warning', 3000);
+if(sold <= 0) return showToast('Please enter valid units sold (must be greater than 0)', 'warning', 3000);
 if(salePrice <= 0) return showToast('Please set a sale price in Factory Formulas first', 'warning', 3000);
 if(ret > sold) return showToast('Returned quantity cannot exceed total sold', 'warning', 3000);
 if(exp < 0) return showToast('Expired quantity cannot be negative', 'warning', 3000);
+if(ret < 0) return showToast('Returned quantity cannot be negative', 'warning', 3000);
+if(cred < 0) return showToast('Credit sales cannot be negative', 'warning', 3000);
+if(prev < 0) return showToast('Previous credit received cannot be negative', 'warning', 3000);
+if(rec < 0) return showToast('Received cash cannot be negative', 'warning', 3000);
 if((ret + exp) > sold) return showToast('Combined returned + expired quantity cannot exceed total sold', 'warning', 3000);
 const netSold = Math.max(0, sold - ret - exp);
+if(cred > netSold) return showToast('Credit sales cannot exceed net sold quantity', 'warning', 3000);
 const cashQty = Math.max(0, netSold - cred);
 const creditValue = cred * salePrice;
 const revenue = netSold * salePrice;
@@ -5331,11 +5493,6 @@ history.push(entry);
 await unifiedSave('noman_history', history, entry);
 notifyDataChange('calculator');
 emitSyncUpdate({ noman_history: null});
-if (typeof saveRecordToFirestore === 'function') {
-  saveRecordToFirestore('noman_history', entry).catch(e =>
-    console.warn('[Calculator] Background Firestore push failed (will retry):', _safeErr(e))
-  );
-}
 if (Array.isArray(salesHistory)) {
 salesHistory.push(entry);
 }
@@ -5360,6 +5517,7 @@ if (typeof renderFactoryInventory === 'function') renderFactoryInventory();
 showToast('Failed to save transaction. Please try again.', 'error', 4000);
 }
 }
+
 async function exportCustomerData(type) {
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
@@ -5554,6 +5712,7 @@ showToast(`Exported ${customerMap.size} customers successfully!`, "success");
 showToast('Error generating PDF: ' + error.message, 'error');
 }
 }
+
 async function markSalesEntriesAsReceived(seller, quantityToMark) {
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
@@ -5585,17 +5744,14 @@ break;
 }
 }
 if (linkedIds.length > 0) {
-await saveWithTracking('customer_sales', customerSales, null, linkedIds);
-void Promise.all(
-  customerSales.filter(s => linkedIds.includes(s.id))
-    .map(s => saveRecordToFirestore('customer_sales', s).catch(() => {}))
-).catch(() => {});
+await unifiedSave('customer_sales', customerSales, null, linkedIds);
 if (typeof refreshCustomerSales === 'function') {
 refreshCustomerSales(1, false);
 }
 }
 return linkedIds;
 }
+
 async function markRepSalesEntriesAsUsed(seller, date, calcId) {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
   if (!seller || seller === 'COMBINED' || !date || !calcId) return [];
@@ -5614,14 +5770,11 @@ const repSales = ensureArray(await sqliteStore.get('rep_sales'));
     }
   });
   if (linkedRepIds.length > 0) {
-    await saveWithTracking('rep_sales', repSales, null, linkedRepIds);
-    const modifiedSales = repSales.filter(s => linkedRepIds.includes(s.id));
-    for (const sale of modifiedSales) {
-      saveRecordToFirestore('rep_sales', sale).catch(() => {});
-    }
+    await unifiedSave('rep_sales', repSales, null, linkedRepIds);
   }
   return linkedRepIds;
 }
+
 async function revertRepSalesEntries(repSaleIds) {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
   if (!repSaleIds || repSaleIds.length === 0) return 0;
@@ -5636,16 +5789,13 @@ const repSales = ensureArray(await sqliteStore.get('rep_sales'));
     }
   });
   if (revertedCount > 0) {
-    await saveWithTracking('rep_sales', repSales, null, repSaleIds);
-    const revertedSales = repSales.filter(s => repSaleIds.includes(s.id));
-    for (const sale of revertedSales) {
-      saveRecordToFirestore('rep_sales', sale).catch(() => {});
-    }
+    await unifiedSave('rep_sales', repSales, null, repSaleIds);
     notifyDataChange('rep');
     triggerAutoSync();
   }
   return revertedCount;
 }
+
 async function updateCompositionChart() {
 const _sdEl = document.getElementById('sellerSelect');
 if (_sdEl && _sdEl.value === 'COMBINED') {
@@ -5653,6 +5803,7 @@ const comp = await calculateComparisonData();
 updateSalesCharts(comp);
 }
 }
+
 async function setIndChartMode(mode) {
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
@@ -5665,6 +5816,7 @@ document.getElementById('ind-year-btn').className = `toggle-opt ${mode === 'year
 document.getElementById('ind-all-btn').className = `toggle-opt ${mode === 'all' ? 'active' : ''}`;
 await updateIndChart();
 }
+
 async function setIndChartMetric(metric) {
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
@@ -5673,6 +5825,7 @@ const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 currentIndMetric = metric;
 await updateIndChart();
 }
+
 async function updateIndChart() {
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
@@ -5797,6 +5950,7 @@ ticks: { color: colors.text, maxRotation: 45 }
 }
 });
 }
+
 function setStoreComparisonMetric(metric, event) {
 if (event) {
 event.preventDefault();
@@ -5810,6 +5964,7 @@ event.target.classList.add('active');
 }
 updateStoreComparisonChart(currentOverviewMode);
 }
+
 async function updateStoreComparisonChart(mode = 'day') {
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
 const stockReturns = ensureArray(await sqliteStore.get('stock_returns'));
@@ -5914,6 +6069,7 @@ ticks: { color: colors.text }
 }
 });
 }
+
 async function refreshUI(page = 1, force = false) {
 const _ruiBatch = await sqliteStore.getBatch([
 'mfg_pro_pkr','stock_returns','customer_sales','sales_customers',
@@ -6087,6 +6243,7 @@ updateAllStoresOverview(currentOverviewMode);
 }
 updateUnitsAvailableIndicator();
 }
+
 function filterProductionHistory() {
 const searchTerm = document.getElementById('production-search').value.toLowerCase();
 const allCards = document.querySelectorAll('#prodHistoryList .card');
@@ -6099,6 +6256,7 @@ card.style.display = 'none';
 }
 });
 }
+
 function filterCalculatorHistory() {
 const searchTerm = document.getElementById('calculator-search').value.toLowerCase();
 const allCards = document.querySelectorAll('#historyList .card');
@@ -6113,6 +6271,7 @@ card.style.display = 'none';
 }
 });
 }
+
 function filterCustomerTransactions() {
 const searchTerm = document.getElementById('customer-search').value.toLowerCase();
 const allCards = document.querySelectorAll('#custHistoryList .card');
@@ -6125,6 +6284,7 @@ card.style.display = 'none';
 }
 });
 }
+
 async function renderEntityTable(page = 1) {
 const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
 const _retAlive = (item) => item && item.id && !deletedRecordIds.has(String(item.id));
@@ -6198,6 +6358,7 @@ const payEl = document.getElementById('total-payables');
 if(recEl) recEl.innerText = `${fmtAmt(totalReceivables)}`;
 if(payEl) payEl.innerText = `${fmtAmt(totalPayables)}`;
 }
+
 async function filterEntityList() {
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
 const searchTerm = document.getElementById('entity-list-search')?.value.toLowerCase() || '';
@@ -6224,6 +6385,7 @@ card.style.display = 'none';
 });
 }
 }
+
 async function viewEntityTransactions(entityId) {
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
@@ -6254,6 +6416,7 @@ message += `Net Balance: ${fmtAmt(netBalance)}\n`;
 }
 showToast(message, 'info', 5000);
 }
+
 async function syncSuppliersToEntities() {
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
 const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
@@ -6291,18 +6454,13 @@ fixedMaterials.push(material);
 });
 
 if (newEntities.length > 0) {
-await saveWithTracking('payment_entities', paymentEntities);
-if (typeof saveRecordToFirestore === 'function') {
-newEntities.forEach(e => saveRecordToFirestore('payment_entities', e).catch(() => {}));
-}
+await unifiedSave('payment_entities', paymentEntities, null, newEntities.map(e => e.id));
 }
 if (fixedMaterials.length > 0) {
-await saveWithTracking('factory_inventory_data', factoryInventoryData);
-if (typeof saveRecordToFirestore === 'function') {
-fixedMaterials.forEach(i => saveRecordToFirestore('factory_inventory_data', i).catch(() => {}));
+await unifiedSave('factory_inventory_data', factoryInventoryData, null, fixedMaterials.map(i => i.id));
 }
 }
-}
+
 async function verifyAccountPassword(password) {
   if (!currentUser || !password) return false;
   const email = currentUser.email;
@@ -6323,6 +6481,7 @@ async function verifyAccountPassword(password) {
     return false;
   }
 }
+
 async function promptVerifiedBackupPassword({ title = 'Confirm Password', subtitle = 'Enter your account password to encrypt this backup file.', inputId = '_bkp_pwd_modal_input' } = {}) {
   if (!currentUser) return null;
   return new Promise((resolve) => {
@@ -6381,6 +6540,7 @@ async function promptVerifiedBackupPassword({ title = 'Confirm Password', subtit
     };
   });
 }
+
 async function unifiedBackup() {
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
@@ -6450,6 +6610,7 @@ console.error('Encryption failed:', _safeErr(encErr));
 showToast('Encryption failed: ' + encErr.message, 'error');
 }
 }
+
 async function unifiedRestore(event) {
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
@@ -6609,6 +6770,7 @@ function normaliseBackupFields(data) {
 
   return data;
 }
+
 async function _doRestoreMerge(data) {
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
@@ -6960,6 +7122,7 @@ const statsMessage = `Added: ${totalAdded}, Updated: ${totalUpdated}, Skipped: $
 const syncMessage = cloudSyncSuccess ? ' and new/updated records uploaded to cloud' : '';
 showToast(`Restore complete${syncMessage}! ${statsMessage}`, 'success', 5000);
 }
+
 async function _doYearCloseRestore(data, honourPostCloseDeletions = true) {
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
@@ -7117,6 +7280,7 @@ const replaceData = {
   const totalRecords = Object.values(replaceData).reduce((s, a) => s + a.length, 0);
   showToast(`✅ Financial year close reversed! ${totalRecords} pre-close records restored.`, 'success', 6000);
 }
+
 async function showTab(tab) {
 currentActiveTab = tab;
 requestAnimationFrame(() => {
@@ -7198,6 +7362,7 @@ console.warn('[showTab] tab load error:', e && e.message || e);
 }
 }, 50);
 }
+
 function handleRepTabUI() {
 const adminControls = document.getElementById('admin-rep-controls');
 const adminAnalytics = document.getElementById('admin-rep-analytics');
@@ -7348,6 +7513,7 @@ if (element) {
 lazyLoadObserver.observe(element);
 }
 }
+
 function animateElement(element, keyframes, options = {}) {
 if (!element) return Promise.resolve();
 const defaultOptions = {
@@ -7358,6 +7524,7 @@ fill: 'forwards'
 const animation = element.animate(keyframes, { ...defaultOptions, ...options });
 return animation.finished;
 }
+
 function fadeIn(element, duration = 150) {
 if (!element) return Promise.resolve();
 element.style.opacity = '0';
@@ -7367,6 +7534,7 @@ return animateElement(element, [
 { opacity: 1 }
 ], { duration });
 }
+
 function fadeOut(element, duration = 100) {
 if (!element) return Promise.resolve();
 return animateElement(element, [
@@ -7376,6 +7544,7 @@ return animateElement(element, [
 element.style.display = 'none';
 });
 }
+
 function slideIn(element, direction = 'up', duration = 200) {
 if (!element) return Promise.resolve();
 const transforms = {
@@ -7399,6 +7568,7 @@ lastTime = currentTime;
 }
 requestAnimationFrame(measureFPS);
 }
+
 async function handleAdminRepDateChange(val) {
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
 const stockReturns = ensureArray(await sqliteStore.get('stock_returns'));
@@ -7416,6 +7586,7 @@ if (typeof calculateRepAnalytics === 'function') {
 calculateRepAnalytics();
 }
 }
+
 function setMfgChartMode(mode) {
 currentMfgMode = mode;
 document.getElementById('mfg-week-btn').className = `toggle-opt ${mode === 'week' ? 'active' : ''}`;
@@ -7424,6 +7595,7 @@ document.getElementById('mfg-year-btn').className = `toggle-opt ${mode === 'year
 document.getElementById('mfg-all-btn').className = `toggle-opt ${mode === 'all' ? 'active' : ''}`;
 updateMfgCharts();
 }
+
 async function updateMfgCharts() {
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
 const stockReturns = ensureArray(await sqliteStore.get('stock_returns'));
@@ -7582,6 +7754,7 @@ font: { size: 13, weight: 'bold' }
 }
 });
 }
+
 async function getWeightPerUnit(storeType) {
 const factoryDefaultFormulas = (await sqliteStore.get('factory_default_formulas')) || {};
 const factoryCostAdjustmentFactor = (await sqliteStore.get('factory_cost_adjustment_factor')) || {};
@@ -7593,6 +7766,7 @@ totalWeight += item.quantity;
 });
 return totalWeight;
 }
+
 async function getPreviousDayAvailableUnits(storeType, currentDate) {
 const factoryProductionHistory = ensureArray(await sqliteStore.get('factory_production_history'));
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
@@ -7614,6 +7788,7 @@ return Math.max(0, prevPrevAvailable + prevProduced - prevUsed);
 }
 return 0;
 }
+
 async function updateFactoryUnitsAvailableStats() {
 const factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {};
 const factoryProductionHistory = ensureArray(await sqliteStore.get('factory_production_history'));
@@ -7675,6 +7850,7 @@ _setFac('factoryAsaanMatVal', await formatCurrency(asaanMaterialsValue));
 _setFac('factoryAsaanProfit', await formatCurrency(asaanTotalProfit));
 _setFac('factoryAsaanProfitUnit', await formatCurrency(asaanProfitPerKg) + '/kg');
 }
+
 async function updateFactorySummaryCard() {
 const factoryProductionHistory = ensureArray(await sqliteStore.get('factory_production_history'));
 const factoryDefaultFormulas = (await sqliteStore.get('factory_default_formulas')) || {};
@@ -7750,6 +7926,7 @@ _setSum('factorySumMatVal', await formatCurrency(totalMatValue));
 _setSum('factorySumProfit', await formatCurrency(totalProfit));
 _setSum('factorySumProfitUnit', await formatCurrency(avgProfitPerKg) + '/kg');
 }
+
 async function getInitialAvailableForRange(storeType, mode, endDate) {
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
 const stockReturns = ensureArray(await sqliteStore.get('stock_returns'));
@@ -7766,6 +7943,7 @@ startDate = new Date(end.getFullYear(), 0, 1);
 }
 return getPreviousDayAvailableUnits(storeType, startDate);
 }
+
 async function refreshFactoryTab() {
 const _rftBatch = await sqliteStore.getBatch([
 'factory_inventory_data','factory_production_history',
@@ -7852,6 +8030,7 @@ renderFactoryHistory();
 await renderFactoryInventory();
 calculateFactoryProduction();
 }
+
 async function updateAllTabsWithFactoryCosts() {
 const factoryDefaultFormulas = (await sqliteStore.get('factory_default_formulas')) || {};
 const factoryAdditionalCosts = (await sqliteStore.get('factory_additional_costs')) || {};
@@ -7871,6 +8050,7 @@ updateFactoryUnitsAvailableStats();
 updateFactorySummaryCard();
 refreshUI();
 }
+
 function initFactoryTab() {
 const factoryDateInput = document.getElementById('factory-date');
 if (!factoryDateInput.value) {
@@ -7884,6 +8064,7 @@ if (index === 0) opt.classList.add('active');
 else opt.classList.remove('active');
 });
 }
+
 function setProductionView(view, event) {
 currentProductionView = view;
 document.querySelectorAll('.production-toggle-btn').forEach(btn => btn.classList.remove('active'));
@@ -7912,6 +8093,7 @@ updateAllStoresOverview(currentOverviewMode);
 }
 refreshUI();
 }
+
 async function updateAllStoresOverview(mode = 'day') {
 const salesHistory = ensureArray(await sqliteStore.get('noman_history'));
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
@@ -8117,6 +8299,7 @@ _asgFrag.appendChild(combinedCard);
 allStoresGrid.replaceChildren(_asgFrag);
 updateStoreComparisonChart(mode);
 }
+
 function setCustomerChartMode(mode) {
 currentCustomerChartMode = mode;
 document.getElementById('cust-week-btn').className = `toggle-opt ${mode === 'week' ? 'active' : ''}`;
@@ -8125,6 +8308,7 @@ document.getElementById('cust-year-btn').className = `toggle-opt ${mode === 'yea
 document.getElementById('cust-all-btn').className = `toggle-opt ${mode === 'all' ? 'active' : ''}`;
 updateCustomerCharts();
 }
+
 async function updateCustomerCharts() {
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
 const salesCustomers = ensureArray(await sqliteStore.get('sales_customers'));
@@ -8368,6 +8552,7 @@ font: { size: 13, weight: 'bold' }
 }
 });
 }
+
 async function refreshCustomerSales(page = 1, force = false) {
 const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
 const _rcsAlive = (item) => item && item.id && !deletedRecordIds.has(String(item.id));
@@ -8622,6 +8807,7 @@ _filterHistoryByPeriod('#custHistoryList', _custDate, currentSalesSummaryMode ||
 renderCustomersTable();
 updateCustomerCharts();
 }
+
 async function toggleCustomerCreditReceived(id, event) {
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
 if (event) {
@@ -8644,6 +8830,7 @@ refreshCustomerSales();
 updateCustomerCharts();
 }
 }
+
 async function calculateComparisonData() {
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
@@ -8689,6 +8876,7 @@ comp[h.seller].giv += h.creditValue;
 });
 return comp;
 }
+
 function createReportHTML(title, data, isHistory = false, id = null, sellerName = null, isHighlight = false, isMerged = false) {
 const creditVal = safeValue(data.creditVal);
 const collected = safeValue(data.collected);
@@ -8742,6 +8930,7 @@ html += `<button class="tbl-action-btn danger u-w-full u-mt-8" onclick="deleteSa
 html += `</div>`;
 return html;
 }
+
 async function calculateTotalSoldForRepresentative(seller) {
 const salesHistory = ensureArray(await sqliteStore.get('noman_history'));
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
@@ -8767,6 +8956,7 @@ let totalSold = 0;
 });
 return totalSold;
 }
+
 async function autoFillTotalSoldQuantity() {
 const salesHistory = ensureArray(await sqliteStore.get('noman_history'));
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
@@ -8821,12 +9011,14 @@ styleAutoFilledField(recoveredField);
 }
 calculateSales();
 }
+
 function styleAutoFilledField(field) {
 field.style.background = 'rgba(5, 150, 105, 0.1)';
 field.style.color = 'var(--accent-emerald)';
 field.style.fontWeight = 'bold';
 field.style.border = '1px solid var(--accent-emerald)';
 }
+
 async function loadSalesData(compMode = 'all') {
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
@@ -8971,6 +9163,7 @@ return `<tr${rowCls}><td>${m.label}</td>${cells}</tr>`;
 await updateIndChart();
 }
 }
+
 function addToRange(range, h) {
 range.sold += h.totalSold;
 range.ret += h.returned;
@@ -8984,6 +9177,7 @@ range.revenue += h.revenue;
 range.expected += (h.totalExpected || 0);
 range.received += (h.received || 0);
 }
+
 function updateSalesCharts(comp) {
 
 if(!comp) return;
@@ -9060,6 +9254,7 @@ font: { size: 13, weight: 'bold' }
 }
 });
 }
+
 async function processReturnToProduction(storeKey, quantity, date, seller) {
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
 const stockReturns = ensureArray(await sqliteStore.get('stock_returns'));
@@ -9124,6 +9319,7 @@ returnLogEntry = ensureRecordIntegrity(returnLogEntry, false);
 stockReturns.push(returnLogEntry);
 await unifiedSave('stock_returns', stockReturns, returnLogEntry);
 }
+
 async function reverseReturnFromProduction(storeKey, quantity, date) {
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
 const stockReturns = ensureArray(await sqliteStore.get('stock_returns'));
@@ -9172,6 +9368,7 @@ await unifiedSave('factory_inventory_data', factoryInventoryData, choraMaterial)
 emitSyncUpdate({ factory_inventory_data: null});
 notifyDataChange('factory');
 }
+
 async function reverseExpiredFromChora(quantity, date) {
 const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
@@ -9196,14 +9393,17 @@ await unifiedSave('factory_inventory_data', factoryInventoryData, choraMaterial)
 emitSyncUpdate({ factory_inventory_data: null});
 notifyDataChange('factory');
 }
+
 async function formatCurrency(num) {
 if (typeof num !== 'number') num = parseFloat(num) || 0;
 if (isNaN(num) || !isFinite(num)) num = 0;
 return String(num.toFixed(2));
 }
+
 function safeValue(value) {
 return isNaN(value) || !isFinite(value) ? 0 : value;
 }
+
 async function refreshAllDisplays() {
 const _radBatch = await sqliteStore.getBatch([
 'mfg_pro_pkr','customer_sales','rep_sales','noman_history',
@@ -9476,6 +9676,7 @@ else show = true;
 item.style.display = show ? '' : 'none';
 });
 }
+
 function _filterPaymentHistoryByPeriod() {
 const periodFilterEl = document.getElementById('unifiedPeriodFilter');
 const period = periodFilterEl ? periodFilterEl.value : 'all';
@@ -9493,6 +9694,7 @@ if (isNaN(cd.getTime())) { card.style.display = ''; return; }
 card.style.display = (cd >= startDate) ? '' : 'none';
 });
 }
+
 function _filterHistoryByPeriod(listSelector, refDateStr, mode) {
 const refDate = new Date(refDateStr);
 if (isNaN(refDate.getTime())) return;
@@ -9512,6 +9714,7 @@ else show = true;
 card.style.display = show ? '' : 'none';
 });
 }
+
 function setSalesSummaryMode(mode) {
 currentSalesSummaryMode = mode;
 const labels = { day:'Daily', week:'Weekly', month:'Monthly', year:'Yearly', all:'All Time' };
@@ -9540,6 +9743,7 @@ else card.classList.remove('all-times-summary');
 const refDate = (document.getElementById('cust-date') || {}).value || new Date().toISOString().split('T')[0];
 _filterHistoryByPeriod('#custHistoryList', refDate, mode);
 }
+
 function setPerfOverviewMode(mode) {
 currentPerfOverviewMode = mode;
 const prefixes = ['day','week','month','year','all'];
@@ -9554,6 +9758,7 @@ if (activeEl && ghostEl) activeEl.innerHTML = ghostEl.innerHTML;
 const refDate = (document.getElementById('sale-date') || {}).value || new Date().toISOString().split('T')[0];
 _filterHistoryByPeriod('#historyList', refDate, mode);
 }
+
 function setOverviewMode(mode) {
 currentOverviewMode = mode;
 const buttons = ['day', 'week', 'month', 'year', 'all'];
@@ -9656,6 +9861,7 @@ showToast("Error: Record not found.", "error");
 showToast("Failed to delete entry. Please try again.", "error");
 }
 }
+
 async function revertSpecificSalesEntries(saleIds) {
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
@@ -9677,11 +9883,7 @@ revertedCount++;
 }
 });
 if (revertedCount > 0) {
-await saveWithTracking('customer_sales', customerSales, null, saleIds);
-void Promise.all(
-  customerSales.filter(s => saleIds.includes(s.id))
-    .map(s => saveRecordToFirestore('customer_sales', s).catch(() => {}))
-).catch(() => {});
+await unifiedSave('customer_sales', customerSales, null, saleIds);
 if (typeof refreshCustomerSales === 'function') {
 refreshCustomerSales(1, true);
 }
@@ -9690,6 +9892,7 @@ triggerAutoSync();
 }
 return revertedCount;
 }
+
 function toggleEntityViewMode() {
 const toggleBtn = document.getElementById('entityViewModeToggle');
 const entityGrid = document.getElementById('entityCardsGrid');
@@ -9706,6 +9909,7 @@ toggleBtn.textContent = '';
 }
 renderEntityTable();
 }
+
 async function calculateEntityBalances() {
 const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
@@ -9750,6 +9954,7 @@ balances[transaction.entityId] += parseFloat(transaction.amount) || 0;
 }
 return balances;
 }
+
 function getDynamicRole(balance) {
 if (balance > 0.01) {
 return {
@@ -9777,6 +9982,7 @@ sign: ''
 };
 }
 }
+
 function filterEntityCards() {
 const searchTerm = document.getElementById('entity-list-search').value.toLowerCase().trim();
 const entityCards = document.querySelectorAll('#entityCardsGrid .entity-card-compact');
@@ -9796,6 +10002,7 @@ card.style.display = 'none';
 }
 });
 }
+
 async function openEntityManagement() {
 editingEntityId = null;
 const _en = document.getElementById('entityName'); if (_en) _en.value = '';
@@ -9805,6 +10012,7 @@ const _entMT1 = document.getElementById('entityManagementModalTitle'); if (_entM
 const _delBtn = document.getElementById('deleteEntityBtn'); if (_delBtn) { _delBtn.classList.add('u-hidden'); _delBtn.style.display = 'none'; }
 if (typeof openStandaloneScreen === 'function') openStandaloneScreen('add-entity-screen');
 }
+
 async function closeEntityManagement() {
 if (typeof closeStandaloneScreen === 'function') closeStandaloneScreen('add-entity-screen');
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
@@ -9814,6 +10022,7 @@ const entity = paymentEntities.find(e => String(e.id) === String(currentEntityId
 if (entity) renderEntityOverlayContent(entity);
 }
 }
+
 async function saveEntity() {
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
@@ -9883,6 +10092,7 @@ if (typeof calculateNetCash === 'function') calculateNetCash();
 showToast('Failed to save entity. Please try again.', 'error');
 }
 }
+
 async function editEntityBasicInfo(id) {
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
 const entity = paymentEntities.find(e => String(e.id) === String(id));
@@ -9895,6 +10105,7 @@ const _entMT2 = document.getElementById('entityManagementModalTitle'); if (_entM
 if (typeof openStandaloneScreen === 'function') openStandaloneScreen('add-entity-screen');
 }
 }
+
 async function refreshPaymentTab(force = false) {
 const _rptBatch = await sqliteStore.getBatch([
 'mfg_pro_pkr','customer_sales','noman_history',
@@ -10056,6 +10267,7 @@ console.error('Payment transaction failed.', _safeErr(error));
 showToast('Payment transaction failed.', 'error');
 }
 }
+
 async function selectEntity(id) {
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
 selectedEntityId = id;
@@ -10081,12 +10293,14 @@ chip.classList.add('active');
 }
 });
 }
+
 async function refreshEntityBalances() {
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
 const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
 renderEntityTable();
 }
+
 function getMetricValue(historyItem, metric) {
 switch(metric) {
 case 'weight':
@@ -10105,6 +10319,7 @@ default:
 return 0;
 }
 }
+
 function getMetricLabel(metric) {
 switch(metric) {
 case 'weight': return 'Weight (kg)';
@@ -10116,6 +10331,7 @@ case 'credit': return 'Credit ()';
 default: return 'Metric';
 }
 }
+
 async function deleteFactoryInventoryItem() {
 const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
@@ -10165,6 +10381,7 @@ showToast('Failed to delete item. Please try again.', 'error');
 }
 }
 }
+
 async function initPaymentData() {
 const expenseCategories = ensureArray(await sqliteStore.get('expense_categories'));
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
@@ -10382,6 +10599,7 @@ Click to continue with this name
 resultsDiv.innerHTML = html;
 resultsDiv.classList.remove('hidden');
 }
+
 function selectExpense(name, type) {
 document.getElementById('expenseName').value = name;
 document.getElementById('expense-search-results').classList.add('hidden');
@@ -10417,6 +10635,7 @@ if (btn) { btn.style.opacity = '1'; btn.style.pointerEvents = 'auto'; }
 }
 document.getElementById('expenseAmount').focus();
 }
+
 function hideExpenseSearch() {
 document.getElementById('expense-search-results').classList.add('hidden');
 document.getElementById('expenseAmount').focus();
@@ -10431,6 +10650,7 @@ if (btn) btn.classList.remove('active');
 });
 if (clickedBtn) clickedBtn.classList.add('active');
 }
+
 function selectReturnStore(value, clickedBtn) {
 window._returnStore = value;
 ['ret-store-a','ret-store-b'].forEach(id => {
@@ -10465,6 +10685,13 @@ return;
 if (!date) {
 showToast("Please select date", "warning");
 return;
+}
+if (category === 'OUT' || category === 'operating') {
+const _seAvailCash = await getAvailableCashInHand();
+if (_seAvailCash < amount) {
+showToast(`Insufficient cash in hand. Available: ${fmtAmt(Math.max(0, _seAvailCash))} — Required: ${fmtAmt(amount)}`, 'error', 5000);
+return;
+}
 }
 let expensesSnapshot = [...expenseRecords];
 let categoriesSnapshot = [...expenseCategories];
@@ -10681,6 +10908,7 @@ showToast('Failed to render data.', 'error');
 showToast('Failed to save expense. Please try again.', 'error');
 }
 }
+
 async function createExpenseTransaction(expense) {
 const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
@@ -10734,9 +10962,11 @@ if (typeof refreshEntityBalances === 'function') {
 refreshEntityBalances();
 }
 }
+
 function renderRecentExpenses() {
 renderExpenseTable();
 }
+
 async function renderExpenseTable(page = 1) {
 const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
 const expenseRecords = ensureArray(await sqliteStore.get('expenses'))
@@ -10848,6 +11078,7 @@ fragment.appendChild(tr);
 });
 tbody.replaceChildren(fragment);
 }
+
 async function renderUnifiedTable(page = 1) {
 
 const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
@@ -11106,6 +11337,7 @@ No records found matching your filters
 if (totalSpan) totalSpan.textContent = '0.00';
 return;
 }
+
 function buildUnifiedRow(row) {
 const tr = document.createElement('tr');
 tr.style.cssText = 'border-bottom: 1px solid var(--glass-border); transition: background 0.2s; cursor: pointer;';
@@ -11186,6 +11418,7 @@ if (expensesEl) expensesEl.textContent = fmtAmt(totalExpenses);
 }
 _filterPaymentHistoryByPeriod();
 }
+
 async function updateExpenseBreakdown() {
 const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
 const container = document.getElementById('expense-breakdown-container');
@@ -11229,6 +11462,7 @@ html += `<div style="color: var(--text-muted); font-size: 0.7rem; margin-top: 4p
 }
 container.innerHTML = html;
 }
+
 async function exportUnifiedData() {
 const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
 const _notDeleted = (item) => item && item.id && !deletedRecordIds.has(String(item.id));
@@ -11539,6 +11773,7 @@ showToast('PDF exported successfully!', 'success');
 showToast('Error generating PDF: ' + error.message, 'error');
 }
 }
+
 function formatExpenseDate(dateString) {
 const date = new Date(dateString);
 const month = date.toLocaleDateString('en-US', { month: 'short' });
@@ -11546,6 +11781,7 @@ const day = String(date.getDate()).padStart(2, '0');
 const year = String(date.getFullYear()).slice(-2);
 return `${month} ${day} ${year}`;
 }
+
 function toSafeDate(value) {
 if (!value) return null;
 if (typeof value === 'object' && value !== null && typeof value.seconds === 'number') {
@@ -11555,6 +11791,7 @@ if (value instanceof Date) return value;
 const d = new Date(value);
 return isNaN(d.getTime()) ? null : d;
 }
+
 function formatDisplayDate(dateInput) {
 if (!dateInput) return '-';
 const date = toSafeDate(dateInput);
@@ -11564,6 +11801,7 @@ const day = String(date.getDate()).padStart(2, '0');
 const year = String(date.getFullYear()).slice(-2);
 return `${month} ${day} ${year}`;
 }
+
 async function openExpenseEntityDetails(expenseId) {
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
 const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
@@ -11586,6 +11824,7 @@ openEntityDetailsOverlay(entity.id);
 showToast('Entity not found for this expense', 'warning');
 }
 }
+
 async function openOperatingExpenseOverlay(expenseName) {
 const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
 currentExpenseOverlayName = expenseName;
@@ -11602,11 +11841,13 @@ if (typeof openStandaloneScreen === 'function') openStandaloneScreen('expense-de
 });
 renderExpenseOverlayContent();
 }
+
 function closeExpenseDetailsOverlay() {
 if (typeof closeStandaloneScreen === 'function') closeStandaloneScreen('expense-details-screen');
 currentExpenseOverlayName = null;
 refreshPaymentTab();
 }
+
 async function renderExpenseOverlayContent() {
 const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
@@ -11679,6 +11920,7 @@ _expFrag.appendChild(item);
 });
 list.replaceChildren(_expFrag);
 }
+
 function filterExpenseManagementHistory() {
 const term = document.getElementById('expense-history-search').value.toLowerCase();
 const items = document.querySelectorAll('#expenseManagementHistoryList .cust-history-item');
@@ -11710,7 +11952,15 @@ showToast('Please enter a valid amount', 'warning');
 return;
 }
 const expenseName = currentExpenseOverlayName;
-if (!expenseName) return;
+if (!expenseName) {
+showToast('No expense category selected. Please close and reopen the expense panel.', 'warning');
+return;
+}
+const _sqeeAvail = await getAvailableCashInHand();
+if (_sqeeAvail < amount) {
+showToast(`Insufficient cash in hand. Available: ${fmtAmt(Math.max(0, _sqeeAvail))} — Required: ${fmtAmt(amount)}`, 'error', 5000);
+return;
+}
 try {
 const now = new Date();
 const dateStr = now.toISOString().split('T')[0];
@@ -11791,6 +12041,7 @@ if (typeof renderRecentExpenses === 'function') renderRecentExpenses();
 showToast('Failed to delete all expense records. Please try again.', 'error');
 }
 }
+
 async function exportExpenseOverlayToPDF() {
 const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
 const expenseName = currentExpenseOverlayName;
@@ -12089,6 +12340,7 @@ showToast(` ${label} deleted — all balances and views restored!`, 'success');
 showToast('Failed to delete expense. Please try again.', 'error');
 }
 }
+
 function clearExpenseForm() {
 document.getElementById('expenseName').value = '';
 document.getElementById('expenseAmount').value = '';
@@ -12107,6 +12359,7 @@ expIdEl.textContent = 'ID: ' + previewId.split('-').slice(0,2).join('-') + '…'
 expIdEl.title = previewId;
 }
 }
+
 function getCategoryColor(category) {
 switch(category) {
 case 'operating': return 'var(--danger)';
@@ -12115,6 +12368,7 @@ case 'misc': return 'var(--accent)';
 default: return 'var(--text-muted)';
 }
 }
+
 function getCategoryLabel(category) {
 switch(category) {
 case 'operating': return 'Operating';
@@ -12123,6 +12377,7 @@ case 'misc': return ' Miscellaneous';
 default: return 'Other';
 }
 }
+
 async function openDataMenu() {
 if (appMode === 'rep') {
 return;
@@ -12132,6 +12387,7 @@ if (typeof performOneClickSync === 'function') {
 performOneClickSync().catch(e => console.error('[openDataMenu] sync error:', e));
 }
 }
+
 function closeDataMenu() {
 
 }
@@ -12406,9 +12662,11 @@ if (filterSel) {
 }
 await renderRecycleBin(defaultFilter);
 }
+
 function closeRecycleBin() {
 if (typeof closeStandaloneScreen === 'function') closeStandaloneScreen('recycle-bin-screen');
 }
+
 async function renderRecycleBin(filterCollection = 'all') {
   const container = document.getElementById('recycleBinList');
   const statsEl   = document.getElementById('recycleBinStats');
@@ -12656,6 +12914,7 @@ async function renderRecycleBin(filterCollection = 'all') {
     console.error('[RecycleBin] render error', _safeErr(e));
   }
 }
+
 async function attemptRecoverRecord(id, collectionName) {
 const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
 const deletionRecords = ensureArray(await sqliteStore.get('deletion_records'));
@@ -12754,6 +13013,7 @@ console.error('Encryption failed:', _safeErr(encErr));
 showToast('Encryption failed: ' + encErr.message, 'error');
 }
 }
+
 async function uploadOldDataToCloud(event) {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
@@ -12926,6 +13186,7 @@ cloudData.naswar_default_settings = {};
 cloudData.appMode = 'admin';
 cloudData.repProfile = {};
 }
+
 function mergeArrays(cloudArr, fileArr) {
 if (!Array.isArray(cloudArr)) cloudArr = [];
 if (!Array.isArray(fileArr)) fileArr = [];
@@ -13294,6 +13555,7 @@ el.textContent = (window._assignedManagerName || 'Factory Manager').toUpperCase(
 el.textContent = (window._assignedManagerName || 'User').toUpperCase();
 }
 }
+
 function lockToRepMode() {
 document.querySelectorAll('.sidebar-nav-btn').forEach(btn => {
 if (btn.id !== 'snav-rep') btn.style.display = 'none';
@@ -13317,6 +13579,7 @@ const newTransCard = document.getElementById('rep-new-transaction-card');
 if (newTransCard) newTransCard.style.display = 'block';
 if (typeof refreshRepUI === 'function') refreshRepUI();
 }
+
 function lockToProductionMode() {
 document.querySelectorAll('.sidebar-nav-btn').forEach(btn => {
 if (btn.id !== 'snav-prod') btn.style.display = 'none';
@@ -13348,6 +13611,7 @@ if (spField) spField.style.display = 'none';
 const dynCost = document.getElementById('dynamic-cost-display');
 if (dynCost) dynCost.style.display = 'none';
 }
+
 function lockToFactoryMode() {
 document.querySelectorAll('.sidebar-nav-btn').forEach(btn => {
 if (btn.id !== 'snav-factory') btn.style.display = 'none';
@@ -13381,6 +13645,7 @@ const formulaDisplay = document.getElementById('factoryFormulaDisplay');
 if (formulaDisplay) formulaDisplay.style.display = 'none';
 }
 }
+
 function lockToUserRoleMode() {
 const assignedTabs = window._assignedUserTabs || [];
 const userName = window._assignedManagerName || 'User';
@@ -13464,6 +13729,7 @@ if (assignedTabs.length > 0 && typeof showTab === 'function') {
 showTab(assignedTabs[0]);
 }
 }
+
 async function enforceRepModeLock() {
 if (window._modeLockEnforced) return;
 window._modeLockEnforced = true;
@@ -13492,6 +13758,7 @@ lockToFactoryMode();
 console.warn('enforceRepModeLock: failed to read mode from SQLite, defaulting to admin.', _safeErr(e));
 }
 }
+
 function preventAdminAccess() {
 if (!window._originalShowTab && typeof window.showTab === 'function') {
 window._originalShowTab = window.showTab;
@@ -13565,6 +13832,7 @@ btn.style.display = 'none';
 });
 }
 }
+
 async function unlockAdminMode() {
 appMode = 'admin';
 updateSystemName();
@@ -13665,7 +13933,7 @@ const repSalesFiltered = repSales.filter(s => s.id !== id);
 await unifiedDelete('rep_sales', repSalesFiltered, id, { strict: true }, transaction);
 if (wasPartialPayment && relatedSaleId) {
 const relatedSale = repSales.find(s => s.id === relatedSaleId);
-if (relatedSale) saveRecordToFirestore('rep_sales', relatedSale).catch(() => {});
+if (relatedSale) await unifiedSave('rep_sales', repSales, relatedSale);
 }
 await refreshRepUI(true);
 if (currentManagingRepCustomer && typeof renderRepCustomerTransactions === 'function') {
@@ -13684,6 +13952,7 @@ showToast('Failed to delete transaction. Please try again.', 'error');
 }
 }
 }
+
 async function handleCustomerInput(query, mode) {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
@@ -13724,6 +13993,7 @@ phoneContainer.classList.remove('hidden');
 phoneContainer.classList.add('hidden');
 }
 }
+
 async function handleUniversalSearch(inputId, resultsId, dataSource) {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
@@ -13867,6 +14137,7 @@ break;
 resultsDiv.innerHTML = html;
 resultsDiv.classList.remove('hidden');
 }
+
 function selectFromUniversalSearch(inputId, resultsId, value, type, id) {
 const input = document.getElementById(inputId);
 const resultsDiv = document.getElementById(resultsId);
@@ -14397,6 +14668,7 @@ if (cloudTs > localTs) await sqliteStore.set('team_list_timestamp', cloudTs);
 }
 renderAllRepUI();
 }
+
 async function saveSalesRepsList() {
 try {
 await sqliteStore.set('sales_reps_list', salesRepsList);
@@ -14421,6 +14693,7 @@ console.error('saveSalesRepsList error:', _safeErr(e));
 showToast('Failed to save team list. Please try again.', 'error');
 }
 }
+
 async function saveUserRolesList() {
 try {
 await sqliteStore.set('user_roles_list', userRolesList);
@@ -14444,6 +14717,7 @@ console.error('saveUserRolesList error:', _safeErr(e));
 showToast('Failed to save user roles. Please try again.', 'error');
 }
 }
+
 function renderAllRepUI() {
 const adminSel = document.getElementById('admin-rep-selector');
 if (adminSel) {
@@ -14472,6 +14746,7 @@ return `<button id="btn-rep-dyn-${i}" class="toggle-opt${currentVal === r ? ' ac
 }
 renderManageRepsList();
 }
+
 function renderManageRepsList() {
 const list = document.getElementById('manage-reps-list');
 if (!list) return;
@@ -14507,6 +14782,7 @@ hint.textContent = _newUserRoleSelectedTabs.size === 0
 : 'Access: ' + [..._newUserRoleSelectedTabs].map(t => t.charAt(0).toUpperCase() + t.slice(1)).join(', ');
 }
 }
+
 function renderUserRoleList() {
 const list = document.getElementById('manage-userrole-list');
 if (!list) return;
@@ -14530,6 +14806,7 @@ return `
 </div>`;
 }).join('');
 }
+
 function switchManageTeamTab(tab) {
 ['rep', 'userrole', 'accounts'].forEach(t => {
 const btn = document.getElementById('team-tab-' + t);
@@ -14541,6 +14818,7 @@ if (tab === 'userrole') renderUserRoleList();
 if (tab === 'rep') renderManageRepsList();
 if (tab === 'accounts' && typeof loadAccountsList === 'function') loadAccountsList();
 }
+
 async function addNewUserRole() {
 const input = document.getElementById('new-userrole-name-input');
 if (!input) return;
@@ -14561,6 +14839,7 @@ if (hint) hint.textContent = 'Select one or more tabs to assign';
 renderUserRoleList();
 showToast(`${name} added as User`, 'success');
 }
+
 async function removeUserRole(index) {
 const user = userRolesList[index];
 if (!user) return;
@@ -14572,6 +14851,7 @@ await saveUserRolesList();
 renderUserRoleList();
 showToast(`${esc(user.name)} removed`, 'info');
 }
+
 async function addNewSalesRep() {
 const input = document.getElementById('new-rep-name-input');
 if (!input) return;
@@ -14583,6 +14863,7 @@ await saveSalesRepsList();
 input.value = '';
 showToast(`${name} added`, 'success');
 }
+
 async function removeSalesRep(index) {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 if (salesRepsList.length <= 1) { showToast('Must have at least one representative', 'warning'); return; }
@@ -14608,10 +14889,12 @@ await sqliteStore.set('repProfile', currentRepProfile);
 await saveSalesRepsList();
 showToast(`${name} removed`, 'info');
 }
+
 function openManageRepsModal() {
 renderManageRepsList();
 if (typeof openStandaloneScreen === 'function') openStandaloneScreen('sales-rep-screen');
 }
+
 function closeManageRepsModal() {
 if (typeof closeStandaloneScreen === 'function') {
 closeStandaloneScreen('sales-rep-screen');
@@ -15088,6 +15371,7 @@ Error loading devices: ${esc(error.message)}
 `;
 }
 }
+
 async function refreshDeviceList() {
 const container = document.getElementById('device-list-container');
 if (container) {
@@ -15100,6 +15384,7 @@ Refreshing...
 await loadDeviceList();
 showToast(' Device list refreshed', 'success', 2000);
 }
+
 async function remoteControlDevice(deviceId, targetMode, repName = null, userTabs = null) {
 if (!firebaseDB || !currentUser) {
 showToast('Not logged in', 'error', 3000);
@@ -15168,6 +15453,7 @@ setTimeout(loadDeviceList, 2000);
 showToast('Failed to control device: ' + error.message, 'error', 4000);
 }
 }
+
 async function removeDevice(deviceId) {
 if (!firebaseDB || !currentUser) {
 showToast('Not logged in', 'error', 3000);
@@ -15368,6 +15654,7 @@ window._deviceCmdRetrying = false;
 console.error('[device] listenForDeviceCommands failed:', _safeErr(error));
 }
 }
+
 async function applyRemoteModeChange(targetMode, source, repName = null, userTabs = null) {
 const previousMode = appMode;
 const previousManager = window._assignedManagerName || null;

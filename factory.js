@@ -483,6 +483,14 @@ factoryCostAdjustmentFactor[_otherStore] = _freshFactor[_otherStore];
 }
 factorySalePrices.standard = parseFloat(document.getElementById('sale-price-standard').value) || 0;
 factorySalePrices.asaan = parseFloat(document.getElementById('sale-price-asaan').value) || 0;
+if (factorySalePrices.standard <= 0 && factorySalePrices.asaan <= 0) {
+showToast('Sale prices cannot both be 0 — profit calculations would go negative. Please set at least one sale price.', 'warning', 5000);
+return;
+}
+if (factorySalePrices.standard < 0 || factorySalePrices.asaan < 0) {
+showToast('Sale prices cannot be negative.', 'warning', 4000);
+return;
+}
 try {
 const timestamp = getTimestamp();
 await sqliteStore.setBatch([
@@ -695,6 +703,9 @@ const conversionFactor = parseFloat(document.getElementById('factoryMaterialConv
 const unitName = document.getElementById('factoryMaterialUnitName').value.trim() || '';
 const supplierType = document.getElementById('factoryMaterialSupplierType').value;
 if (!name) return showToast('Name required', 'warning');
+if (qty <= 0) return showToast('Please enter a valid quantity greater than 0', 'warning');
+if (cost <= 0) return showToast('Please enter a valid cost greater than 0', 'warning');
+if (conversionFactor <= 0) return showToast('Conversion factor must be greater than 0', 'warning');
 try {
 const quantityInKg = qty * conversionFactor;
 const costPerKg = conversionFactor > 0 ? cost / conversionFactor : cost;
@@ -776,11 +787,11 @@ const materialId = material.id;
 const linkedTransactions = paymentTransactions.filter(t => t.materialId === materialId && t.entityId === material.supplierId && t.isPayable === true);
 if (linkedTransactions.length > 0) {
 const removedTransactions = linkedTransactions.slice();
-const removedIds = new Set(removedTransactions.map(t => t.id));
-const filteredTx = paymentTransactions.filter(t => !removedIds.has(t.id));
-await saveWithTracking('payment_transactions', filteredTx);
-await Promise.all(removedTransactions.map(tx => registerDeletion(tx.id, 'transactions', tx)));
-void Promise.all(removedTransactions.map(tx => deleteRecordFromFirestore('payment_transactions', tx.id).catch(() => {})));
+let filteredTx = paymentTransactions.slice();
+for (const tx of removedTransactions) {
+filteredTx = filteredTx.filter(t => t.id !== tx.id);
+await unifiedDelete('payment_transactions', filteredTx, tx.id, { strict: true }, tx);
+}
 }
 delete material.supplierId;
 delete material.supplierName;
@@ -813,7 +824,6 @@ const suppCreatedAt = getTimestamp();
 let supplierEntity = ensureRecordIntegrity({ id: suppId, name: supplierData.name, type: 'payee', phone: supplierData.phone || '', wallet: '', createdAt: suppCreatedAt, updatedAt: suppCreatedAt, timestamp: suppCreatedAt, isSupplier: true, supplierCategory: 'raw_materials' }, false);
 paymentEntities.push(supplierEntity);
 await unifiedSave('payment_entities', paymentEntities, supplierEntity);
-saveRecordToFirestore('payment_entities', supplierEntity).catch(() => {});
 notifyDataChange('entities');
 triggerAutoSync();
 return supplierEntity;
@@ -1103,6 +1113,10 @@ const inventorySnapshot = JSON.parse(JSON.stringify(factoryInventoryData));
 const historySnapshot = [...factoryProductionHistory];
 try {
 const settings = factoryDefaultFormulas[currentFactoryEntryStore];
+if (!settings || settings.length === 0) {
+showToast('No formula configured for this store. Please set up Factory Formulas before recording production.', 'warning', 5000);
+return;
+}
 const additionalCost = factoryAdditionalCosts[currentFactoryEntryStore] || 0;
 let baseCost = 0;
 let rawMat = 0;
@@ -1163,10 +1177,13 @@ createdBy: (appMode === 'userrole' && window._assignedManagerName) ? window._ass
 };
 const validatedRecord = ensureRecordIntegrity(productionRecord);
 factoryProductionHistory.unshift(validatedRecord);
-await Promise.all([
-saveWithTracking('factory_inventory_data', factoryInventoryData),
-saveWithTracking('factory_production_history', factoryProductionHistory, validatedRecord)
-]);
+await unifiedSave('factory_production_history', factoryProductionHistory, validatedRecord);
+if (inventoryUpdated) {
+const inventoryIds = factoryInventoryData.filter(i => i && i.id).map(i => i.id);
+await unifiedSave('factory_inventory_data', factoryInventoryData, null, inventoryIds);
+} else {
+await unifiedSave('factory_inventory_data', factoryInventoryData);
+}
 notifyDataChange('factory');
 emitSyncUpdate({ factory_inventory_data: null, factory_production_history: null});
 await syncFactoryProductionStats();
@@ -1175,13 +1192,6 @@ calculateNetCash();
 calculateCashTracker();
 document.getElementById('factoryProductionUnits').value = '1';
 showToast('Production saved successfully!', 'success');
-const cloudWrites = [saveRecordToFirestore('factory_production_history', validatedRecord)];
-if (inventoryUpdated) {
-for (const item of factoryInventoryData) cloudWrites.push(saveRecordToFirestore('factory_inventory_data', item));
-}
-void Promise.all(cloudWrites)
-.then(() => triggerAutoSync())
-.catch(err => console.warn(' Background Firestore sync failed (will retry):', _safeErr(err)));
 } catch (error) {
 factoryInventoryData.length = 0;
 factoryInventoryData.push(...inventorySnapshot);
@@ -1367,9 +1377,10 @@ restoredMaterials.push({ name: inventoryItem.name || 'Unknown', quantity: materi
 }
 }
 factoryProductionHistory.splice(entryIndex, 1);
+const inventoryIds = factoryInventoryData.filter(i => i && i.id).map(i => i.id);
 await Promise.all([
 unifiedDelete('factory_production_history', factoryProductionHistory, id, { strict: true }, entry),
-saveWithTracking('factory_inventory_data', factoryInventoryData)
+unifiedSave('factory_inventory_data', factoryInventoryData, null, inventoryIds)
 ]);
 await refreshFactoryTab();
 calculateNetCash();
@@ -1380,9 +1391,6 @@ showToast(` Entry deleted! Raw materials restored: ${restoredMaterials.map(m => 
 } else {
 showToast(' Entry deleted and inventory restored.', 'success');
 }
-void Promise.all(factoryInventoryData.filter(item => item && item.id).map(item => saveRecordToFirestore('factory_inventory_data', item)))
-.then(() => triggerAutoSync())
-.catch(err => console.warn(' Background Firestore sync failed on delete (will retry):', _safeErr(err)));
 } catch (error) {
 showToast(' Failed to delete entry. Please try again.', 'error');
 }

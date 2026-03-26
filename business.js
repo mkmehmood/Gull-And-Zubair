@@ -37,6 +37,7 @@ function _triggerFileDownload(blob, filename) {
     }, 300);
   }, 0);
 }
+
 function _readFileAsArrayBuffer(file) {
   if (typeof file.arrayBuffer === 'function') {
     return file.arrayBuffer();
@@ -48,6 +49,7 @@ function _readFileAsArrayBuffer(file) {
     fr.readAsArrayBuffer(file);
   });
 }
+
 function _readFileAsText(file) {
   if (typeof file.text === 'function') return file.text();
   return new Promise((resolve, reject) => {
@@ -760,9 +762,11 @@ function safeNumber(value, defaultValue = 0) {
 const num = Number(value);
 return (isNaN(num) || !isFinite(num)) ? defaultValue : num;
 }
+
 function safeToFixed(value, decimals = 2) {
 return safeNumber(value, 0).toFixed(decimals);
 }
+
 function formatIndianCurrency(value) {
 const num = Math.round(safeNumber(value, 0));
 if (isNaN(num)) return '0';
@@ -780,13 +784,16 @@ result = restFormatted + ',' + last3;
 }
 return isNeg ? '-' + result : result;
 }
+
 function fmtAmt(value) {
 return formatIndianCurrency(value);
 }
+
 function safeString(value, defaultValue = '') {
 if (value === null || value === undefined) return defaultValue;
 return String(value);
 }
+
 function safeReplace(value, searchValue, replaceValue) {
 return safeString(value).replace(searchValue, replaceValue);
 }
@@ -1782,6 +1789,7 @@ return [];
 }
 return [];
 }
+
 async function loadAllData() {
 if (typeof loadUIState === 'function') await loadUIState();
 const configKeys = [
@@ -1852,6 +1860,7 @@ const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
 return match ? decodeURIComponent(match[1]) : null;
 } catch (e) { return null; }
 }
+
 function _writeCookie(name, value) {
 try {
 document.cookie = `${name}=${encodeURIComponent(value)}; max-age=${COOKIE_MAX_AGE}; path=/; SameSite=Strict`;
@@ -1859,6 +1868,7 @@ document.cookie = `${name}=${encodeURIComponent(value)}; max-age=${COOKIE_MAX_AG
 console.warn('_writeCookie failed:', _safeErr(e));
 }
 }
+
 function _generateUUID() {
 
   const buf = new Uint8Array(16);
@@ -1881,6 +1891,7 @@ function _generateUUID() {
   const core = `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20,32)}`;
   return 'dev-' + core;
 }
+
 async function _readCacheAnchor() {
 try {
 if (!('caches' in window)) return null;
@@ -1891,6 +1902,7 @@ const text = await resp.text();
 return text || null;
 } catch (e) { return null; }
 }
+
 async function _writeCacheAnchor(value) {
 try {
 if (!('caches' in window)) return;
@@ -1898,9 +1910,11 @@ const cache = await caches.open(_CACHE_STORE_NAME);
 await cache.put(_CACHE_DEVICE_KEY, new Response(value));
 } catch (e) {  }
 }
+
 function _readSession(key) {
 try { return sessionStorage.getItem(key) || null; } catch (e) { return null; }
 }
+
 function _writeSession(key, value) {
 try { sessionStorage.setItem(key, value); } catch (e) {  }
 }
@@ -1934,32 +1948,25 @@ await _writeCacheAnchor(deviceId);
  * key — those are intentionally preserved across logouts.
  */
 async function _clearDeviceIdStorage() {
-  // Expire cookies immediately
   try {
     document.cookie = `${DEVICE_ID_COOKIE}=; max-age=0; path=/; SameSite=Strict`;
   } catch(_) {}
   try {
     document.cookie = `${INSTALL_TOKEN_COOKIE}=; max-age=0; path=/; SameSite=Strict`;
   } catch(_) {}
-  // localStorage
   try { localStorage.removeItem('persistent_device_id'); } catch(_) {}
-  // sessionStorage (belt-and-suspenders — signOut also calls sessionStorage.clear())
   try {
     sessionStorage.removeItem('gz_did_session');
     sessionStorage.removeItem('gz_itk_session');
   } catch(_) {}
-  // Cache API anchor
   try {
     if ('caches' in window) {
       const cache = await caches.open(_CACHE_STORE_NAME);
       await cache.delete(_CACHE_DEVICE_KEY);
     }
   } catch(_) {}
-  // SQLite device_id row
   try { await sqliteStore.set('device_id', null); } catch(_) {}
-  // Reset in-memory cached shard so the next UUID batch picks up the new shard
   _cachedDeviceShard = null;
-  // Reset UID ownership so the next login is always treated as a fresh session
   _deviceIdOwnerUid = null;
 }
 window._clearDeviceIdStorage = _clearDeviceIdStorage;
@@ -1983,6 +1990,7 @@ console.warn('Fingerprint-based device ID recovery failed:', _safeErr(e));
 }
 return null;
 }
+
 async function _recoverDeviceIdByToken() {
 if (!firebaseDB || !currentUser) return null;
 try {
@@ -2004,42 +2012,25 @@ console.warn('Token-based device ID recovery failed:', _safeErr(e));
 }
 return null;
 }
+
 async function getDeviceId() {
-// ── Login-timestamp self-expiry ───────────────────────────────────────────
-// Every genuine login stamps _gznd_login_ts = Date.now() into sessionStorage
-// (sync.js onAuthStateChanged).  sessionStorage survives page reloads but
-// is cleared by signOut() and wiped between browser sessions.
-//
-// The device ID format is "<uuid>_<epochMs>" — the suffix IS the session
-// birth time.  We compare it against _gznd_login_ts:
-//   • suffix >= login_ts  → ID belongs to this login session, keep it
-//   • suffix <  login_ts  → ID is from a previous session, discard it
-//     (this also skips Firestore fingerprint/token recovery, so the old
-//      shard can never be pulled back from the cloud)
-//
-// If _gznd_login_ts is absent (auth-state restore on hard reload without an
-// explicit login flow) we treat any stored ID as valid — the session is
-// genuinely continuing.
 let _loginTs = 0;
 try { _loginTs = parseInt(sessionStorage.getItem('_gznd_login_ts') || '0', 10) || 0; } catch(_) {}
 
-// ── Per-user guard (belt-and-suspenders for same-tab account switch) ─────
 const _callerUid = currentUser ? (currentUser.uid || currentUser.id) : null;
 const _uidChanged = _callerUid && _deviceIdOwnerUid && _callerUid !== _deviceIdOwnerUid;
 
-// Helper: is a candidate device ID fresh enough for this login session?
 function _isStale(did) {
-  if (!did || !_loginTs) return false; // no login stamp → accept anything
+  if (!did || !_loginTs) return false;
   const match = did.match(/_(\d{13})$/);
-  if (!match) return true;             // legacy format without timestamp → always stale
+  if (!match) return true;
   const idTs = parseInt(match[1], 10);
-  return idTs < _loginTs;              // predates this login → stale
+  return idTs < _loginTs;
 }
 
 let deviceId = null;
 
 if (!_uidChanged) {
-  // Read from every persistent store in priority order
   let candidate = _readCookie(DEVICE_ID_COOKIE);
   if (!candidate) candidate = _readSession('gz_did_session');
   if (!candidate) {
@@ -2050,22 +2041,16 @@ if (!_uidChanged) {
   }
   if (!candidate) candidate = await _readCacheAnchor();
 
-  // Only accept the candidate if it belongs to this login session
   if (candidate && !_isStale(candidate)) {
     deviceId = candidate;
   }
-  // If candidate is stale (predates _loginTs), drop it and fall through to
-  // UUID generation.  Firestore recovery is intentionally skipped — it
-  // would only return the same old ID/shard we just discarded.
 }
 
 if (!deviceId) {
-  // Mint a brand-new ID whose embedded timestamp = now (this login session)
   deviceId = _generateUUID() + '_' + Date.now();
 }
 
 await _persistDeviceId(deviceId);
-// Record which user owns this device ID so we can detect future account switches.
 if (_callerUid) _deviceIdOwnerUid = _callerUid;
 
 const existingToken = _readCookie(INSTALL_TOKEN_COOKIE) || _readSession('gz_itk_session');
@@ -2079,6 +2064,7 @@ if (!existingToken) {
 }
 return deviceId;
 }
+
 async function refreshDeviceIdAnchors() {
 try {
 if (firebaseDB && currentUser) {
@@ -2090,6 +2076,7 @@ const deviceId = await getDeviceId();
 await _persistDeviceId(deviceId);
 } catch (e) {  }
 }
+
 async function getDeviceFingerprint() {
 const ua = navigator.userAgent;
 let os = 'Unknown OS';
@@ -2167,6 +2154,7 @@ readableName,
 fullUserAgent: ua
 };
 }
+
 async function getDeviceName() {
 let deviceName = await sqliteStore.get('device_name');
 if (!deviceName) {
@@ -2176,6 +2164,7 @@ await sqliteStore.set('device_name', deviceName);
 }
 return deviceName;
 }
+
 async function registerDevice() {
 if (!firebaseDB) {
 return;
@@ -2247,20 +2236,11 @@ await sqliteStore.setBatch(sqliteBatch);
 
 const isFirstRegistration = !existingDoc.exists;
 
-// Derive the unique shard from the composite device ID (which embeds the
-// first-login timestamp), so each device always maps to a stable, unique shard.
 const deviceShard = _deriveDeviceShard(deviceId);
 
-// Extract the first-login timestamp that was baked into the device ID at
-// creation time, falling back to server time for legacy IDs that pre-date
-// this scheme.
 const firstLoginDate = _extractDeviceFirstLoginTime(deviceId);
 const firstLoginAtMs = firstLoginDate ? firstLoginDate.getTime() : null;
 
-// Read the canonical mode timestamp from SQLite so restoreDeviceModeOnLogin
-// can correctly compare cloudTimestamp vs localTimestamp.  Without this,
-// cloudTimestamp would be 0 (field absent) and the comparison would be
-// meaningless for newly-created device documents.
 let _persistedModeTs = existing.appMode_timestamp || 0;
 try {
   const _sqliteTs = await sqliteStore.get('appMode_timestamp');
@@ -2291,23 +2271,16 @@ stableHash: fp.stableHash
 online: true,
 lastSeen: firebase.firestore.FieldValue.serverTimestamp(),
 lastActivity: firebase.firestore.FieldValue.serverTimestamp(),
-// Always persist firstLoginAt from the device ID's embedded timestamp so it
-// survives document merges; fall back to server time for legacy devices.
 ...(isFirstRegistration ? {
   registeredAt: firebase.firestore.FieldValue.serverTimestamp(),
   firstLoginAt: firstLoginAtMs !== null
     ? firstLoginAtMs
     : firebase.firestore.FieldValue.serverTimestamp(),
 } : {
-  // For returning devices: fill in firstLoginAt if the field is missing
-  // (migration from legacy IDs that had no embedded timestamp).
   ...((!existing.firstLoginAt && firstLoginAtMs !== null)
     ? { firstLoginAt: firstLoginAtMs } : {}),
 }),
 currentMode: persistedMode,
-// Write the canonical timestamp so restoreDeviceModeOnLogin can compare
-// cloudTimestamp === localTimestamp and correctly skip re-applying the mode
-// (it is already active).  This prevents a spurious reload on every login.
 appMode_timestamp: _persistedModeTs || Date.now(),
 assignedRoleType: persistedRoleType,
 assignedRoleName: persistedRoleName,
@@ -2354,6 +2327,7 @@ browser: browser
 console.error('Device registration failed.', _safeErr(error));
 }
 }
+
 function startDeviceHeartbeat(deviceRef) {
 if (window.deviceHeartbeatInterval) {
 clearInterval(window.deviceHeartbeatInterval);
@@ -2382,6 +2356,7 @@ console.warn('Heartbeat update failed.', _safeErr(error));
 }
 }, APP_CONFIG.HEARTBEAT_INTERVAL_MS);
 }
+
 async function logDeviceActivity(activityType, details = {}) {
 if (!firebaseDB || !currentUser) return;
 const LOGGABLE_EVENTS = new Set([
@@ -2454,9 +2429,6 @@ const _UUID_V5_NS = new Uint8Array([
 let _cachedDeviceShard = null;
 let _uuidLastMs = 0;
 let _uuidSeq    = 0;
-// Tracks the UID for whom the current in-memory device ID was generated.
-// If a different user logs in within the same page session the stored ID is
-// stale and must not be reused.
 let _deviceIdOwnerUid = null;
 
 function _deriveDeviceShard(did) {
@@ -2468,6 +2440,7 @@ function _deriveDeviceShard(did) {
   }
   return (h & 0xffff).toString(16).padStart(4, '0');
 }
+
 function _randomBytes(n) {
   const buf = new Uint8Array(n);
   if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
@@ -2484,6 +2457,7 @@ function _randomBytes(n) {
   }
   return buf;
 }
+
 function _nextSeq(nowMs) {
   if (nowMs > _uuidLastMs) {
     _uuidLastMs = nowMs;
@@ -2497,6 +2471,7 @@ function _nextSeq(nowMs) {
   }
   return { ts: _uuidLastMs, seq: _uuidSeq };
 }
+
 function _encodeModeTag() {
   const mode = (typeof appMode !== 'undefined' ? appMode : 'admin') || 'admin';
   return _MODE_CODES[mode] || '0';
@@ -2526,6 +2501,7 @@ function _refreshV5Cache() {
     _uuidV5Pending = false;
   }
 }
+
 function _buildUUIDv3Base() {
 
   if (_uuidV5Cache !== null) {
@@ -2552,9 +2528,6 @@ function _buildUUIDv3Base() {
 }
 
 async function initUUIDSalts() {
-  // Always reset first — guarantees we derive from whatever device ID is
-  // current in storage, never from a stale in-memory value left over from a
-  // previous session or a pre-login state.
   _cachedDeviceShard = null;
   try {
     const did = await getDeviceId();
@@ -2568,6 +2541,7 @@ async function initUUIDSalts() {
   _refreshV5Cache();
   return _cachedDeviceShard;
 }
+
 async function initDeviceShard() { return initUUIDSalts(); }
 window.initDeviceShard = initDeviceShard;
 
@@ -2605,14 +2579,14 @@ function generateUUID(prefix = '', retryCount = 0, tsMs = null, modeOverride = n
   }
   return finalUUID;
 }
+
 function validateUUID(uuid) {
   if (!uuid || typeof uuid !== 'string') return false;
   const standardRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  // Prefixed format also accepts an optional _<timestamp> suffix appended to
-  // composite device IDs (e.g. dev-<uuid>_1711234567890).
   const prefixedRegex = /^[a-z0-9][a-z0-9_-]*-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(_\d+)?$/i;
   return standardRegex.test(uuid) || prefixedRegex.test(uuid);
 }
+
 function extractUUIDMeta(uuid) {
   if (!validateUUID(uuid)) return null;
   const allParts = uuid.split('-');
@@ -2693,6 +2667,7 @@ window.compareRecordVersions = compareRecordVersions;
 function getTimestamp() {
 return Date.now();
 }
+
 function validateTimestamp(timestamp, allowFuture = false) {
 if (!timestamp || typeof timestamp !== 'number') return false;
 if (timestamp < 946684800000 || timestamp > 4102444800000) return false;
@@ -2705,6 +2680,7 @@ return false;
 }
 return true;
 }
+
 function _mergedBadgeHtml(record, opts = {}) {
 if (!record || !record.isMerged) return '';
 if (opts.inline) {
@@ -2712,12 +2688,14 @@ if (opts.inline) {
 }
 return `<span style="font-size:0.6rem; background:rgba(175, 82, 222, 0.15); color:#af52de; padding:1px 5px; border-radius:3px; border:1px solid rgba(175, 82, 222, 0.3); display:inline-block; margin-top:3px;">MERGED</span>`;
 }
+
 function _creatorBadgeHtml(record) {
 if (!record || !record.createdBy) return '';
 const name = String(record.createdBy).trim();
 if (!name) return '';
 return `<span class="creator-badge" title="Created by ${esc(name)}">${esc(name)}</span>`;
 }
+
 function compareTimestamps(timestamp1, timestamp2) {
 if (!validateTimestamp(timestamp1) || !validateTimestamp(timestamp2)) {
 return 0;
@@ -2726,6 +2704,7 @@ if (timestamp1 < timestamp2) return -1;
 if (timestamp1 > timestamp2) return 1;
 return 0;
 }
+
 function resolveConflict(local, remote) {
 if (!local) return remote;
 if (!remote) return local;
@@ -2733,6 +2712,7 @@ const localTime = getRecordTimestamp(local);
 const remoteTime = getRecordTimestamp(remote);
 return localTime >= remoteTime ? local : remote;
 }
+
 function getRecordTimestamp(record) {
 if (!record) return 0;
 if (record.timestamp && typeof record.timestamp === 'number') {
@@ -2752,6 +2732,7 @@ return new Date(record.date).getTime();
 }
 return 0;
 }
+
 function ensureRecordIntegrity(record, isEdit = false, isMigration = false) {
 if (!record) return record;
 const isTrackingObject = record.produced !== undefined ||
@@ -2797,6 +2778,7 @@ record.updatedAt = record.createdAt;
 }
 return record;
 }
+
 async function cleanupOldTombstones() {
 const ninetyDaysAgo = Date.now() - APP_CONFIG.TOMBSTONE_EXPIRY_MS;
 const dataTypes = [
@@ -2839,11 +2821,13 @@ if (totalCleaned > 0) {
 }
 return totalCleaned;
 }
+
 function scheduleAutomaticCleanup() {
 setTimeout(() => cleanupOldTombstones(), 5000);
 if (window._tombstoneCleanupInterval) clearInterval(window._tombstoneCleanupInterval);
 window._tombstoneCleanupInterval = setInterval(() => cleanupOldTombstones(), APP_CONFIG.TOMBSTONE_CLEANUP_INTERVAL_MS);
 }
+
 async function validateAndFixRecords(dataType, records) {
 if (!Array.isArray(records) || records.length === 0) {
 return { fixed: 0, valid: 0, total: 0 };
@@ -2892,6 +2876,7 @@ total: validRecords.length,
 records: validatedRecords
 };
 }
+
 async function validateAllDataOnStartup() {
 const dataTypes = [
 'expenses',

@@ -70,6 +70,7 @@ if (typeof custTransactionMode !== 'undefined' && custTransactionMode === 'colle
 updateCollectionPreview();
 }
 }
+
 async function renderCustomersTable(page = 1) {
 const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
 const _rctAlive = (item) => item && item.id && !deletedRecordIds.has(String(item.id));
@@ -235,6 +236,7 @@ document.getElementById('bulkPaymentAmount').value = '';
 if (typeof openStandaloneScreen === 'function') openStandaloneScreen('customer-management-screen');
 await renderCustomerTransactions(customerName);
 }
+
 async function closeCustomerManagement() {
 if (typeof closeStandaloneScreen === 'function') closeStandaloneScreen('customer-management-screen');
 currentManagingCustomer = null;
@@ -249,6 +251,7 @@ console.warn('closeCustomerManagement SQLite error', _safeErr(e));
 if (typeof renderCustomersTable === 'function') renderCustomersTable();
 }, 100);
 }
+
 async function deleteCurrentCustomer() {
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
 const salesCustomers = ensureArray(await sqliteStore.get('sales_customers'));
@@ -273,10 +276,9 @@ const contactIdx = salesCustomers.findIndex(c => c && c.name && c.name.toLowerCa
 if (contactIdx !== -1) {
 const contactRecord = salesCustomers[contactIdx];
 const contactId = contactRecord.id;
-await registerDeletion(contactId, 'sales_customers', contactRecord);
+const filteredContacts = salesCustomers.filter((_, i) => i !== contactIdx);
+await unifiedDelete('sales_customers', filteredContacts, contactId, { strict: true }, contactRecord);
 salesCustomers.splice(contactIdx, 1);
-await saveWithTracking('sales_customers', salesCustomers);
-deleteRecordFromFirestore('sales_customers', contactId).catch(() => {});
 }
 const txsToDelete = txs.slice();
 const idsToDelete = new Set(txsToDelete.map(t => t.id));
@@ -285,7 +287,6 @@ for (const tx of txsToDelete) {
 prunedSales = prunedSales.filter(s => s.id !== tx.id);
 await unifiedDelete('customer_sales', prunedSales, tx.id, { strict: true }, tx);
 }
-void Promise.all([...idsToDelete].map(id => deleteRecordFromFirestore('customer_sales', id).catch(() => {})));
 notifyDataChange('sales');
 triggerAutoSync();
 closeCustomerManagement();
@@ -294,6 +295,7 @@ showToast(`Customer "${name}" and all records deleted.`, 'success');
 showToast('Failed to delete customer. Please try again.', 'error');
 }
 }
+
 async function renderCustomerTransactions(name) {
 const salesCustomers = ensureArray(await sqliteStore.get('sales_customers'));
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
@@ -507,6 +509,7 @@ _custFrag.appendChild(item);
 }
 list.replaceChildren(_custFrag);
 }
+
 async function toggleSingleTransactionStatus(id) {
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
 const record = customerSales.find(s => s.id === id);
@@ -533,6 +536,7 @@ await sqliteStore.set('customer_sales', customerSales).catch(() => {});
 showToast('Failed to update transaction status. Please try again.', 'error');
 }
 }
+
 async function toggleRepTransactionStatus(id) {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 const record = repSales.find(s => s.id === id);
@@ -558,6 +562,7 @@ await sqliteStore.set('rep_sales', repSales).catch(() => {});
 showToast('Failed to update transaction status. Please try again.', 'error');
 }
 }
+
 async function deleteTransactionFromOverlay(id) {
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
@@ -636,6 +641,7 @@ await unifiedDelete('customer_sales', customerSalesFiltered, id, { strict: true 
 refreshAllCalculations();
 if (typeof refreshCustomerSales === 'function') await refreshCustomerSales();
 renderCustomersTable();
+if (currentManagingCustomer) renderCustomerTransactions(currentManagingCustomer);
 notifyDataChange('sales');
 triggerAutoSync();
 showToast(` Transaction deleted successfully.`, 'success');
@@ -643,6 +649,7 @@ showToast(` Transaction deleted successfully.`, 'success');
 showToast('Failed to delete transaction. Please try again.', 'error');
 }
 }
+
 async function deleteRepTransactionFromOverlay(id) {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 if (!id || !validateUUID(id)) {
@@ -724,6 +731,7 @@ showToast(` Transaction deleted successfully.`, 'success');
 showToast('Failed to delete transaction. Please try again.', 'error');
 }
 }
+
 async function processBulkPayment() {
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
@@ -790,12 +798,7 @@ syncedAt: new Date().toISOString()
 if (updatedCount > 0 || partialPaymentMade) {
 const changedIds = new Set(pending.map(s => s.id));
 if (collId) changedIds.add(collId);
-await saveWithTracking('customer_sales', customerSales, null, Array.from(changedIds));
-void Promise.all(
-  customerSales
-    .filter(sale => changedIds.has(sale.id) || sale.paymentType === 'PARTIAL_PAYMENT' || sale.paymentType === 'COLLECTION')
-    .map(sale => saveRecordToFirestore('customer_sales', sale).catch(() => {}))
-).catch(() => {});
+await unifiedSave('customer_sales', customerSales, null, Array.from(changedIds));
 notifyDataChange('sales'); triggerAutoSync();
 let msg = `Payment of ${fmtAmt(amount)} processed successfully. `;
 msg += partialPaymentMade ? 'Partial payment applied.' : remaining === 0 ? `${updatedCount} transaction(s) fully cleared.` : `${updatedCount} cleared, ${fmtAmt(remaining)} extra.`;
@@ -810,12 +813,14 @@ await sqliteStore.set('customer_sales', customerSales).catch(() => {});
 showToast('Failed to process bulk payment. Please try again.', 'error');
 }
 }
+
 function filterCustomerManagementHistory() {
 const term = document.getElementById('cust-trans-search').value.toLowerCase();
 document.querySelectorAll('#customerManagementHistoryList .cust-history-item').forEach(item => {
 item.style.display = item.innerText.toLowerCase().includes(term) ? 'flex' : 'none';
 });
 }
+
 async function processRepBulkPayment() {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
@@ -881,12 +886,7 @@ syncedAt: new Date().toISOString()
 if (updatedCount > 0 || partialPaymentMade) {
 const changedIds = new Set(pending.map(s => s.id));
 if (collId) changedIds.add(collId);
-await saveWithTracking('rep_sales', repSales, null, Array.from(changedIds));
-void Promise.all(
-  repSales
-    .filter(sale => changedIds.has(sale.id) || sale.paymentType === 'PARTIAL_PAYMENT' || sale.paymentType === 'COLLECTION')
-    .map(sale => saveRecordToFirestore('rep_sales', sale).catch(() => {}))
-).catch(() => {});
+await unifiedSave('rep_sales', repSales, null, Array.from(changedIds));
 notifyDataChange('rep'); triggerAutoSync();
 let msg = `Payment of ${fmtAmt(amount)} processed successfully. `;
 msg += partialPaymentMade ? 'Partial payment applied.' : remaining === 0 ? `${updatedCount} transaction(s) fully cleared.` : `${updatedCount} cleared, ${fmtAmt(remaining)} extra.`;
@@ -901,12 +901,14 @@ await sqliteStore.set('rep_sales', repSales).catch(() => {});
 showToast('Failed to process bulk payment. Please try again.', 'error');
 }
 }
+
 function filterRepCustomerManagementHistory() {
 const term = document.getElementById('rep-cust-trans-search').value.toLowerCase();
 document.querySelectorAll('#repCustomerManagementHistoryList .cust-history-item').forEach(item => {
 item.style.display = item.innerText.toLowerCase().includes(term) ? 'flex' : 'none';
 });
 }
+
 function refreshAllCalculations() {
 calculateCashTracker();
 calculateNetCash();
@@ -976,6 +978,7 @@ _playNextToast();
 setTimeout(dismiss, duration);
 toast.addEventListener('click', dismiss, { once: true });
 }
+
 function showToast(message, type = 'info', duration = 3000) {
 const typeMap = { danger: 'error', warn: 'warning', ok: 'success' };
 type = typeMap[type] || (['success','warning','error','info'].includes(type) ? type : 'info');
@@ -1014,6 +1017,7 @@ function _gcPickIcon(title, confirmText, danger) {
   if (danger) return _gcIcons.warning;
   return _gcIcons.confirm;
 }
+
 function showGlassConfirm(message, {
 title = 'Confirm',
 confirmText = 'Confirm',
@@ -1071,11 +1075,13 @@ window.showGlassConfirm = showGlassConfirm;
 if (typeof window._onShowGlassConfirmReady === 'function') {
 window._onShowGlassConfirmReady();
 }
+
 async function filterCustomers() {
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
 const salesCustomers = ensureArray(await sqliteStore.get('sales_customers'));
 renderCustomersTable();
 }
+
 async function openCustomerEditModal(customerName) {
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
 const salesCustomers = ensureArray(await sqliteStore.get('sales_customers'));
@@ -1101,9 +1107,11 @@ editPriceInput.value = (contact?.customSalePrice > 0) ? contact.customSalePrice 
 }
 if (typeof openStandaloneScreen === 'function') openStandaloneScreen('customer-edit-screen');
 }
+
 function closeCustomerEditModal() {
 if (typeof closeStandaloneScreen === 'function') closeStandaloneScreen('customer-edit-screen');
 }
+
 async function saveCustomerDetails() {
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
 const salesCustomers = ensureArray(await sqliteStore.get('sales_customers'));
@@ -1115,6 +1123,8 @@ const address = document.getElementById('edit-cust-address').value.trim();
 const oldDebit = parseFloat(document.getElementById('edit-cust-old-debit').value) || 0;
 const customSalePrice = parseFloat(document.getElementById('edit-cust-custom-price').value) || 0;
 if (!name) { showToast('Customer name is required', 'error'); return; }
+if (oldDebit < 0) { showToast('Old debt balance cannot be negative. Enter 0 to clear the balance.', 'warning', 4000); return; }
+if (customSalePrice < 0) { showToast('Custom sale price cannot be negative.', 'warning', 4000); return; }
 try {
 const nameChanged = name.toLowerCase() !== originalName.toLowerCase();
 const freshContacts = await sqliteStore.get('sales_customers', []);
@@ -1136,8 +1146,7 @@ contact = { id: generateUUID('cust'), name, phone, address, oldDebit, customSale
 createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
 salesCustomers.push(contact);
 }
-await saveWithTracking('sales_customers', salesCustomers, contact);
-saveRecordToFirestore('sales_customers', contact).catch(() => {});
+await unifiedSave('sales_customers', salesCustomers, contact);
 notifyDataChange('sales');
 let salesArray = await sqliteStore.get('customer_sales', []);
 if (!Array.isArray(salesArray)) salesArray = [];
@@ -1193,16 +1202,15 @@ let phoneUpdated = false;
 salesArray.forEach(s => { if (s && s.customerName === name && s.customerPhone !== phone) { s.customerPhone = phone; phoneUpdated = true; } });
 customerSales.length = 0; customerSales.push(...salesArray);
 if (nameChanged || oldDebtModified || phoneUpdated) {
-await saveWithTracking('customer_sales', salesArray, oldDebtModified && !phoneUpdated && !nameChanged ? oldDebtRecord : null);
-if (oldDebtRecord) saveRecordToFirestore('customer_sales', oldDebtRecord).catch(() => {});
 if (deletedOldDebtId) {
-await registerDeletion(deletedOldDebtId, 'sales', window._oldDebtRecordForDeletion || null);
+const _deletedRecord = window._oldDebtRecordForDeletion || null;
 window._oldDebtRecordForDeletion = null;
-deleteRecordFromFirestore('customer_sales', deletedOldDebtId).catch(() => {});
+await unifiedDelete('customer_sales', salesArray, deletedOldDebtId, { strict: true }, _deletedRecord);
+} else {
+await unifiedSave('customer_sales', salesArray, oldDebtModified && !phoneUpdated && !nameChanged ? oldDebtRecord : null);
 }
 if (nameChanged && renamedRecords.length > 0) {
-const cloudPushes = renamedRecords.map(r => saveRecordToFirestore('customer_sales', r));
-await Promise.allSettled(cloudPushes);
+await unifiedSave('customer_sales', salesArray, null, renamedRecords.map(r => r.id));
 }
 }
 const message = nameChanged ? `Customer renamed to "${name}" and details updated`
@@ -1224,6 +1232,7 @@ triggerAutoSync();
 showToast('Failed to save customer details. Please try again.', 'error');
 }
 }
+
 async function fetchDeviceLocation() {
 const statusDiv = document.getElementById('location-status');
 const addressInput = document.getElementById('edit-cust-address');
@@ -1237,17 +1246,21 @@ if(btn) btn.disabled = true;
 statusDiv.innerHTML = '<span class="update-indicator"></span> Pinpointing satellite location...';
 statusDiv.style.color = "var(--accent)";
 addressInput.placeholder = "Fetching location...";
-const gpsOptions = {
-enableHighAccuracy: true,
-timeout: 20000,
-maximumAge: 0
-};
-navigator.geolocation.getCurrentPosition(async (position) => {
+const gpsOptions = { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 };
+const GPS_ACCURACY_THRESHOLD = 50;
+const GPS_MAX_WAIT_MS = 25000;
+await new Promise((resolve) => {
+let watchId = null;
+let best = null;
+let settled = false;
+const finish = async (position) => {
+if (settled) return;
+settled = true;
+if (watchId !== null) navigator.geolocation.clearWatch(watchId);
 const lat = position.coords.latitude;
 const lon = position.coords.longitude;
 const accuracy = position.coords.accuracy;
-const googleMapsLink = `https://www.google.com/maps?q=${lat},${lon}`;
-const coordsText = `${safeNumber(lat, 0).toFixed(2)}, ${safeNumber(lon, 0).toFixed(2)}`;
+const coordsText = `${safeNumber(lat, 0).toFixed(6)}, ${safeNumber(lon, 0).toFixed(6)}`;
 statusDiv.textContent = `GPS Accuracy: ±${Math.round(accuracy)}m. Decoding name...`;
 try {
 const controller = new AbortController();
@@ -1297,8 +1310,18 @@ statusDiv.textContent = "Address lookup failed. Saved GPS Coordinates.";
 statusDiv.style.color = "var(--warning)";
 } finally {
 if(btn) btn.disabled = false;
+resolve();
 }
-}, (error) => {
+};
+watchId = navigator.geolocation.watchPosition(
+(position) => {
+if (!best || position.coords.accuracy < best.coords.accuracy) best = position;
+if (position.coords.accuracy <= GPS_ACCURACY_THRESHOLD) finish(position);
+},
+(error) => {
+if (settled) return;
+settled = true;
+if (watchId !== null) navigator.geolocation.clearWatch(watchId);
 let msg = "Location error.";
 switch(error.code) {
 case error.PERMISSION_DENIED: msg = " Permission denied. Check Phone Settings."; break;
@@ -1308,5 +1331,10 @@ case error.TIMEOUT: msg = " GPS timeout. Try again."; break;
 statusDiv.textContent = msg;
 statusDiv.style.color = "var(--danger)";
 if(btn) btn.disabled = false;
-}, gpsOptions);
+resolve();
+},
+gpsOptions
+);
+setTimeout(() => { if (!settled && best) finish(best); }, GPS_MAX_WAIT_MS);
+});
 }

@@ -15,6 +15,7 @@ if (_bioBtn) {
 showToast("Setup failed: " + e.message, "error");
 }
 }
+
 async function disableBiometricLock() {
 const _bioMsg = `Remove the biometric (fingerprint / Face ID) lock from this app?\n\nAfter removal:\n • Anyone with access to this device can open the app without biometric verification\n • To re-enable, tap Fingerprint Lock in the sidebar again\n\nYour data will not be affected.`;
 if (await showGlassConfirm(_bioMsg, { title: "Remove Biometric Lock", confirmText: "Remove Lock", danger: true })) {
@@ -30,6 +31,7 @@ if (_bioBtnD) {
 }
 }
 }
+
 async function checkBiometricLock() {
 const isEnabled = await sqliteStore.get('bio_enabled');
 if (isEnabled === 'true' || isEnabled === true) {
@@ -141,9 +143,7 @@ lockScreen.innerHTML = `
 </div>
 `;
 document.body.appendChild(lockScreen);
-// Trigger biometric prompt on the user's FIRST touch/click anywhere on the lock screen.
-// WebAuthn requires a real user gesture — this is the only cross-browser reliable way.
-// The lock screen itself becomes the tap target so there is no friction.
+
 let _lockTriggered = false;
 const _lockTriggerHandler = (e) => {
   if (_lockTriggered) return;
@@ -157,7 +157,7 @@ const btn = document.getElementById('_lock-btn');
 if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
 const _reEnable = () => {
 if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
-// Re-attach tap-anywhere listener so user can retry without pressing button
+
 const screen = document.getElementById('app-lock-screen');
 if (screen) {
 let _retryTriggered = false;
@@ -198,6 +198,7 @@ _reEnable();
 };
 }
 }
+
 async function setRepMode(mode) {
 repTransactionMode = mode;
 const _setRep = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
@@ -219,6 +220,7 @@ const formattedDebt = await formatCurrency(currentDebt);
 _setRep('rep-total-value', formattedDebt);
 }
 }
+
 function selectRepCustomer(name) {
 document.getElementById('rep-cust-name').value = name;
 document.getElementById('rep-customer-search-results').classList.add('hidden');
@@ -230,6 +232,7 @@ const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 const repCustomers = ensureArray(await sqliteStore.get('rep_customers'));
 calculateRepCustomerStats(name);
 }
+
 async function calculateRepCustomerStats(name) {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 const repCustomers = ensureArray(await sqliteStore.get('rep_customers'));
@@ -273,6 +276,7 @@ const _repTV = document.getElementById('rep-total-value');
 if (_repTV) _repTV.innerText = "" + fmtAmt(safeNumber(debt - inputAmt, 0));
 }
 }
+
 async function calculateRepSalePreview() {
 const repCustomers = ensureArray(await sqliteStore.get('rep_customers'));
 if(repTransactionMode === 'sale') {
@@ -282,6 +286,7 @@ const _repTVS = document.getElementById('rep-total-value');
 if (_repTVS) _repTVS.innerText = "" + fmtAmt(safeNumber(qty * salePrice, 0));
 }
 }
+
 async function saveRepTransaction() {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 const repCustomers = ensureArray(await sqliteStore.get('rep_customers'));
@@ -290,6 +295,7 @@ if (submitBtn) {
 if (submitBtn.disabled) return;
 submitBtn.disabled = true;
 }
+
 async function restoreBtn() {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 const repCustomers = ensureArray(await sqliteStore.get('rep_customers'));
@@ -330,7 +336,23 @@ showToast("Enter Quantity", "warning");
 restoreBtn();
 return;
 }
+if(!salePrice || salePrice <= 0) {
+showToast("⚠ Sale price not configured. Set prices in Factory Formulas before recording rep sales.", "warning", 5000);
+restoreBtn();
+return;
+}
+if(costPerKg < 0) {
+showToast("⚠ Invalid cost price detected. Please check Factory Formulas.", "warning", 4000);
+restoreBtn();
+return;
+}
 const totalValue = qty * salePrice;
+const computedProfit = totalValue - (qty * costPerKg);
+if(computedProfit < 0) {
+showToast(`⚠ This sale would result in a loss of ${fmtAmt ? fmtAmt(Math.abs(computedProfit)) : Math.abs(computedProfit).toFixed(2)}. Check sale price vs cost price in Factory Formulas.`, "warning", 6000);
+restoreBtn();
+return;
+}
 let saleId = generateUUID('sale');
 if (!validateUUID(saleId)) {
 saleId = generateUUID('sale');
@@ -365,6 +387,44 @@ showToast("Enter Amount", "warning");
 restoreBtn();
 return;
 }
+let _repOutstanding = 0;
+try {
+const _repHistory = repSales.filter(s =>
+s && s.customerName && s.customerName.toLowerCase() === name.toLowerCase() &&
+s.salesRep === currentRepProfile
+);
+for (const h of _repHistory) {
+if (h.transactionType === 'OLD_DEBT') {
+if (!h.creditReceived) _repOutstanding += (parseFloat(h.totalValue) || 0) - (h.partialPaymentReceived || 0);
+} else if (h.paymentType === 'CREDIT' && !h.creditReceived) {
+if (h.isMerged && typeof h.creditValue === 'number') {
+_repOutstanding += h.creditValue;
+} else {
+_repOutstanding += (parseFloat(h.totalValue) || 0) - (h.partialPaymentReceived || 0);
+}
+} else if (h.paymentType === 'COLLECTION' || h.paymentType === 'PARTIAL_PAYMENT') {
+_repOutstanding -= (h.totalValue || 0);
+}
+}
+_repOutstanding = Math.max(0, _repOutstanding);
+} catch (_e) { _repOutstanding = -1; }
+if (_repOutstanding === 0) {
+showToast(`${name} has no outstanding credit balance. Collections can only be recorded against existing unpaid credit.`, 'error', 5000);
+restoreBtn();
+return;
+} else if (_repOutstanding > 0 && amount > _repOutstanding) {
+const _overAmt = amount - _repOutstanding;
+const _proceedOver = await showGlassConfirm(
+`⚠ Over-collection Warning!
+
+${name} only owes ${fmtAmt ? fmtAmt(_repOutstanding) : _repOutstanding}.
+You are collecting ${fmtAmt ? fmtAmt(amount) : amount} — an overpayment of ${fmtAmt ? fmtAmt(_overAmt) : _overAmt}.
+
+This will exceed the outstanding balance. Proceed only if this is an advance payment.`,
+{ title: '⚠ Over-collection Warning', confirmText: 'Collect Anyway', cancelText: 'Cancel' }
+);
+if (!_proceedOver) { restoreBtn(); return; }
+}
 let collId = generateUUID('sale');
 if (!validateUUID(collId)) {
 collId = generateUUID('sale');
@@ -394,7 +454,7 @@ syncedAt: new Date().toISOString()
 transactionRecord = ensureRecordIntegrity(transactionRecord, false);
 }
 repSales.push(transactionRecord);
-await saveWithTracking('rep_sales', repSales, transactionRecord);
+await unifiedSave('rep_sales', repSales, transactionRecord);
 try {
 const _rcName = transactionRecord.customerName;
 const _rcPhone = transactionRecord.customerPhone || '';
@@ -404,15 +464,10 @@ if (!existsInRepRegistry) {
 const _rcContact = { id: generateUUID('rep_cust'), name: _rcName, phone: _rcPhone, address: '', oldDebit: 0, createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
 if (!Array.isArray(repCustomers)) repCustomers = [];
 repCustomers.push(_rcContact);
-await saveWithTracking('rep_customers', repCustomers, _rcContact);
-saveRecordToFirestore('rep_customers', _rcContact).catch(e => {});
+await unifiedSave('rep_customers', repCustomers, _rcContact);
 }
 }
 } catch (_rcErr) { console.warn('Auto-register rep customer failed:', _safeErr(_rcErr)); }
-if (firebaseDB && currentUser) {
-saveRecordToFirestore('rep_sales', transactionRecord).catch(e => {
-});
-}
 notifyDataChange('rep');
 if (navigator.onLine) {
 emitSyncUpdate({ rep_sales: null}).catch(e => {
@@ -439,12 +494,14 @@ document.getElementById('rep-new-customer-phone-container').classList.add('hidde
 renderRepCustomerTable();
 renderRepHistory();
 showToast("Transaction Saved Successfully", "success");
+setTimeout(updateRepLiveMap, 300);
 } catch (error) {
 showToast('Failed to save transaction. Please try again.', 'error');
 } finally {
 restoreBtn();
 }
 }
+
 function getDistanceFromLatLonInMeters(lat1, lon1, lat2, lon2) {
 const R = 6371e3;
 const dLat = deg2rad(lat2 - lat1);
@@ -456,9 +513,11 @@ Math.sin(dLon / 2) * Math.sin(dLon / 2);
 const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 return R * c;
 }
+
 function deg2rad(deg) {
 return deg * (Math.PI / 180);
 }
+
 async function autoUpdateCustomerLocation(customerName, currentGps) {
 const repCustomers = ensureArray(await sqliteStore.get('rep_customers'));
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
@@ -501,10 +560,7 @@ repCustomers[contactIndex].address = coordsString;
 repCustomers[contactIndex].locationConfirmed = true;
 repCustomers[contactIndex].updatedAt = getTimestamp();
 ensureRecordIntegrity(repCustomers[contactIndex], true);
-await saveWithTracking('rep_customers', repCustomers, repCustomers[contactIndex]);
-if (firebaseDB && currentUser) {
-saveRecordToFirestore('rep_customers', repCustomers[contactIndex]).catch(e => {});
-}
+await unifiedSave('rep_customers', repCustomers, repCustomers[contactIndex]);
 notifyDataChange('rep');
 if (typeof showToast === 'function') {
 showToast(`Location confirmed for ${customerName} after 3 consistent visits.`, 'success');
@@ -532,6 +588,7 @@ resolve(null);
 );
 });
 }
+
 function initRepMap() {
 if (repMap) return;
 const mapContainer = document.getElementById('rep-map-container');
@@ -546,6 +603,7 @@ repMap.invalidateSize();
 }
 }, 100);
 }
+
 async function updateRepLiveMap() {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 if (typeof L === 'undefined') return;
@@ -617,6 +675,7 @@ const group = new L.featureGroup(repMapMarkers);
 repMap.fitBounds(group.getBounds().pad(0.1));
 }
 }
+
 function adminSwitchRepProfile(newProfile) {
 if (appMode !== 'admin') return;
 currentRepProfile = newProfile;
@@ -632,6 +691,7 @@ if(typeof showToast === 'function') {
 showToast(`Viewing dashboard for ${newProfile}`, 'info');
 }
 }
+
 function setRepAnalyticsMode(mode) {
 currentRepAnalyticsMode = mode;
 document.querySelectorAll('#admin-rep-analytics .toggle-group .toggle-opt').forEach(opt => {
@@ -640,6 +700,7 @@ opt.classList.remove('active');
 document.getElementById(`rep-analytics-${mode}-btn`).classList.add('active');
 calculateRepAnalytics();
 }
+
 async function calculateRepAnalytics() {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 const repCustomers = ensureArray(await sqliteStore.get('rep_customers'));
@@ -697,6 +758,7 @@ if (collectionsEl) collectionsEl.textContent = `${fmtAmt(collections)}`;
 if (cashSalesEl) cashSalesEl.textContent = `${fmtAmt(cashSales)}`;
 if (creditSalesEl) creditSalesEl.textContent = `${fmtAmt(creditSales)}`;
 }
+
 async function renderRepCustomerTable(page = 1) {
 const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
 const _rrctAlive = (item) => item && item.id && !deletedRecordIds.has(String(item.id));
@@ -837,6 +899,7 @@ const _repBulk = document.getElementById('repBulkPaymentAmount'); if (_repBulk) 
 if (typeof openStandaloneScreen === 'function') openStandaloneScreen('rep-customer-management-screen');
 await renderRepCustomerTransactions(customerName);
 }
+
 async function closeRepCustomerManagement() {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 if (typeof closeStandaloneScreen === 'function') closeStandaloneScreen('rep-customer-management-screen');
@@ -857,6 +920,7 @@ console.warn('closeRepCustomerManagement SQLite error', _safeErr(e));
 if (typeof renderRepCustomerTable === 'function') renderRepCustomerTable();
 }, 100);
 }
+
 async function deleteCurrentRepCustomer() {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 const repCustomers = ensureArray(await sqliteStore.get('rep_customers'));
@@ -879,21 +943,16 @@ const contactIdx = repCustomers.findIndex(c => c && c.name && c.name.toLowerCase
 if (contactIdx !== -1) {
 const contactRecord = repCustomers[contactIdx];
 const contactId = contactRecord.id;
-await registerDeletion(contactId, 'rep_customers', contactRecord);
+const filteredContacts = repCustomers.filter((_, i) => i !== contactIdx);
+await unifiedDelete('rep_customers', filteredContacts, contactId, { strict: true }, contactRecord);
 repCustomers.splice(contactIdx, 1);
-await saveWithTracking('rep_customers', repCustomers);
-deleteRecordFromFirestore('rep_customers', contactId).catch(() => {});
 }
-const idsToDelete = txs.map(s => s.id);
-
 const repTxsToDelete = txs.slice();
-const prunedRepSales = repSales.filter(s => !idsToDelete.includes(s.id));
-await sqliteStore.set('rep_sales', prunedRepSales);
+let prunedRepSales = repSales.slice();
 for (const tx of repTxsToDelete) {
-await registerDeletion(tx.id, 'rep_sales', tx);
+prunedRepSales = prunedRepSales.filter(s => s.id !== tx.id);
+await unifiedDelete('rep_sales', prunedRepSales, tx.id, { strict: true }, tx);
 }
-await saveWithTracking('rep_sales', repSales);
-void Promise.all(idsToDelete.map(id => deleteRecordFromFirestore('rep_sales', id).catch(() => {})));
 notifyDataChange('rep');
 triggerAutoSync();
 closeRepCustomerManagement();
@@ -902,6 +961,7 @@ showToast(`Rep customer "${name}" and all records deleted.`, 'success');
 showToast('Failed to delete rep customer. Please try again.', 'error');
 }
 }
+
 async function renderRepCustomerTransactions(name) {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 const repCustomers = ensureArray(await sqliteStore.get('rep_customers'));
@@ -1054,6 +1114,7 @@ _repFrag.appendChild(item);
 }
 list.replaceChildren(_repFrag);
 }
+
 async function openRepCustomerEditModal(customerName) {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 const repCustomers = ensureArray(await sqliteStore.get('rep_customers'));
@@ -1074,9 +1135,11 @@ document.getElementById('rep-edit-cust-address').value = contact?.address || '';
 document.getElementById('rep-edit-cust-old-debit').value = oldDebitValue;
 if (typeof openStandaloneScreen === 'function') openStandaloneScreen('rep-customer-edit-screen');
 }
+
 function closeRepCustomerEditModal() {
 if (typeof closeStandaloneScreen === 'function') closeStandaloneScreen('rep-customer-edit-screen');
 }
+
 async function saveRepCustomerDetails() {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 const repCustomers = ensureArray(await sqliteStore.get('rep_customers'));
@@ -1087,6 +1150,7 @@ const phone = document.getElementById('rep-edit-cust-phone').value.trim();
 const address = document.getElementById('rep-edit-cust-address').value.trim();
 const oldDebit = parseFloat(document.getElementById('rep-edit-cust-old-debit').value) || 0;
 if (!name) { showToast('Customer name is required', 'error'); return; }
+if (oldDebit < 0) { showToast('Old debt balance cannot be negative. Enter 0 to clear the balance.', 'warning', 4000); return; }
 try {
 const nameChanged = name.toLowerCase() !== originalName.toLowerCase();
 const freshRepContacts = await sqliteStore.get('rep_customers', []);
@@ -1111,8 +1175,7 @@ contact = { id: generateUUID('rep_cust'), name, phone, address, oldDebit, salesR
 createdAt: getTimestamp(), updatedAt: getTimestamp(), timestamp: getTimestamp() };
 repCustomers.push(contact);
 }
-await saveWithTracking('rep_customers', repCustomers, contact);
-saveRecordToFirestore('rep_customers', contact).catch(() => {});
+await unifiedSave('rep_customers', repCustomers, contact);
 let salesArray = await sqliteStore.get('rep_sales', []);
 if (!Array.isArray(salesArray)) salesArray = [];
 if (Array.isArray(repSales) && repSales.length > 0) {
@@ -1163,16 +1226,15 @@ let phoneUpdated = false;
 salesArray.forEach(s => { if (s && s.customerName === name && s.customerPhone !== phone) { s.customerPhone = phone; phoneUpdated = true; } });
 repSales.length = 0; repSales.push(...salesArray);
 if (nameChanged || oldDebtModified || phoneUpdated) {
-await saveWithTracking('rep_sales', salesArray, oldDebtModified && !phoneUpdated && !nameChanged ? oldDebtRecord : null);
-if (oldDebtRecord) saveRecordToFirestore('rep_sales', oldDebtRecord).catch(() => {});
 if (deletedOldDebtId) {
-await registerDeletion(deletedOldDebtId, 'rep_sales', window._repOldDebtRecordForDeletion || null);
+const _deletedRecord = window._repOldDebtRecordForDeletion || null;
 window._repOldDebtRecordForDeletion = null;
-deleteRecordFromFirestore('rep_sales', deletedOldDebtId).catch(() => {});
+await unifiedDelete('rep_sales', salesArray, deletedOldDebtId, { strict: true }, _deletedRecord);
+} else {
+await unifiedSave('rep_sales', salesArray, oldDebtModified && !phoneUpdated && !nameChanged ? oldDebtRecord : null);
 }
 if (nameChanged && renamedRecords.length > 0) {
-const cloudPushes = renamedRecords.map(r => saveRecordToFirestore('rep_sales', r));
-await Promise.allSettled(cloudPushes);
+await unifiedSave('rep_sales', salesArray, null, renamedRecords.map(r => r.id));
 }
 }
 const message = nameChanged ? `Rep customer renamed to "${name}" and details updated`
@@ -1194,6 +1256,7 @@ triggerAutoSync();
 showToast('Failed to save rep customer details. Please try again.', 'error');
 }
 }
+
 async function fetchRepDeviceLocation() {
 const statusDiv = document.getElementById('rep-location-status');
 const addressInput = document.getElementById('rep-edit-cust-address');
@@ -1207,12 +1270,21 @@ if (btn) btn.disabled = true;
 statusDiv.innerHTML = '<span class="update-indicator"></span> Pinpointing satellite location...';
 statusDiv.style.color = 'var(--accent)';
 addressInput.placeholder = 'Fetching location...';
-const gpsOptions = { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 };
-navigator.geolocation.getCurrentPosition(async (position) => {
+const gpsOptions = { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 };
+const GPS_ACCURACY_THRESHOLD = 50;
+const GPS_MAX_WAIT_MS = 25000;
+await new Promise((resolve) => {
+let watchId = null;
+let best = null;
+let settled = false;
+const finish = async (position) => {
+if (settled) return;
+settled = true;
+if (watchId !== null) navigator.geolocation.clearWatch(watchId);
 const lat = position.coords.latitude;
 const lon = position.coords.longitude;
 const accuracy = position.coords.accuracy;
-const coordsText = `${safeNumber(lat, 0).toFixed(2)}, ${safeNumber(lon, 0).toFixed(2)}`;
+const coordsText = `${safeNumber(lat, 0).toFixed(6)}, ${safeNumber(lon, 0).toFixed(6)}`;
 statusDiv.textContent = `GPS Accuracy: ±${Math.round(accuracy)}m. Decoding name...`;
 try {
 const controller = new AbortController();
@@ -1250,8 +1322,17 @@ showToast('An unexpected error occurred.', 'error');
 addressInput.value = `GPS: ${coordsText}`;
 statusDiv.textContent = 'Address lookup failed. Saved GPS Coordinates.';
 statusDiv.style.color = 'var(--warning)';
-} finally { if (btn) btn.disabled = false; }
-}, (error) => {
+} finally { if (btn) btn.disabled = false; resolve(); }
+};
+watchId = navigator.geolocation.watchPosition(
+(position) => {
+if (!best || position.coords.accuracy < best.coords.accuracy) best = position;
+if (position.coords.accuracy <= GPS_ACCURACY_THRESHOLD) finish(position);
+},
+(error) => {
+if (settled) return;
+settled = true;
+if (watchId !== null) navigator.geolocation.clearWatch(watchId);
 let msg = 'Location error.';
 if (error.code === error.PERMISSION_DENIED) msg = ' Permission denied. Check Phone Settings.';
 else if (error.code === error.POSITION_UNAVAILABLE) msg = ' Weak GPS signal. Go outside.';
@@ -1259,8 +1340,14 @@ else if (error.code === error.TIMEOUT) msg = ' GPS timeout. Try again.';
 statusDiv.textContent = msg;
 statusDiv.style.color = 'var(--danger)';
 if (btn) btn.disabled = false;
-}, gpsOptions);
+resolve();
+},
+gpsOptions
+);
+setTimeout(() => { if (!settled && best) finish(best); }, GPS_MAX_WAIT_MS);
+});
 }
+
 async function exportRepCustomerToPDF() {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 const repCustomers = ensureArray(await sqliteStore.get('rep_customers'));
@@ -1277,11 +1364,9 @@ await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/
 await new Promise(r => setTimeout(r, 200));
 }
 if (!window.jspdf || !window.jspdf.jsPDF) throw new Error('Failed to load PDF library. Please refresh and try again.');
-// All transactions for this rep customer (all time, un-filtered)
 const allRepCustTxns = repSales.filter(s => s.customerName === customerName && s.salesRep === currentRepProfile);
 const now = new Date();
 const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-// Determine cutoff date for the selected period
 let repPeriodCutoff = null;
 if (range !== 'all') {
   switch(range) {
@@ -1293,19 +1378,18 @@ if (range !== 'all') {
 }
 const repPriorTxns = repPeriodCutoff
   ? allRepCustTxns.filter(t => {
-      if (t.transactionType === 'OLD_DEBT') return true; // always treated as prior
+      if (t.transactionType === 'OLD_DEBT') return true;
       if (!t.date) return false;
       return new Date(t.date) < repPeriodCutoff;
     })
   : [];
 let transactions = repPeriodCutoff
   ? allRepCustTxns.filter(t => {
-      if (t.transactionType === 'OLD_DEBT') return false; // already in prior
+      if (t.transactionType === 'OLD_DEBT') return false;
       if (!t.date) return false;
       return new Date(t.date) >= repPeriodCutoff;
     })
   : allRepCustTxns;
-// Compute opening balance from prior transactions
 const repOpeningBalance = repPriorTxns.reduce((bal, t) => {
   const pt = t.paymentType || 'CASH';
   const isOldDebt = t.transactionType === 'OLD_DEBT';
@@ -1314,7 +1398,6 @@ const repOpeningBalance = repPriorTxns.reduce((bal, t) => {
     debit = parseFloat(t.totalValue) || 0;
     credit = parseFloat(t.partialPaymentReceived) || 0;
   } else if (pt === 'CASH' || (pt === 'CREDIT' && t.creditReceived)) {
-    // settled — net zero
   } else if (pt === 'CREDIT' && !t.creditReceived) {
     debit = parseFloat(t.totalValue) || 0;
     credit = parseFloat(t.partialPaymentReceived) || 0;
@@ -1424,7 +1507,6 @@ totDebit += r.debit;
 totCredit += r.credit;
 totQty += r.qty;
 }
-// Prepend opening balance row when a period is selected and prior data exists
 if (repHasPrior) {
   const obAbs = Math.abs(repOpeningBalance);
   const obDisplay = obAbs < 0.01 ? 'SETTLED' : 'Rs ' + fmtAmt(obAbs);
@@ -1543,6 +1625,7 @@ if (pageCount === 1) {
 showToast('Error generating PDF: ' + error.message, 'error');
 }
 }
+
 async function renderRepHistory() {
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));
 const list = document.getElementById('repHistoryList');
@@ -1626,6 +1709,7 @@ tableHTML += `
 `;
 list.innerHTML = tableHTML;
 }
+
 async function refreshRepUI(force = false) {
 const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
 const repSales = ensureArray(await sqliteStore.get('rep_sales'));

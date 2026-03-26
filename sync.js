@@ -44,6 +44,7 @@ const FirestoreToSQLiteMap = {
 function getFirestoreCollection(sqliteKey) {
 return SQLiteToFirestoreMap[sqliteKey]?.collection || sqliteKey;
 }
+
 function getSQLiteKey(firestoreCollection) {
 return FirestoreToSQLiteMap[firestoreCollection] || firestoreCollection;
 }
@@ -180,7 +181,7 @@ return false;
 }
 }
 
-async function unifiedSave(sqliteKey, dataArray, specificRecord = null) {
+async function unifiedSave(sqliteKey, dataArray, specificRecord = null, linkedIds = null) {
 if (specificRecord && specificRecord.id) {
   await saveWithTracking(sqliteKey, dataArray, specificRecord);
   _syncQueue.run(async () => {
@@ -199,6 +200,30 @@ if (specificRecord && specificRecord.id) {
           docId: String(specificRecord.id),
           data: fallback
         });
+      }
+    }
+  });
+} else if (Array.isArray(linkedIds) && linkedIds.length > 0) {
+  await saveWithTracking(sqliteKey, dataArray, null, linkedIds);
+  const recordsToSync = dataArray.filter(r => r && linkedIds.includes(r.id));
+  _syncQueue.run(async () => {
+    for (const record of recordsToSync) {
+      try {
+        await saveRecordToFirestore(sqliteKey, record);
+      } catch (e) {
+        const collectionName = getFirestoreCollection(sqliteKey);
+        if (typeof OfflineQueue !== 'undefined' && collectionName) {
+          const now = Date.now();
+          const fallback = sanitizeForFirestore({ ...record, syncedAt: new Date().toISOString() });
+          if (!fallback.createdAt) fallback.createdAt = now;
+          if (!record.isMerged) fallback.updatedAt = new Date(now).toISOString();
+          await OfflineQueue.add({
+            action: 'set',
+            collection: collectionName,
+            docId: String(record.id),
+            data: fallback
+          });
+        }
       }
     }
   });
@@ -233,6 +258,7 @@ _syncQueue.run(async () => {
 triggerAutoSync();
 return true;
 }
+
 async function verifyDeltaSyncSystem() {
 const collections = [
 'production', 'sales', 'calculator_history', 'rep_sales', 'rep_customers',
@@ -266,6 +292,7 @@ results.issues.push(status);
 }
 return results;
 }
+
 async function resetDeltaSync() {
 await DeltaSync.clearAllTimestamps();
 await sqliteStore.remove('deltaSyncStats');
@@ -863,6 +890,7 @@ this.results.errors.push({ collection: 'sync_updates', error: error.message });
 }
 }
 }
+
 async function initializeCompleteFirestoreDatabase(silent = false) {
 if (!firebaseDB || !currentUser) {
 if (!silent) showToast('Please log in first', 'warning');
@@ -871,6 +899,7 @@ return { success: false, error: 'Not logged in' };
 const initializer = new FirestoreDatabaseInitializer(firebaseDB, currentUser);
 return await initializer.initialize(silent);
 }
+
 async function isCompleteDatabaseInitialized() {
 if (!firebaseDB || !currentUser) return false;
 try {
@@ -898,6 +927,7 @@ return true;
 return false;
 }
 }
+
 async function safeInitializeCompleteDatabase(silent = false) {
 const isInitialized = await isCompleteDatabaseInitialized();
 if (isInitialized) {
@@ -909,9 +939,11 @@ message: 'Database was already initialized with complete structure'
 }
 return await initializeCompleteFirestoreDatabase(silent);
 }
+
 async function initializeFirestoreStructure(silent = false) {
 return await initializeCompleteFirestoreDatabase(silent);
 }
+
 async function cleanupPlaceholders() {
 if (!firebaseDB || !currentUser) return false;
 try {
@@ -946,6 +978,7 @@ return true;
 return false;
 }
 }
+
 function retryFirebaseInit(attempts = 0, maxAttempts = APP_CONFIG.FIREBASE_INIT_RETRY_MAX) {
 initializeFirebaseSystem();
 if (firebaseDB) {
@@ -1057,6 +1090,7 @@ const SYNC_COLLECTIONS = [
 async function _getColData(sqliteKey) {
 return ensureArray(await sqliteStore.get(sqliteKey));
 }
+
 async function _setColData(sqliteKey, value) {
 await sqliteStore.set(sqliteKey, value);
 }
@@ -1242,6 +1276,7 @@ function _enqueueSyncLocked(handlerFn, snapshot) {
     _syncLockPendingQueue.push({ handlerFn, snapshot });
   }
 }
+
 async function _flushSyncLockQueue() {
   if (_syncLockPendingQueue.length === 0) return;
   const queued = _syncLockPendingQueue.splice(0);
@@ -1250,6 +1285,7 @@ async function _flushSyncLockQueue() {
     catch (err) { console.warn('[SyncLock] Error replaying buffered snapshot', _safeErr(err)); }
   }
 }
+
 function updateSignalUI(status) {
   const dot = document.getElementById('connection-indicator');
   if (!dot) return;
@@ -1341,11 +1377,13 @@ function scheduleListenerReconnect() {
     }
   }, delay);
 }
+
 function recordSuccessfulConnection() {
   lastSuccessfulConnection = Date.now();
   listenerRetryAttempts = 0;
   isReconnecting = false;
 }
+
 function isConnectionStale() {
   return (Date.now() - lastSuccessfulConnection) > 5 * 60 * 1000;
 }
@@ -1812,10 +1850,12 @@ async function executeSmartPull() {
     showToast('Data synced via Live Socket', 'success');
   }
 }
+
 function scheduleSocketReconnect() {
   if (socketReconnectTimer) clearTimeout(socketReconnectTimer);
   socketReconnectTimer = setTimeout(() => { subscribeToRealtime().catch(e => console.warn('subscribeToRealtime socket retry failed:', _safeErr(e))); }, 5000);
 }
+
 async function initFirebase() {
   if (window._firebaseListenersRegistered) return;
   window._firebaseListenersRegistered = true;
@@ -2875,6 +2915,7 @@ await pushDataToCloud(true);
 }
 }, SEAMLESS_DELAY_MS);
 }
+
 function stopDatabaseHeartbeat() {
 if (window.deviceHeartbeatInterval) {
 clearInterval(window.deviceHeartbeatInterval);
@@ -2896,12 +2937,14 @@ await performOneClickSync(true);
 } catch (e) { console.warn('[AutoBackup]', _safeErr(e)); }
 }, AUTO_BACKUP_INTERVAL);
 }
+
 function clearAutoBackup() {
 if (autoSaveTimer) {
 clearInterval(autoSaveTimer);
 autoSaveTimer = null;
 }
 }
+
 async function wakeUpDatabaseAndSync() {
   showToast('Connecting to cloud...', 'info');
   if (!firebaseDB || !currentUser) {
@@ -2912,6 +2955,7 @@ async function wakeUpDatabaseAndSync() {
   }
   await pullDataFromCloud(false);
 }
+
 async function triggerCloudAction(action) {
 if (!firebaseDB) {
 showToast("Cloud system not initialized. Check internet.", "error");
@@ -2939,6 +2983,7 @@ await pullDataFromCloud(false);
 }
 }
 }
+
 function createAuthOverlay() {
 const existing = document.getElementById('auth-overlay');
 if (existing) existing.remove();
@@ -3053,12 +3098,14 @@ if (emailInput) { emailInput.value = email; }
 }
 }).catch(() => {});
 }
+
 function showAuthOverlay() {
 const existing = document.getElementById('auth-overlay');
 if (existing) existing.remove();
 createAuthOverlay();
 document.body.style.overflow = 'hidden';
 }
+
 function hideAuthOverlay() {
 const overlay = document.getElementById('auth-overlay');
 if (overlay) {
@@ -3078,12 +3125,15 @@ const BACKOFF_BASE = 1000;
 function getAttempts() {
 try { return parseInt(sessionStorage.getItem(KEY_ATTEMPTS) || '0', 10); } catch(e) { return 0; }
 }
+
 function setAttempts(n) {
 try { sessionStorage.setItem(KEY_ATTEMPTS, String(n)); } catch(e) {}
 }
+
 function getLockoutUntil() {
 try { return parseInt(sessionStorage.getItem(KEY_LOCKOUT) || '0', 10); } catch(e) { return 0; }
 }
+
 function setLockoutUntil(ts) {
 try { sessionStorage.setItem(KEY_LOCKOUT, String(ts)); } catch(e) {}
 }
@@ -3497,6 +3547,7 @@ messageDiv.textContent = errorMessage;
 messageDiv.style.color = 'var(--danger)';
 }
 }
+
 async function _isAdminUser() {
 if (!currentUser || !firebaseDB) return false;
 try {
@@ -3812,6 +3863,7 @@ showAuthOverlay();
 showToast(' Error signing out', 'danger');
 }
 }
+
 function updateSyncButton() {
 const syncBtn = document.getElementById('sync-btn');
 if (!syncBtn) return;
