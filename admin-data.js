@@ -421,31 +421,6 @@ _cyBody.innerHTML = `
   background: linear-gradient(90deg, transparent, rgba(0,0,0,0.08), transparent);
 }
 
-#cy-header {
-  padding: 20px 22px 15px;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  border-bottom: 1px solid rgba(255,255,255,0.07);
-  position: sticky;
-  top: 0;
-  background: inherit;
-  z-index: 2;
-  border-radius: 24px 24px 0 0;
-}
-[data-theme="light"] #cy-header {
-  border-bottom-color: rgba(0,0,0,0.07);
-}
-#cy-header-icon {
-  flex-shrink: 0;
-  width: 44px; height: 44px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, rgba(239,83,80,0.18) 0%, rgba(239,83,80,0.05) 100%);
-  border: 1px solid rgba(239,83,80,0.30);
-  display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 0 0 1px rgba(239,83,80,0.12) inset, 0 4px 14px rgba(239,83,80,0.14);
-}
-
 .cy-data-row {
   display: flex;
   align-items: stretch;
@@ -537,7 +512,7 @@ _cyBody.innerHTML = `
 .cy-result-note   { font-size: 0.67rem; color: var(--text-muted); margin-top: 3px; line-height: 1.45; }
 
 #cy-progress-inner {
-  margin: 14px 22px 0;
+  margin: 14px 0 0;
   padding: 13px 15px;
   border-radius: var(--radius-lg, 12px);
   background: rgba(255,255,255,0.025);
@@ -566,7 +541,7 @@ _cyBody.innerHTML = `
   animation: _cyShimmer 1.8s linear infinite;
 }
 
-#cy-input-wrap { padding: 14px 22px 20px; }
+#cy-input-wrap { padding: 14px 0 4px; }
 #cy-danger-notice {
   display: flex; align-items: flex-start; gap: 12px;
   padding: 12px 14px;
@@ -660,7 +635,7 @@ _cyBody.innerHTML = `
   color: var(--text-main);
 }
 
-#close-year-complete { display:none; padding: 0 16px 20px; }
+#close-year-complete { display:none; padding: 0; }
 #cy-done-card {
   position: relative; overflow: hidden;
   border-radius: var(--radius-xl, 16px);
@@ -735,31 +710,9 @@ _cyBody.innerHTML = `
   animation: none !important;
 }
 #cy-panel::after, #cy-panel::before { display: none !important; }
-#cy-header {
-  border-radius: 0 !important;
-  background: var(--glass) !important;
-  border-bottom: 1px solid var(--glass-border) !important;
-  margin: 0 !important;
-  padding: 14px 16px !important;
-}
-[data-theme="light"] #cy-header {
-  background: var(--glass) !important;
-}
 </style>
 <div id="cy-panel">
-  <div id="cy-header">
-    <div id="cy-header-icon">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/></svg>
-    </div>
-    <div style="flex:1;min-width:0;">
-      <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;">
-        <h2 style="margin:0;color:var(--text-main);font-size:1.04rem;font-weight:800;font-family:'Bricolage Grotesque',system-ui,sans-serif;letter-spacing:-0.025em;">Close Financial Year</h2>
-        <span id="cy-phase-badge" style="font-size:0.61rem;font-weight:700;text-transform:uppercase;letter-spacing:0.09em;padding:2px 10px;border-radius:999px;background:rgba(29,233,182,0.10);color:var(--accent);border:1px solid rgba(29,233,182,0.20);transition:all 0.4s ease;font-family:'Geist Mono',monospace;">PREVIEW</span>
-      </div>
-      <p style="margin:4px 0 0;color:var(--text-muted);font-size:0.72rem;line-height:1.4;font-family:'Geist',sans-serif;" id="cy-panel-subtitle">Compact all records into opening balances — encrypted backup created automatically</p>
-    </div>
-  </div>
-  <div style="padding:15px 22px 0;">
+  <div style="padding:0 0 6px;">
     <div id="cy-preview-grid" style="display:grid;gap:6px;">${summary.rowsHtml}</div>
   </div>
   <div id="close-year-progress-container" style="display:none;">

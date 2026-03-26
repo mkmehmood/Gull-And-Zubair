@@ -13195,16 +13195,20 @@ const userId = new Uint8Array(16);
 window.crypto.getRandomValues(userId);
 const publicKey = {
 challenge: challenge,
-rp: { name: "Naswar Dealers App" },
+rp: { name: "Sarim App", id: window.location.hostname },
 user: {
 id: userId,
 name: username,
 displayName: username
 },
-pubKeyCredParams: [{ alg: -7, type: "public-key" }],
+pubKeyCredParams: [
+{ alg: -7, type: "public-key" },
+{ alg: -257, type: "public-key" }
+],
 authenticatorSelection: {
 authenticatorAttachment: "platform",
-userVerification: "required"
+userVerification: "required",
+residentKey: "preferred"
 },
 timeout: 60000
 };
@@ -13224,22 +13228,24 @@ throw err;
 authenticate: async () => {
 try {
 const savedCredId = await sqliteStore.get('bio_cred_id');
-if (!savedCredId) throw new Error("No biometric set up found.");
+if (!savedCredId) throw new Error("No credential found. Please disable and re-enable Fingerprint Lock.");
 const challenge = new Uint8Array(32);
 window.crypto.getRandomValues(challenge);
 const publicKey = {
 challenge: challenge,
+rpId: window.location.hostname,
 allowCredentials: [{
 id: BiometricAuth._base64ToBuf(savedCredId),
-type: "public-key",
-transports: ["internal"]
+type: "public-key"
 }],
-userVerification: "required"
+userVerification: "required",
+timeout: 60000
 };
 await navigator.credentials.get({ publicKey });
 return true;
 } catch (err) {
-return false;
+console.error('[BiometricAuth] authenticate error:', err.name, err.message);
+throw err;
 }
 }
 };

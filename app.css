@@ -206,6 +206,13 @@ scroll-behavior: smooth;
 overscroll-behavior-y: none;
 height: 100%;
 touch-action: pan-y;
+/* Anchor all rem units to exactly 14px on 449dp+ devices.
+   On smaller screens, scale proportionally so UI shrinks cleanly.
+   This overrides any browser/OS "Large Text" or font-scaling settings
+   that would otherwise break layout on low-end devices. */
+font-size: 14px;
+-webkit-text-size-adjust: 100%;
+text-size-adjust: 100%;
 }
 body {
 font-family: 'Geist', 'Noto Sans', system-ui, sans-serif;
@@ -213,7 +220,7 @@ background: var(--bg-gradient);
 background-attachment: fixed;
 color: var(--text-main);
 margin: 0;
-padding: 20px;
+padding: 12px;
 -webkit-font-smoothing: antialiased;
 -moz-osx-font-smoothing: grayscale;
 min-height: 100vh;
@@ -228,7 +235,7 @@ overflow-x: hidden;
 overflow-y: auto;
 width: 100%;
 box-sizing: border-box;
-font-size: 14px;
+font-size: 1rem;
 overscroll-behavior-y: none;
 -webkit-overflow-scrolling: touch;
 touch-action: pan-y;
@@ -1533,7 +1540,7 @@ background: linear-gradient(135deg, var(--accent) 0%, #1d4ed8 100%);
 color: white;
 padding: 2px 6px;
 border-radius: 10px;
-font-size: 9px;
+font-size: 0.64rem;
 position: absolute;
 top: 12px;
 right: 12px;
@@ -1551,7 +1558,7 @@ top: 12px;
 right: 12px;
 padding: 3px 8px;
 border-radius: 10px;
-font-size: 9px;
+font-size: 0.64rem;
 font-weight: 800;
 color: white;
 text-transform: uppercase;
@@ -2698,7 +2705,7 @@ top: 12px;
 right: 12px;
 padding: 3px 8px;
 border-radius: 10px;
-font-size: 9px;
+font-size: 0.64rem;
 font-weight: 800;
 color: white;
 text-transform: uppercase;
@@ -3464,7 +3471,7 @@ z-index: var(--z-confirm, 10010);
 display: flex;
 align-items: center;
 justify-content: center;
-padding: 20px;
+padding: 12px;
 animation: confirmBackdropIn 0.20s ease !important;
 }
 .glass-confirm-backdrop.closing {
@@ -4640,7 +4647,7 @@ body.dark-mode .creator-badge {
   color: #22d3ee;
 }
 table {
-  font-size: clamp(0.55rem, 1.4vw, 0.82rem);
+  font-size: 0.82rem;
   width: 100%;
 }
 table td,
@@ -4652,11 +4659,11 @@ table th {
   max-width: 0;
 }
 table th {
-  font-size: clamp(0.5rem, 1.2vw, 0.72rem);
+  font-size: 0.72rem;
 }
 @media (max-width: 480px) {
 table {
-    font-size: clamp(0.48rem, 2.8vw, 0.65rem);
+    font-size: 0.72rem;
   }
 }
 #vs-scroller-rep-customers,
@@ -4795,7 +4802,7 @@ scroll-padding-bottom: 16px;
 }
 .sc-bar-group .sc-bar-fill { width: 100%; }
 .sc-bar-lbl {
-  font-size: 7px;
+  font-size: 0.5rem;
   color: var(--text-muted);
   text-align: center;
   white-space: nowrap;
@@ -4854,13 +4861,13 @@ scroll-padding-bottom: 16px;
   color: var(--text-main);
   font-weight: 700;
   white-space: nowrap;
-  font-size: 8px;
+  font-size: 0.57rem;
 }
 .sc-pie-pct {
   color: var(--accent);
   font-weight: 600;
   white-space: nowrap;
-  font-size: 8px;
+  font-size: 0.57rem;
 }
 
 .sc-line-wrap {
@@ -5039,3 +5046,368 @@ to   { transform: translateY(100%); opacity: 0;   }
   animation: screenSlideOut 0.22s cubic-bezier(0.4, 0, 0.8, 0.6) forwards !important;
   pointer-events: none;
 }
+
+/* ==========================================================================
+   RESPONSIVE CONSISTENCY SYSTEM
+   Base: 449dp smallest width. All UI elements scale consistently across
+   non-desktop devices with different widths and screen resolutions.
+   ========================================================================== */
+
+/* --- 1. FONT-SIZE ANCHOR: Scale html font-size proportionally below 449px ---
+   At 449px: html font-size = 14px  (1rem = 14px, full size)
+   At 390px: html font-size = 12.2px (proportional shrink)
+   At 360px: html font-size = 11.2px (proportional shrink, clamped at 11px)
+   This single rule makes EVERY rem-based value scale uniformly.
+   It also neutralises Android "Large Text" / OEM font-scaling. ------------ */
+@media screen and (max-width: 449px) {
+  html {
+    font-size: clamp(11px, 3.12vw, 14px) !important;
+  }
+}
+
+/* --- 2. BODY HORIZONTAL PADDING ---
+   449dp: 12px padding each side  (425px content)
+   360dp: 8px padding each side   (344px content)
+   Very small: 6px                (safe minimum)                           -- */
+@media screen and (max-width: 449px) {
+  body {
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+  }
+}
+@media screen and (max-width: 380px) {
+  body {
+    padding-left: 6px !important;
+    padding-right: 6px !important;
+  }
+}
+
+/* --- 3. SYSTEM CONTROLS (fixed top bar) ---
+   Keep consistent 52px height, tighten horizontal padding on narrow screens */
+@media screen and (max-width: 449px) {
+  .system-controls {
+    padding-left: 10px !important;
+    padding-right: 10px !important;
+    gap: 8px !important;
+    min-height: 52px !important;
+  }
+}
+
+/* --- 4. CONTAINER: remove max-width constraint on mobile, full width ---  */
+@media screen and (max-width: 768px) {
+  .container {
+    max-width: 100% !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+  }
+}
+
+/* --- 5. OVERVIEW REPORT GRID: force 2-col on 449dp, 1-col below 360dp  -- */
+@media screen and (max-width: 449px) {
+  .overview-report-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 8px !important;
+  }
+  .overview-card {
+    min-height: 120px !important;
+    padding: 12px !important;
+    border-radius: 18px !important;
+  }
+  .overview-card h4 {
+    font-size: 0.72rem !important;
+    margin-bottom: 8px !important;
+  }
+  .overview-card p {
+    font-size: 0.72rem !important;
+    margin: 4px 0 !important;
+  }
+}
+@media screen and (max-width: 360px) {
+  .overview-report-grid {
+    grid-template-columns: 1fr !important;
+    gap: 6px !important;
+  }
+}
+
+/* --- 6. REPORT GRID: always 1-col on mobile                             -- */
+@media screen and (max-width: 768px) {
+  .report-grid {
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+  }
+}
+
+/* --- 7. GRID INPUTS (forms): 1-col below 449dp                          -- */
+@media screen and (max-width: 449px) {
+  .grid-inputs {
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+  }
+}
+
+/* --- 8. SECTION CARDS: consistent padding and radius on small screens   -- */
+@media screen and (max-width: 449px) {
+  .section,
+  .liquid-card,
+  .card {
+    padding: 12px !important;
+    border-radius: 18px !important;
+  }
+}
+@media screen and (max-width: 380px) {
+  .section,
+  .liquid-card,
+  .card {
+    padding: 10px !important;
+  }
+}
+
+/* --- 9. SECTION HEADER: wrap gracefully on narrow screens               -- */
+@media screen and (max-width: 449px) {
+  .section-header {
+    gap: 8px !important;
+    margin-bottom: 10px !important;
+  }
+  .section-header h2,
+  .section-header h3 {
+    font-size: 0.82rem !important;
+  }
+}
+
+/* --- 10. TABLES: consistent font sizes on small screens                 -- */
+@media screen and (max-width: 449px) {
+  table {
+    font-size: 0.72rem !important;
+  }
+  table th {
+    font-size: 0.65rem !important;
+    padding: 6px 5px !important;
+  }
+  table td {
+    font-size: 0.72rem !important;
+    padding: 7px 5px !important;
+  }
+}
+@media screen and (max-width: 380px) {
+  table {
+    font-size: 0.68rem !important;
+  }
+  table th {
+    font-size: 0.60rem !important;
+  }
+  table td {
+    font-size: 0.68rem !important;
+  }
+}
+
+/* --- 11. BUTTONS: consistent height/padding, never overflow             -- */
+@media screen and (max-width: 449px) {
+  .btn-theme {
+    font-size: 0.78rem !important;
+    padding: 6px 10px !important;
+    border-radius: 12px !important;
+  }
+  .btn-sm {
+    height: 30px !important;
+    padding: 0 10px !important;
+    font-size: 0.72rem !important;
+  }
+  .btn,
+  .btn-main,
+  .btn-noman,
+  .btn-danger {
+    font-size: 0.82rem !important;
+    padding: 0 14px !important;
+  }
+  .tbl-action-btn {
+    height: 26px !important;
+    padding: 0 8px !important;
+    font-size: 0.65rem !important;
+  }
+}
+
+/* --- 12. INPUTS, SELECTS, LABELS: consistent sizing                     -- */
+@media screen and (max-width: 449px) {
+  input,
+  select,
+  textarea {
+    font-size: 0.9rem !important; /* prevent iOS auto-zoom (needs ≥16px device px) */
+    padding: 8px 4px !important;
+  }
+  label {
+    font-size: 0.65rem !important;
+    margin-bottom: 4px !important;
+  }
+}
+
+/* --- 13. TOGGLE GROUP / TOGGLE OPTIONS                                  -- */
+@media screen and (max-width: 449px) {
+  .toggle-group {
+    gap: 2px !important;
+  }
+  .toggle-opt {
+    padding: 7px 10px !important;
+    font-size: 0.74rem !important;
+  }
+}
+@media screen and (max-width: 380px) {
+  .toggle-opt {
+    padding: 6px 8px !important;
+    font-size: 0.70rem !important;
+  }
+}
+
+/* --- 14. SIDEBAR: consistent width, never wider than screen             -- */
+@media screen and (max-width: 449px) {
+  #app-sidebar {
+    width: min(288px, 85vw) !important;
+  }
+}
+
+/* --- 15. CHART BOXES: consistent heights                                -- */
+@media screen and (max-width: 449px) {
+  .chart-box,
+  .sales-rep-chart-box {
+    height: 220px !important;
+  }
+}
+@media screen and (max-width: 380px) {
+  .chart-box,
+  .sales-rep-chart-box {
+    height: 200px !important;
+  }
+}
+
+/* --- 16. SCREEN TOPBAR + SCREEN BODY (standalone screens)              -- */
+@media screen and (max-width: 449px) {
+  .screen-topbar {
+    padding: 10px 12px !important;
+    padding-top: calc(10px + env(safe-area-inset-top)) !important;
+    min-height: 50px !important;
+  }
+  .screen-title {
+    font-size: 0.88rem !important;
+  }
+  .screen-body {
+    padding: 12px !important;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom)) !important;
+  }
+}
+
+/* --- 17. FACTORY FORMULA GRID: handle narrow screens                   -- */
+@media screen and (max-width: 380px) {
+  .factory-formula-grid,
+  .factory-formula-header {
+    grid-template-columns: 1.5fr 0.8fr 0.8fr 24px !important;
+    gap: 3px !important;
+  }
+}
+
+/* --- 18. SETTINGS LIST ITEMS: padding on small screens                 -- */
+@media screen and (max-width: 449px) {
+  .settings-list-item {
+    padding: 12px 12px !important;
+    gap: 10px !important;
+  }
+}
+
+/* --- 19. MODAL / OVERLAY CARDS: full-width-safe on all screens         -- */
+@media screen and (max-width: 449px) {
+  .factory-overlay-card,
+  .dl-queue-card {
+    width: calc(100vw - 16px) !important;
+    padding: 16px 14px 12px !important;
+    border-radius: 20px !important;
+  }
+  .glass-confirm-box {
+    padding: 22px 18px 16px !important;
+    border-radius: 20px !important;
+  }
+  .glass-confirm-title {
+    font-size: 1rem !important;
+  }
+  .glass-confirm-msg {
+    font-size: 0.80rem !important;
+  }
+  .glass-confirm-btn {
+    padding: 9px 16px !important;
+    font-size: 0.80rem !important;
+  }
+}
+
+/* --- 20. ENTITY CARDS: consistent on narrow screens                    -- */
+@media screen and (max-width: 449px) {
+  .entity-card-compact {
+    padding: 12px !important;
+    border-radius: 16px !important;
+    min-height: 100px !important;
+  }
+}
+
+/* --- 21. TOAST: ensure readable on very small screens                  -- */
+@media screen and (max-width: 380px) {
+  .liquid-toast {
+    max-width: calc(100vw - 16px) !important;
+  }
+  .toast-text {
+    font-size: 0.68rem !important;
+  }
+}
+
+/* --- 22. CYBER / CUSTOMER CARDS: consistent stat grids                 -- */
+@media screen and (max-width: 449px) {
+  .cy-stat-grid {
+    padding: 10px 10px !important;
+    gap: 6px !important;
+  }
+  .cy-stat-value {
+    font-size: 1.05rem !important;
+  }
+}
+
+/* --- 23. UTILITY FONT OVERRIDES: stay proportional below 449px
+   These utility classes use absolute px values — make them scale too     -- */
+@media screen and (max-width: 449px) {
+  .u-fs-sm  { font-size: 0.7rem !important; }
+  .u-fs-sm2 { font-size: 0.75rem !important; }
+  .u-fs-sm3 { font-size: 0.8rem !important; }
+  .u-fs-md  { font-size: 0.85rem !important; }
+  .u-fs-md2 { font-size: 0.9rem !important; }
+  .u-field-hint    { font-size: 0.68rem !important; }
+  .u-field-hint-xs { font-size: 0.58rem !important; }
+  .u-field-hint-xxs{ font-size: 0.62rem !important; }
+}
+
+/* --- 24. PREVENT HORIZONTAL OVERFLOW on any element                    -- */
+@media screen and (max-width: 449px) {
+  .container,
+  #tab-prod,
+  #tab-sales,
+  #tab-calc,
+  #tab-factory,
+  #tab-payments,
+  #tab-rep {
+    max-width: 100% !important;
+    overflow-x: hidden !important;
+  }
+}
+
+/* --- 25. BADGE / CHIP SIZES: don't overflow on small screens           -- */
+@media screen and (max-width: 449px) {
+  .store-badge,
+  .payment-badge,
+  .seller-badge,
+  .noran-badge,
+  .noman-badge,
+  .entity-type-badge,
+  .supply-tag,
+  .factory-badge,
+  .transaction-badge {
+    font-size: 0.60rem !important;
+    padding: 2px 7px !important;
+  }
+}
+
+/* ==========================================================================
+   END RESPONSIVE CONSISTENCY SYSTEM
+   ========================================================================== */

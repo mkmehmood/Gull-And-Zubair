@@ -134,19 +134,44 @@ lockScreen.innerHTML = `
   Use Fingerprint / Face ID
 </button>
 
-<p id="_lock-hint">Touch the sensor or look at the camera</p>
+<p id="_lock-hint">Tap anywhere to unlock</p>
 
 <div id="_lock-dots">
   <span></span><span></span><span></span>
 </div>
 `;
 document.body.appendChild(lockScreen);
-window.triggerUnlock = async () => {
+// Trigger biometric prompt on the user's FIRST touch/click anywhere on the lock screen.
+// WebAuthn requires a real user gesture — this is the only cross-browser reliable way.
+// The lock screen itself becomes the tap target so there is no friction.
+let _lockTriggered = false;
+const _lockTriggerHandler = (e) => {
+  if (_lockTriggered) return;
+  _lockTriggered = true;
+  lockScreen.removeEventListener('pointerdown', _lockTriggerHandler);
+  if (typeof window.triggerUnlock === 'function') window.triggerUnlock();
+};
+lockScreen.addEventListener('pointerdown', _lockTriggerHandler);
+window.triggerUnlock = async (isAutoTrigger = false) => {
 const btn = document.getElementById('_lock-btn');
 if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+const _reEnable = () => {
+if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+// Re-attach tap-anywhere listener so user can retry without pressing button
+const screen = document.getElementById('app-lock-screen');
+if (screen) {
+let _retryTriggered = false;
+const _retryHandler = () => {
+if (_retryTriggered) return;
+_retryTriggered = true;
+screen.removeEventListener('pointerdown', _retryHandler);
+if (typeof window.triggerUnlock === 'function') window.triggerUnlock();
+};
+screen.addEventListener('pointerdown', _retryHandler);
+}
+};
 try {
-const success = await BiometricAuth.authenticate();
-if (success) {
+await BiometricAuth.authenticate();
 const screen = document.getElementById('app-lock-screen');
 if (screen) {
 screen.style.transition = 'opacity 0.3s ease';
@@ -154,20 +179,23 @@ screen.style.opacity = '0';
 setTimeout(() => screen.remove(), 300);
 }
 showToast("Unlocked Successfully", "success");
-} else {
-const iconWrap = document.getElementById('_lock-icon-wrap');
-if (iconWrap) { iconWrap.style.animation = '_lockShake 0.5s ease'; setTimeout(() => { iconWrap.style.animation = ''; }, 520); }
-showToast("Authentication Failed. Try again.", "error");
-if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
-}
 } catch (e) {
+const errName = e && e.name ? e.name : '';
+const errMsg  = e && e.message ? e.message : 'Unknown error';
+if (errName === 'NotAllowedError') {
+_reEnable();
+return;
+}
 const iconWrap = document.getElementById('_lock-icon-wrap');
 if (iconWrap) { iconWrap.style.animation = '_lockShake 0.5s ease'; setTimeout(() => { iconWrap.style.animation = ''; }, 520); }
-showToast("Biometric Error: " + e.message, "error");
-if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+if (errName === 'InvalidStateError' || errMsg.includes('credential') || errMsg.includes('Credential')) {
+showToast("Credential not found. Disable and re-enable Fingerprint Lock.", "error", 6000);
+} else {
+showToast(errName ? errName + ': ' + errMsg : errMsg, "error", 6000);
+}
+_reEnable();
 }
 };
-setTimeout(() => window.triggerUnlock(), 500);
 }
 }
 async function setRepMode(mode) {

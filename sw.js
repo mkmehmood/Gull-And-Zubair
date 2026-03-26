@@ -1,4 +1,4 @@
-const BUILD_HASH = 'sarim-v1-20260325';
+const BUILD_HASH = 'sarim-v1';
 const CACHE_NAME = 'app-' + BUILD_HASH;
 
 const ASSETS_TO_CACHE = [
