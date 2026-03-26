@@ -2,7 +2,7 @@ async function enableBiometricLock() {
 try {
 const success = await BiometricAuth.register("Manager");
 if(success) {
-showToast("Biometric Lock Enabled! 🔒", "success");
+showToast("Biometric Lock Enabled! ", "success");
 const _bioBtn = document.getElementById('bio-toggle-btn');
 if (_bioBtn) {
   const lbl = document.getElementById('bio-toggle-label');
@@ -313,16 +313,13 @@ showToast("Date and Name required", "warning");
 restoreBtn();
 return;
 }
+
+
 let gpsCoords = null;
-try {
-gpsCoords = await Promise.race([
-getPosition(),
-new Promise(resolve => setTimeout(() => resolve(null), 10000))
-]);
-} catch (e) {
-console.error('An unexpected error occurred.', _safeErr(e));
-showToast('An unexpected error occurred.', 'error');
-}
+const _gpsBgPromise = Promise.race([
+  getPosition(),
+  new Promise(resolve => setTimeout(() => resolve(null), 10000))
+]).catch(() => null);
 const now = new Date();
 const timeString = now.toLocaleTimeString('en-US', {hour: '2-digit', minute:'2-digit', hour12: true});
 const costPerKg = getCostPriceForStore('STORE_A');
@@ -337,19 +334,19 @@ restoreBtn();
 return;
 }
 if(!salePrice || salePrice <= 0) {
-showToast("⚠ Sale price not configured. Set prices in Factory Formulas before recording rep sales.", "warning", 5000);
+showToast(" Sale price not configured. Set prices in Factory Formulas before recording rep sales.", "warning", 5000);
 restoreBtn();
 return;
 }
 if(costPerKg < 0) {
-showToast("⚠ Invalid cost price detected. Please check Factory Formulas.", "warning", 4000);
+showToast(" Invalid cost price detected. Please check Factory Formulas.", "warning", 4000);
 restoreBtn();
 return;
 }
 const totalValue = qty * salePrice;
 const computedProfit = totalValue - (qty * costPerKg);
 if(computedProfit < 0) {
-showToast(`⚠ This sale would result in a loss of ${fmtAmt ? fmtAmt(Math.abs(computedProfit)) : Math.abs(computedProfit).toFixed(2)}. Check sale price vs cost price in Factory Formulas.`, "warning", 6000);
+showToast(` This sale would result in a loss of ${fmtAmt ? fmtAmt(Math.abs(computedProfit)) : Math.abs(computedProfit).toFixed(2)}. Check sale price vs cost price in Factory Formulas.`, "warning", 6000);
 restoreBtn();
 return;
 }
@@ -415,13 +412,13 @@ return;
 } else if (_repOutstanding > 0 && amount > _repOutstanding) {
 const _overAmt = amount - _repOutstanding;
 const _proceedOver = await showGlassConfirm(
-`⚠ Over-collection Warning!
+` Over-collection Warning!
 
 ${name} only owes ${fmtAmt ? fmtAmt(_repOutstanding) : _repOutstanding}.
 You are collecting ${fmtAmt ? fmtAmt(amount) : amount} — an overpayment of ${fmtAmt ? fmtAmt(_overAmt) : _overAmt}.
 
 This will exceed the outstanding balance. Proceed only if this is an advance payment.`,
-{ title: '⚠ Over-collection Warning', confirmText: 'Collect Anyway', cancelText: 'Cancel' }
+{ title: ' Over-collection Warning', confirmText: 'Collect Anyway', cancelText: 'Cancel' }
 );
 if (!_proceedOver) { restoreBtn(); return; }
 }
@@ -455,6 +452,20 @@ transactionRecord = ensureRecordIntegrity(transactionRecord, false);
 }
 repSales.push(transactionRecord);
 await unifiedSave('rep_sales', repSales, transactionRecord);
+
+_gpsBgPromise.then(async coords => {
+  if (!coords) return;
+  try {
+    const allSales = ensureArray(await sqliteStore.get('rep_sales'));
+    const idx = allSales.findIndex(s => s.id === transactionRecord.id);
+    if (idx !== -1 && !allSales[idx].gps) {
+      allSales[idx].gps = coords;
+      allSales[idx].updatedAt = getTimestamp();
+      await unifiedSave('rep_sales', allSales, allSales[idx]);
+    }
+    autoUpdateCustomerLocation(name, coords).catch(() => {});
+  } catch (_gpsErr) { console.warn('Background GPS patch failed:', _safeErr(_gpsErr)); }
+}).catch(() => {});
 try {
 const _rcName = transactionRecord.customerName;
 const _rcPhone = transactionRecord.customerPhone || '';
@@ -471,10 +482,6 @@ await unifiedSave('rep_customers', repCustomers, _rcContact);
 notifyDataChange('rep');
 if (navigator.onLine) {
 emitSyncUpdate({ rep_sales: null}).catch(e => {
-});
-}
-if (gpsCoords) {
-autoUpdateCustomerLocation(name, gpsCoords).catch(e => {
 });
 }
 document.getElementById('rep-quantity').value = '';
@@ -932,7 +939,7 @@ const totalDebt = txs
 .reduce((sum, s) => sum + (s.totalValue || 0) - (s.partialPaymentReceived || 0), 0);
 let msg = `Permanently delete rep customer "${name}"?`;
 if (txs.length > 0) {
-msg += `\n\n⚠ This customer has ${txs.length} transaction record${txs.length !== 1 ? 's' : ''} on file.`;
+msg += `\n\n This customer has ${txs.length} transaction record${txs.length !== 1 ? 's' : ''} on file.`;
 if (totalDebt > 0) msg += `\n Outstanding debt: ${fmtAmt(totalDebt)}`;
 msg += `\n\nAll rep sales history for this customer will be permanently deleted.`;
 }
@@ -1009,7 +1016,7 @@ headerTitle.innerHTML = `
 <button class="sidebar-settings-btn" style="width:auto;padding:5px 10px;font-size:0.75rem;color:var(--accent);background:rgba(29,233,182,0.07);border-radius:8px;border:1px solid rgba(29,233,182,0.25);display:inline-flex;align-items:center;gap:5px;" onclick="openRepCustomerEditModal('${esc(name).split("'").join("\\'")}')" title="Edit Contact Info"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>Edit</button>
 </div>
 <div style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal; margin-top:4px;">
-${phone ? phoneActionHTML(phone) : 'No Phone'} ${address ? `| ◆ ${esc(address)}` : ''}
+${phone ? phoneActionHTML(phone) : 'No Phone'} ${address ? `|  ${esc(address)}` : ''}
 </div>
 `;
 let currentDebt = 0;
@@ -1312,7 +1319,7 @@ if (finalAddress.trim() === 'Bannu' || finalAddress.trim() === 'Near Bannu') {
 finalAddress = data.display_name.split(', ').slice(0, 3).join(', ');
 }
 addressInput.value = `${finalAddress} (${coordsText})`;
-statusDiv.textContent = `◆ Location Found: ${localArea || placeName || city}`;
+statusDiv.textContent = ` Location Found: ${localArea || placeName || city}`;
 statusDiv.style.color = 'var(--accent-emerald)';
 if (typeof showToast === 'function') showToast('Address updated successfully', 'success');
 } else { throw new Error('Address not found'); }
@@ -1687,7 +1694,7 @@ ${item.isSettled ? 'opacity:0.65;' : ''}
 <span style="font-size: 1.2rem;">${typeIcon}</span>
 <strong style="color: var(--text-main); font-size: 0.9rem;">${esc(item.customerName)}</strong>
 ${item.isMerged ? _mergedBadgeHtml(item, {inline:true}) : ''}
-${item.isSettled ? `<span class="settled-badge">✓ Settled</span>` : ''}
+${item.isSettled ? `<span class="settled-badge"> Settled</span>` : ''}
 </div>
 <div style="font-size: 0.75rem; color: ${typeColor}; font-weight: 600;">
 ${qtyAmount}

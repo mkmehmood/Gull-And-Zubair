@@ -57,7 +57,7 @@ loadingModal.id = 'delta-stats-modal';
 loadingModal.style.cssText = 'position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 10300;';
 loadingModal.innerHTML = `
 <div style="background: var(--glass); padding: 40px; border-radius: 100px; text-align: center;">
-<div style="margin-bottom: 15px; font-size: 4rem; line-height: 1;">🐦‍🔥</div>
+<div style="margin-bottom: 15px; font-size: 4rem; line-height: 1;"></div>
 <div style="color: var(--text); font-size: 1rem;">Loading Firestore</div>
 </div>
 `;
@@ -169,7 +169,7 @@ const uploadedCount = uuidColStat.uploaded || 0;
 const downloadedCount = uuidColStat.downloaded || 0;
 const isDirty = DeltaSync.isDirty(col.name);
 const dirtyColor = isDirty ? '#f59e0b' : '#30d158';
-const dirtyLabel = isDirty ? '⚠ pending' : '✔ clean';
+const dirtyLabel = isDirty ? ' pending' : ' clean';
 html += `
 <div style="margin-bottom: 10px; padding: 12px; background: var(--input-bg); border-radius: 16px; border: 1px solid var(--glass-border);">
 <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
@@ -182,7 +182,7 @@ SQLite: <span style="color:var(--accent)">${col.sqliteKey}</span> → JS: <span 
 </div>
 <div style="text-align: right; flex-shrink:0; margin-left:8px;">
 <div style="font-size: 0.75rem; font-weight: 600; color: var(--accent);">${count} docs</div>
-${hasListener ? '<div style="font-size: 0.65rem; color: #30d158;">● Live</div>' : '<div style="font-size: 0.65rem; color: var(--text-muted);">○ Polling</div>'}
+${hasListener ? '<div style="font-size: 0.65rem; color: #30d158;"> Live</div>' : '<div style="font-size: 0.65rem; color: var(--text-muted);"> Polling</div>'}
 </div>
 </div>
 <div style="border-top: 1px solid var(--glass-border); padding-top: 7px; margin-top: 2px;">
@@ -227,7 +227,7 @@ ${docInfo.description}
 <div style="font-size: 0.75rem; font-weight: 600; color: ${exists ? 'var(--accent)' : '#ff453a'};">
 ${exists ? ' Exists' : ' Missing'}
 </div>
-${hasListener ? '<div style="font-size: 0.65rem; color: #30d158;">● Live</div>' : ''}
+${hasListener ? '<div style="font-size: 0.65rem; color: #30d158;"> Live</div>' : ''}
 </div>
 </div>
 `;
@@ -699,7 +699,7 @@ _cyBody.innerHTML = `
   box-shadow: 0 1px 0 rgba(255,255,255,0.20) inset, 0 7px 22px rgba(105,240,174,0.32);
 }
 #cy-continue-btn:active { transform: translateY(0); }
-/* ── Standalone-screen flatten overrides ── */
+/*  Standalone-screen flatten overrides  */
 #cy-panel {
   background: transparent !important;
   border: none !important;
@@ -811,7 +811,7 @@ if (confirmBtn) {
 if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
 const valid = await verifyAccountPassword(pwd);
 if (!valid) {
-  if (errEl) { errEl.textContent = '✕ Incorrect password — please try again.'; errEl.style.display = 'block'; }
+  if (errEl) { errEl.textContent = ' Incorrect password — please try again.'; errEl.style.display = 'block'; }
   showToast('Incorrect password. Please try again.', 'error', 4000);
   if (confirmBtn) {
     confirmBtn.disabled = false;
@@ -1014,7 +1014,7 @@ const previewRow = (id, label, key, recCount, details, mergeNote, accent, hasDat
           '<span id="cy-val-' + id + '-after" class="cy-pill cy-pill-after">' + mergeNote + '</span>'
         : '<span class="cy-pill cy-pill-skip">skipped</span>'
       ) +
-      '<span id="cy-status-' + id + '" class="cy-status-badge ok">✓</span>' +
+      '<span id="cy-status-' + id + '" class="cy-status-badge ok"></span>' +
     '</div>' +
     (hasData && details.length
       ? '<div class="cy-chips">' + detailChips + '</div>'
@@ -1273,7 +1273,7 @@ try {
   if (!currentUser) throw new Error('Not signed in — cannot create backup');
   try {
     await pushDataToCloud();
-    showToast('☁️ Cloud backup uploaded', 'success', 2500);
+    showToast(' Cloud backup uploaded', 'success', 2500);
   } catch (cloudErr) {
     console.warn('Cloud backup warning (proceeding):', _safeErr(cloudErr));
     showToast('Cloud backup skipped (offline?) — local backup will still be created', 'warning', 3500);
@@ -1325,7 +1325,7 @@ try {
       const encryptedBlob = await CryptoEngine.encrypt(backupData, currentUser.email, encPassword, currentUser.uid);
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       _triggerFileDownload(encryptedBlob, `NaswarDealers_YearClose_${timestamp}.gznd`);
-      showToast('🔐 Encrypted year-end backup downloaded!', 'success', 4000);
+      showToast(' Encrypted year-end backup downloaded!', 'success', 4000);
     } catch (encErr) {
       console.error('Encryption failed:', _safeErr(encErr));
       showToast('Local backup encryption failed — proceeding with cloud backup only.', 'warning', 4000);
@@ -1517,7 +1517,7 @@ if (completeSection) {
         <div class="cy-stat-label">Merged Rec.</div>
       </div>
       <div class="cy-stat-cell">
-        <div class="cy-stat-val" style="color:var(--accent-emerald);">✓</div>
+        <div class="cy-stat-val" style="color:var(--accent-emerald);"></div>
         <div class="cy-stat-label">Backup Safe</div>
       </div>
     </div>
@@ -1559,7 +1559,7 @@ function _markRowSyncWarning(rowId, commitResult) {
     if (!rowEl) return;
     const statusEl = document.getElementById('cy-status-' + rowId);
     if (statusEl) {
-      statusEl.textContent = '⚠ Sync Failed';
+      statusEl.textContent = ' Sync Failed';
       statusEl.style.background = 'rgba(255,179,0,0.15)';
       statusEl.style.color = 'var(--warning)';
       statusEl.style.borderColor = 'rgba(255,179,0,0.35)';
@@ -1569,7 +1569,7 @@ function _markRowSyncWarning(rowId, commitResult) {
     if (noteEl) {
       const failMsg = document.createElement('span');
       failMsg.style.cssText = 'display:block;margin-top:3px;font-size:0.63rem;color:var(--warning);font-weight:600;';
-      failMsg.textContent = `⚠ Cloud sync incomplete — ${commitResult.batchesFailed}/${commitResult.batchesTotal} Firestore batch${commitResult.batchesFailed!==1?'es':''} failed. Local data is safe. Re-sync when online.`;
+      failMsg.textContent = ` Cloud sync incomplete — ${commitResult.batchesFailed}/${commitResult.batchesTotal} Firestore batch${commitResult.batchesFailed!==1?'es':''} failed. Local data is safe. Re-sync when online.`;
       noteEl.appendChild(failMsg);
     }
     rowEl.style.borderLeftColor = 'var(--warning)';
@@ -2540,7 +2540,7 @@ report.settings[key] = { hasTimestamp: true, timestamp: timestamp || Date.now() 
 }
 const totalFixed = report.fixed.missingTimestamps + report.fixed.inconsistentTimestamps + report.fixed.settingTimestamps;
 if (totalFixed > 0) {
-showToast(`✓ Timestamp repair: fixed ${totalFixed} record${totalFixed !== 1 ? 's' : ''} (${report.fixed.missingTimestamps} missing, ${report.fixed.inconsistentTimestamps} inconsistent).`, 'success', 4000);
+showToast(` Timestamp repair: fixed ${totalFixed} record${totalFixed !== 1 ? 's' : ''} (${report.fixed.missingTimestamps} missing, ${report.fixed.inconsistentTimestamps} inconsistent).`, 'success', 4000);
 } else {
 showToast('Timestamp consistency check passed — all records healthy.', 'success', 3000);
 }
@@ -2912,7 +2912,7 @@ if (report.issues.length > 5) {
 } else {
 }
 if (report.issues.length > 0) {
-showToast(`⚠ Full verification: ${report.issues.length} issue${report.issues.length !== 1 ? 's' : ''} detected.`, 'warning', 4500);
+showToast(` Full verification: ${report.issues.length} issue${report.issues.length !== 1 ? 's' : ''} detected.`, 'warning', 4500);
 } else {
 showToast('Full system verification passed — all data is consistent.', 'success', 3500);
 }

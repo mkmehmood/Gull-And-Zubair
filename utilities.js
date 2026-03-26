@@ -130,7 +130,7 @@ successfulIds.push(item.id);
 this._renderDeadLetterPanel();
 this._scheduleDlqAutoRetry();
 showToast(
-`⚠️ Upload failed permanently — tap "Failed ops" to review`,
+` Upload failed permanently — tap "Failed ops" to review`,
 'error',
 6000
 );
@@ -242,7 +242,7 @@ offlineBanner.appendChild(dlBadge);
 }
 }
 if (dlBadge) {
-dlBadge.textContent = `⚠️ ${count} failed op${count !== 1 ? 's' : ''}`;
+dlBadge.textContent = ` ${count} failed op${count !== 1 ? 's' : ''}`;
 }
 if (document.getElementById('dl-queue-modal')) {
 this._showDeadLetterModal();
@@ -277,7 +277,7 @@ ${errText ? `<span class="dl-queue-error">${errText}</span>` : ''}
 modal.innerHTML = `
 <div class="dl-queue-card">
 <div class="dl-queue-header">
-<h3 class="dl-queue-title">⚠️ Failed Uploads</h3>
+<h3 class="dl-queue-title"> Failed Uploads</h3>
 </div>
 <p class="dl-queue-subtitle">These operations exhausted all ${this.maxRetries} retry attempts. Retry to re-attempt upload, or dismiss to discard.</p>
 <div class="dl-queue-list">${rows}</div>
@@ -437,7 +437,7 @@ const result = await _origProcess();
 updateOfflineBanner();
 if (this.queue.length === 0 && navigator.onLine) {
 if (typeof showToast === 'function') {
-showToast('All offline changes synced to cloud', 'success', 3000);
+showToast(' Offline changes synced', 'success', 3000);
 }
 }
 return result;
@@ -483,7 +483,7 @@ setTimeout(() => {
 if (typeof triggerAutoSync === 'function') triggerAutoSync();
 if (typeof updateOfflineBanner === 'function') updateOfflineBanner();
 }, 2000);
-showToast('Back online — syncing...', 'success', 3000);
+showToast(' Back online — syncing…', 'success', 3000);
 });
 window.addEventListener('offline', async () => {
 updateOfflineBanner();
@@ -1175,7 +1175,8 @@ function _dedupDeletionRecordsLocal(arr) {
 }
 
 async function registerDeletion(id, collectionName = 'unknown', preDeletedRecord = null) {
-return (window._syncQueue || { run: f => f() }).run(async () => {
+
+
 const deletionRecords = ensureArray(await sqliteStore.get('deletion_records'));
 const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
 if (!id) {
@@ -1213,7 +1214,7 @@ if (preDeletedRecord && typeof preDeletedRecord === 'object') {
       break;
     case 'sales_customers':
       tempResult.displayName   = s.name || null;
-      tempResult.displayDetail = s.phone ? `📞 ${s.phone}` : '';
+      tempResult.displayDetail = s.phone ? ` ${s.phone}` : '';
       break;
     case 'rep_customers':
       tempResult.displayName   = s.name || null;
@@ -1246,7 +1247,7 @@ if (preDeletedRecord && typeof preDeletedRecord === 'object') {
       break;
     case 'entities':
       tempResult.displayName   = s.name || 'Payment Entity';
-      tempResult.displayDetail = s.phone ? `📞 ${s.phone}` : (s.type || '');
+      tempResult.displayDetail = s.phone ? ` ${s.phone}` : (s.type || '');
       break;
     default:
       tempResult.displayName   = s.name || s.customerName || s.entityName || s.description || null;
@@ -1294,9 +1295,9 @@ const _deduped = _dedupDeletionRecordsLocal(deletionRecords);
 await sqliteStore.set('deletion_records', _deduped);
 await sqliteStore.set('deleted_records', Array.from(deletedRecordIds));
 triggerAutoSync();
-await uploadDeletionToCloud(deletionRecord);
-await cleanupOldDeletions();
-});
+
+uploadDeletionToCloud(deletionRecord).catch(e => console.warn('[registerDeletion] cloud upload failed:', e));
+cleanupOldDeletions().catch(e => console.warn('[registerDeletion] cleanup failed:', e));
 }
 
 async function _captureRecordSnapshot(id, collectionName) {
@@ -1389,7 +1390,7 @@ const factoryProductionHistory = ensureArray(await sqliteStore.get('factory_prod
         break;
       case 'sales_customers':
         result.displayName   = record.name || null;
-        result.displayDetail = record.phone ? `📞 ${record.phone}` : '';
+        result.displayDetail = record.phone ? ` ${record.phone}` : '';
         result.displayAmount = null;
         break;
       case 'rep_customers':
@@ -1399,7 +1400,7 @@ const factoryProductionHistory = ensureArray(await sqliteStore.get('factory_prod
         break;
       case 'entities':
         result.displayName   = record.name || 'Payment Entity';
-        result.displayDetail = record.phone ? `📞 ${record.phone}` : (record.type || '');
+        result.displayDetail = record.phone ? ` ${record.phone}` : (record.type || '');
         result.displayAmount = null;
         break;
       default:
@@ -1463,7 +1464,7 @@ _captureRecordSnapshot._fromObj = function(snapshotObj, collectionName) {
         break;
       case 'sales_customers':
         result.displayName   = s.name || null;
-        result.displayDetail = s.phone ? `📞 ${s.phone}` : '';
+        result.displayDetail = s.phone ? ` ${s.phone}` : '';
         result.displayAmount = null;
         break;
       case 'rep_customers':
@@ -1473,7 +1474,7 @@ _captureRecordSnapshot._fromObj = function(snapshotObj, collectionName) {
         break;
       case 'entities':
         result.displayName   = s.name || 'Payment Entity';
-        result.displayDetail = s.phone ? `📞 ${s.phone}` : (s.type || '');
+        result.displayDetail = s.phone ? ` ${s.phone}` : (s.type || '');
         result.displayAmount = null;
         break;
       default:
@@ -3675,8 +3676,8 @@ card.style.display = 'none';
 }
 
 async function getAvailableCashInHand() {
-// Uses the exact same logic as calculateCashTracker in 'all' mode
-// so the blocking threshold matches what the UI displays.
+
+
 const _gacBatch = await sqliteStore.getBatch([
 'noman_history','mfg_pro_pkr','customer_sales','payment_transactions','expenses',
 'factory_production_history'
@@ -3699,9 +3700,9 @@ const _saleVal = sale.totalValue || 0;
 if (sale.isMerged && sale.mergedSummary) {
 _gacSalesCash += (sale.mergedSummary.cashSales || 0);
 } else if (sale.paymentType === 'CREDIT' && !sale.creditReceived) {
-// credit only — no cash
+
 } else if (isRepLinked) {
-// rep sales — no direct cash
+
 } else {
 if (sale.paymentType === 'CASH' || sale.creditReceived) _gacSalesCash += _saleVal;
 else if (sale.paymentType === 'COLLECTION') _gacSalesCash += _saleVal;
@@ -3723,7 +3724,7 @@ _gacPayOut += (parseFloat(tx.amount) || 0);
 }
 }
 });
-// Only count merged expense records — non-merged ones are already in payment_transactions
+
 _gacExpenses.forEach(exp => {
 if (exp.isMerged === true && exp.category === 'operating') _gacExp += (parseFloat(exp.amount) || 0);
 });
@@ -4164,7 +4165,7 @@ const costData = await calculateSalesCost(store, quantity);
 const totalCost = costData.totalCost;
 const _effectiveSalePrice = await getEffectiveSalePriceForCustomer(name, store);
 if (!_effectiveSalePrice || _effectiveSalePrice <= 0) {
-showToast('⚠ Sale price not configured for this store. Set prices in Factory Formulas before recording sales.', 'warning', 5000);
+showToast(' Sale price not configured for this store. Set prices in Factory Formulas before recording sales.', 'warning', 5000);
 return;
 }
 const totalValue = quantity * _effectiveSalePrice;
@@ -4197,8 +4198,8 @@ const _cwMsg = `${name} already has an outstanding credit balance.
 Current unpaid balance: ${fmtAmt(safeNumber(existingCredit, 0))}
 This new credit sale: ${fmtAmt(safeNumber(totalValue, 0))}
 New total if you proceed: ${fmtAmt(safeNumber(existingCredit + totalValue, 0))}
-⚠ Consider collecting the existing balance before adding more credit. Proceeding will increase their total debt beyond the threshold.`;
-if (!(await showGlassConfirm(_cwMsg, { title: "⚠ High Credit Warning", confirmText: "Add Credit Anyway", cancelText: "Cancel" }))) {
+ Consider collecting the existing balance before adding more credit. Proceeding will increase their total debt beyond the threshold.`;
+if (!(await showGlassConfirm(_cwMsg, { title: " High Credit Warning", confirmText: "Add Credit Anyway", cancelText: "Cancel" }))) {
 return;
 }
 }
@@ -4391,13 +4392,13 @@ return;
 } else if (_custOutstanding > 0 && amount > _custOutstanding) {
 const _overAmt = amount - _custOutstanding;
 const _proceed = await showGlassConfirm(
-`⚠ Over-collection Warning!
+` Over-collection Warning!
 
 ${name} only owes ${fmtAmt(_custOutstanding)}.
 You are collecting ${fmtAmt(amount)} — an overpayment of ${fmtAmt(_overAmt)}.
 
 This will exceed the outstanding balance. Proceed only if this is an advance payment.`,
-{ title: '⚠ Over-collection Warning', confirmText: 'Collect Anyway', cancelText: 'Cancel' }
+{ title: ' Over-collection Warning', confirmText: 'Collect Anyway', cancelText: 'Cancel' }
 );
 if (!_proceed) { restoreBtn(); return; }
 }
@@ -4696,7 +4697,7 @@ _dcMsg += `\nCustomer: ${recordToDelete.customerName || 'Unknown'}`;
 _dcMsg += `\nDate: ${recordDate}`;
 if (_dcIsCollection) {
 _dcMsg += `\nAmount: ${fmtAmt(recordToDelete.totalValue||0)}`;
-_dcMsg += `\n\n⚠ Deleting this collection will restore the credit balance to this customer.`;
+_dcMsg += `\n\n Deleting this collection will restore the credit balance to this customer.`;
 } else {
 _dcMsg += `\nQty: ${recordToDelete.quantity || 0} kg`;
 if (recordToDelete.totalValue) _dcMsg += `\nValue: ${fmtAmt(recordToDelete.totalValue||0)}`;
@@ -6089,7 +6090,7 @@ const expenseRecords = ensureArray(_ruiBatch.get('expenses')).filter(_rdAlive);
 const selectedDate = document.getElementById('sys-date').value;
 if (!selectedDate) return;
 if (sqliteStore && sqliteStore.get) {
-await sqliteStore.init();
+
 try {
 let freshProduction = await sqliteStore.get('mfg_pro_pkr', []);
 if (freshProduction && freshProduction.length > 0) {
@@ -6344,7 +6345,7 @@ tr.style.cursor = 'pointer';
 tr.innerHTML = `
 <td style="text-align:left;" onclick="openEntityDetailsOverlay('${esc(entity.id)}')">
 <div class="u-fw-700">${esc(safeName)}</div>
-<div style="font-size:0.62rem;color:var(--accent);margin-top:3px;cursor:pointer;" onclick="event.stopPropagation(); editEntityBasicInfo('${esc(entity.id)}')">✎ Edit info</div>
+<div style="font-size:0.62rem;color:var(--accent);margin-top:3px;cursor:pointer;" onclick="event.stopPropagation(); editEntityBasicInfo('${esc(entity.id)}')"> Edit info</div>
 </td>
 <td style="text-align:right; cursor:pointer;" onclick="openEntityDetailsOverlay('${esc(entity.id)}')">${balanceHtml}</td>
 <td style="text-align:right; font-size:0.75rem;">${phoneActionHTML(entity.phone)}</td>
@@ -6489,7 +6490,7 @@ async function promptVerifiedBackupPassword({ title = 'Confirm Password', subtit
     modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;z-index:10300;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);';
     modal.innerHTML = `
     <div class="liquid-card" style="max-width:370px;width:92%;padding:28px 24px;text-align:center;">
-      <div style="font-size:1.6rem;margin-bottom:8px;">🔐</div>
+      <div style="font-size:1.6rem;margin-bottom:8px;"></div>
       <h3 style="margin:0 0 6px;color:var(--text-main);font-size:1rem;font-weight:800;font-family:'Bricolage Grotesque',system-ui,sans-serif;">${esc(title)}</h3>
       <p style="font-size:0.78rem;color:var(--text-muted);margin-bottom:6px;line-height:1.5;">${esc(subtitle)}</p>
       <p style="font-size:0.72rem;color:var(--accent);margin-bottom:14px;">Account: <strong>${esc(currentUser.email)}</strong></p>
@@ -6530,7 +6531,7 @@ async function promptVerifiedBackupPassword({ title = 'Confirm Password', subtit
         okBtn.disabled = false;
         okBtn.style.opacity = '1';
         okBtn.textContent = 'Encrypt & Download';
-        errEl.textContent = '✕ Incorrect password — please try again.';
+        errEl.textContent = ' Incorrect password — please try again.';
         if (inp) { inp.value = ''; inp.focus(); }
       }
     };
@@ -6565,7 +6566,7 @@ showAuthOverlay();
 return;
 }
 if (currentUser) {
-const _bkpMsg = `Choose how to save your data backup.\n\nCloud Backup: Uploads a snapshot to your connected cloud account. Accessible from any signed-in device.\n\nDownload Encrypted File: Saves an AES-256-GCM encrypted backup file to this device. The file is unreadable without your login credentials.\n\n🔐 Your account credentials are used to encrypt the file.`;
+const _bkpMsg = `Choose how to save your data backup.\n\nCloud Backup: Uploads a snapshot to your connected cloud account. Accessible from any signed-in device.\n\nDownload Encrypted File: Saves an AES-256-GCM encrypted backup file to this device. The file is unreadable without your login credentials.\n\n Your account credentials are used to encrypt the file.`;
 if (await showGlassConfirm(_bkpMsg, { title: 'Save Backup', confirmText: 'Cloud Backup', cancelText: 'Download Encrypted File' })) {
 await pushDataToCloud();
 return;
@@ -6600,11 +6601,11 @@ showToast('Backup cancelled.', 'info');
 return;
 }
 try {
-showToast('🔐 Encrypting backup with AES-256-GCM + account binding...', 'info', 3000);
+showToast(' Encrypting backup with AES-256-GCM + account binding...', 'info', 3000);
 const encryptedBlob = await CryptoEngine.encrypt(data, encEmail, encPassword, currentUser.uid);
 const timestamp = new Date().toISOString().split('T')[0];
 _triggerFileDownload(encryptedBlob, `NaswarDealers_SecureBackup_${timestamp}.gznd`);
-showToast('🔐 Encrypted backup created! File requires your credentials to restore.', 'success', 5000);
+showToast(' Encrypted backup created! File requires your credentials to restore.', 'success', 5000);
 } catch(encErr) {
 console.error('Encryption failed:', _safeErr(encErr));
 showToast('Encryption failed: ' + encErr.message, 'error');
@@ -7267,7 +7268,7 @@ const replaceData = {
           await DeltaSync.setLastSyncTimestamp(colName);
         } catch(colErr) { console.warn(`Cloud replace warning for ${colName}:`, _safeErr(colErr)); }
       }
-      showToast('☁️ Cloud data replaced with pre-close snapshot', 'success', 3000);
+      showToast(' Cloud data replaced with pre-close snapshot', 'success', 3000);
     } catch(cloudErr) {
       console.warn('Cloud replace failed:', _safeErr(cloudErr));
       showToast('Local data reversed. Cloud sync failed — sync manually.', 'warning', 5000);
@@ -7278,7 +7279,7 @@ const replaceData = {
   try { await invalidateAllCaches(); } catch(e) {}
   try { await refreshAllDisplays(); } catch(e) {}
   const totalRecords = Object.values(replaceData).reduce((s, a) => s + a.length, 0);
-  showToast(`✅ Financial year close reversed! ${totalRecords} pre-close records restored.`, 'success', 6000);
+  showToast(` Financial year close reversed! ${totalRecords} pre-close records restored.`, 'success', 6000);
 }
 
 async function showTab(tab) {
@@ -8756,7 +8757,7 @@ creditSection = `
 creditSection = `<div class="received-indicator">Credit Received </div>`;
 }
 }
-const deleteBtnHtml = item.isMerged ? '' : item.isSettled ? `<div class="settled-badge">✓ Settled</div>` : `<button class="tbl-action-btn danger u-w-full u-mt-8" onclick="(async () => { await deleteCustomerSale('${esc(item.id)}') })()">Delete</button>`;
+const deleteBtnHtml = item.isMerged ? '' : item.isSettled ? `<div class="settled-badge"> Settled</div>` : `<button class="tbl-action-btn danger u-w-full u-mt-8" onclick="(async () => { await deleteCustomerSale('${esc(item.id)}') })()">Delete</button>`;
 if (isOldDebtItem) {
 card.innerHTML = `
 <div class="payment-badge credit">CREDIT</div>
@@ -9355,7 +9356,7 @@ choraMaterial = factoryInventoryData.find(m => m.name && m.name.toUpperCase() ==
 }
 }
 if (!choraMaterial) {
-showToast(`⚠ CHORA material not found in factory inventory. Expired qty (${quantity}) was recorded but not added to raw materials.`, 'warning', 5000);
+showToast(` CHORA material not found in factory inventory. Expired qty (${quantity}) was recorded but not added to raw materials.`, 'warning', 5000);
 return;
 }
 choraMaterial.quantity = (choraMaterial.quantity || 0) + quantity;
@@ -9382,7 +9383,7 @@ choraMaterial = factoryInventoryData.find(m => m.name && m.name.toUpperCase() ==
 }
 }
 if (!choraMaterial) {
-showToast(`⚠ CHORA material not found. Could not reverse expired qty (${quantity}).`, 'warning', 5000);
+showToast(` CHORA material not found. Could not reverse expired qty (${quantity}).`, 'warning', 5000);
 return;
 }
 choraMaterial.quantity = Math.max(0, (choraMaterial.quantity || 0) - quantity);
@@ -9405,6 +9406,8 @@ return isNaN(value) || !isFinite(value) ? 0 : value;
 }
 
 async function refreshAllDisplays() {
+// Fix: load all SQLite data in one batch up front, then run all independent tab
+// refreshes in parallel via Promise.all instead of sequentially awaiting each one.
 const _radBatch = await sqliteStore.getBatch([
 'mfg_pro_pkr','customer_sales','rep_sales','noman_history',
 'payment_transactions','payment_entities','expenses','stock_returns',
@@ -9429,60 +9432,48 @@ const factorySalePrices = _radBatch.get('factory_sale_prices') || {};
 const factoryCostAdjustmentFactor = _radBatch.get('factory_cost_adjustment_factor') || {};
 const factoryUnitTracking = _radBatch.get('factory_unit_tracking') || {};
 const deletedRecordIds = new Set(ensureArray(_radBatch.get('deleted_records')));
-try {
-await syncFactoryProductionStats();
-} catch (error) {
-console.error('Display refresh failed.', _safeErr(error));
-showToast('Display refresh failed.', 'error');
-}
-try {
-if (typeof refreshUI === 'function') await refreshUI(1, true);
-} catch (error) {
-console.error('Display refresh failed.', _safeErr(error));
-showToast('Display refresh failed.', 'error');
-}
-try {
-if (typeof refreshCustomerSales === 'function') await refreshCustomerSales(1, true);
-else if (typeof renderCustomersTable === 'function') renderCustomersTable();
-} catch (error) {
-console.error('Display refresh failed.', _safeErr(error));
-showToast('Display refresh failed.', 'error');
-}
-try {
-if (typeof loadSalesData === 'function') await loadSalesData(currentCompMode);
-} catch (error) {
-console.error('Display refresh failed.', _safeErr(error));
-showToast('Display refresh failed.', 'error');
-}
-try {
-if (typeof initFactoryTab === 'function') initFactoryTab();
-} catch (error) {
-console.error('Display refresh failed.', _safeErr(error));
-showToast('Display refresh failed.', 'error');
-}
-try {
-if (document.getElementById('tab-payments') && !document.getElementById('tab-payments').classList.contains('hidden')) {
-if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
-}
-} catch (error) {
-console.error('Payment tab refresh failed.', _safeErr(error));
-showToast('Payment tab refresh failed.', 'error');
-}
-try {
-if (typeof calculateNetCash === 'function') calculateNetCash();
-} catch (error) {
-console.error('Payment tab refresh failed.', _safeErr(error));
-showToast('Payment tab refresh failed.', 'error');
-}
-try {
-if (appMode === 'rep') {
-if (typeof renderRepHistory === 'function') renderRepHistory();
-if (typeof renderRepCustomerTable === 'function') renderRepCustomerTable();
-}
-} catch (error) {
-console.error('Payment tab refresh failed.', _safeErr(error));
-showToast('Payment tab refresh failed.', 'error');
-}
+
+// Run all independent tab refreshes in parallel — total time = slowest tab, not sum of all
+await Promise.all([
+  // Production stats + production tab
+  (async () => {
+    try { await syncFactoryProductionStats(); } catch (e) { console.error('syncFactoryProductionStats failed.', _safeErr(e)); }
+    try { if (typeof refreshUI === 'function') await refreshUI(1, true); } catch (e) { console.error('refreshUI failed.', _safeErr(e)); }
+  })(),
+  // Customer sales tab
+  (async () => {
+    try {
+      if (typeof refreshCustomerSales === 'function') await refreshCustomerSales(1, true);
+      else if (typeof renderCustomersTable === 'function') renderCustomersTable();
+    } catch (e) { console.error('refreshCustomerSales failed.', _safeErr(e)); }
+  })(),
+  // Sales comparison tab
+  (async () => {
+    try { if (typeof loadSalesData === 'function') await loadSalesData(currentCompMode); } catch (e) { console.error('loadSalesData failed.', _safeErr(e)); }
+  })(),
+  // Factory tab (sync)
+  (async () => {
+    try { if (typeof initFactoryTab === 'function') initFactoryTab(); } catch (e) { console.error('initFactoryTab failed.', _safeErr(e)); }
+  })(),
+  // Payments tab — only if visible; calculateNetCash is sync
+  (async () => {
+    try {
+      if (document.getElementById('tab-payments') && !document.getElementById('tab-payments').classList.contains('hidden')) {
+        if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
+      }
+      if (typeof calculateNetCash === 'function') calculateNetCash();
+    } catch (e) { console.error('refreshPaymentTab failed.', _safeErr(e)); }
+  })(),
+  // Rep mode tab
+  (async () => {
+    try {
+      if (appMode === 'rep') {
+        if (typeof renderRepHistory === 'function') renderRepHistory();
+        if (typeof renderRepCustomerTable === 'function') renderRepCustomerTable();
+      }
+    } catch (e) { console.error('Rep tab refresh failed.', _safeErr(e)); }
+  })(),
+]);
 }
 
 window.addEventListener('unhandledrejection', function(event) {
@@ -9566,6 +9557,8 @@ document.addEventListener('DOMContentLoaded', async function _appBootstrap() {
     await initializeDeviceListeners();
     if (typeof OfflineQueue !== 'undefined') await OfflineQueue.init();
     loadFirestoreStats();
+    // Mark that bootstrap has completed so onAuthStateChanged skips double loadAllData
+    try { sessionStorage.setItem('_gznd_bootstrap_ran', '1'); } catch(_) {}
   } catch (e) {
 
     console.error('[Startup] Initialization error:', _safeErr(e));
@@ -9801,7 +9794,7 @@ confirmMsg += `\nCash Received: ${(entryToDelete.received||0)}`;
 if (entryToDelete.credit) confirmMsg += `\nCredit Recovered: ${entryToDelete.credit}`;
 const _dsHasImpact = linkedCount > 0 || linkedRepCount > 0 || (entryToDelete.returned > 0 && entryToDelete.returnStore) || entryToDelete.expired > 0;
 if (_dsHasImpact) {
-confirmMsg += `\n\n⚠ The following cascading changes will occur:`;
+confirmMsg += `\n\n The following cascading changes will occur:`;
 if (linkedCount > 0) confirmMsg += `\n • ${linkedCount} linked sale${linkedCount !== 1 ? 's' : ''} will REVERT to "Pending Credit" status.`;
 if (linkedRepCount > 0) confirmMsg += `\n • ${linkedRepCount} rep sale${linkedRepCount !== 1 ? 's' : ''} will be RESTORED to calculator fields.`;
 if (entryToDelete.returned > 0 && entryToDelete.returnStore) confirmMsg += `\n • ${entryToDelete.returned} kg will be REMOVED from ${getStoreLabel(entryToDelete.returnStore)} inventory (return reversal).`;
@@ -10235,7 +10228,7 @@ const entityType = entity ? entity.type : (transaction.entityType || 'Unknown');
 const isMerged = transaction.isMerged === true;
 const isSettled = transaction.isSettled === true;
 const mergedBadge = isMerged ? _mergedBadgeHtml(transaction, {inline:true}) : '';
-const settledBadge = isSettled ? `<span class="settled-badge">✓ Settled</span>` : '';
+const settledBadge = isSettled ? `<span class="settled-badge"> Settled</span>` : '';
 const creatorBadge = (typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(transaction) : '';
 const deleteButton = isMerged ? '' : `<button class="tbl-action-btn danger u-w-full u-mt-8" onclick="(async () => { await deletePaymentTransaction('${esc(transaction.id)}') })()">Delete</button>`;
 const card = document.createElement('div');
@@ -10518,7 +10511,7 @@ if (!entity || !entity.name || typeof entity.name !== 'string') return false;
 return entity.name.toLowerCase().includes(query);
 });
 let html = '';
-html += `<div style="padding: 8px 12px; font-size: 0.7rem; color: var(--text-muted); font-weight: 600; background: var(--input-bg); border-bottom: 1px solid var(--glass-border);">▤ EXPENSES</div>`;
+html += `<div style="padding: 8px 12px; font-size: 0.7rem; color: var(--text-muted); font-weight: 600; background: var(--input-bg); border-bottom: 1px solid var(--glass-border);"> EXPENSES</div>`;
 if (expenseMatches.length > 0) {
 expenseMatches.forEach(name => {
 if (!name || typeof name !== 'string') return;
@@ -12372,7 +12365,7 @@ default: return 'var(--text-muted)';
 function getCategoryLabel(category) {
 switch(category) {
 case 'operating': return 'Operating';
-case 'loan': return '▬ Loan/Debt';
+case 'loan': return ' Loan/Debt';
 case 'misc': return ' Miscellaneous';
 default: return 'Other';
 }
@@ -12878,8 +12871,8 @@ async function renderRecycleBin(filterCollection = 'all') {
         ? `<span style="font-size:0.78rem;font-weight:700;color:var(--accent);">${esc(displayAmount)}</span>`
         : '';
       const syncBadge = rec.syncedToCloud
-        ? `<span style="font-size:0.62rem;background:rgba(16,185,129,0.15);color:#10b981;padding:2px 6px;border-radius:999px;white-space:nowrap;">☁ synced</span>`
-        : `<span style="font-size:0.62rem;background:rgba(239,68,68,0.12);color:#ef4444;padding:2px 6px;border-radius:999px;white-space:nowrap;">⚠ local</span>`;
+        ? `<span style="font-size:0.62rem;background:rgba(16,185,129,0.15);color:#10b981;padding:2px 6px;border-radius:999px;white-space:nowrap;"> synced</span>`
+        : `<span style="font-size:0.62rem;background:rgba(239,68,68,0.12);color:#ef4444;padding:2px 6px;border-radius:999px;white-space:nowrap;"> local</span>`;
       const colDot = {
         'sales':'#10b981','transactions':'#3b82f6','rep_sales':'#8b5cf6',
         'expenses':'#f59e0b','production':'#ec4899','factory_history':'#14b8a6',
@@ -14758,9 +14751,9 @@ list.innerHTML = salesRepsList.map((rep, i) => `
 <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 18px; background:var(--glass-raised); border:1px solid var(--glass-border); border-radius:9999px; ${i === 0 ? 'border-left:3px solid var(--accent);' : ''}">
 <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
 <span style="font-size:0.85rem; font-weight:800; color:var(--text-main); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(rep)}</span>
-<span style="font-size:0.62rem; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; color:${i === 0 ? 'var(--accent)' : 'var(--text-muted)'}; flex-shrink:0;">${i === 0 ? '● Default' : `#${i + 1}`}</span>
+<span style="font-size:0.62rem; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; color:${i === 0 ? 'var(--accent)' : 'var(--text-muted)'}; flex-shrink:0;">${i === 0 ? ' Default' : `#${i + 1}`}</span>
 </div>
-<button class="btn-theme" onclick="removeSalesRep(${i})" title="Remove ${esc(rep)}" style="flex-shrink:0; color:var(--danger); border-color:rgba(239,68,68,0.4); font-size:0.8rem;">✕</button>
+<button class="btn-theme" onclick="removeSalesRep(${i})" title="Remove ${esc(rep)}" style="flex-shrink:0; color:var(--danger); border-color:rgba(239,68,68,0.4); font-size:0.8rem;"></button>
 </div>
 `).join('');
 }
@@ -14802,7 +14795,7 @@ return `
 </div>
 <div style="display:flex;gap:4px;flex-wrap:wrap;">${tabBadges || '<span style="font-size:0.65rem;color:var(--text-secondary);">No tabs assigned</span>'}</div>
 </div>
-<button class="btn-theme" onclick="removeUserRole(${i})" title="Remove ${esc(user.name)}" style="flex-shrink:0; color:var(--danger); border-color:rgba(239,68,68,0.4); font-size:0.8rem;">✕</button>
+<button class="btn-theme" onclick="removeUserRole(${i})" title="Remove ${esc(user.name)}" style="flex-shrink:0; color:var(--danger); border-color:rgba(239,68,68,0.4); font-size:0.8rem;"></button>
 </div>`;
 }).join('');
 }
@@ -14871,8 +14864,8 @@ const name = salesRepsList[index];
 const _rsrSales = (typeof repSales !== 'undefined' ? repSales : []).filter(s => s.salesRep === name).length;
 let _rsrMsg = `Remove ${name} from the sales team?`;
 _rsrMsg += `\n\nThey will no longer appear as an available rep in the app.`;
-if (_rsrSales > 0) _rsrMsg += `\n\n⚠ ${name} has ${_rsrSales} recorded sale${_rsrSales !== 1 ? 's' : ''} in the system. Those records will be kept, but you will no longer be able to add new sales under this name.`;
-if (typeof currentRepProfile !== 'undefined' && currentRepProfile === name) _rsrMsg += `\n\n⚠ This rep is currently active on this device. The device will switch to the next available rep.`;
+if (_rsrSales > 0) _rsrMsg += `\n\n ${name} has ${_rsrSales} recorded sale${_rsrSales !== 1 ? 's' : ''} in the system. Those records will be kept, but you will no longer be able to add new sales under this name.`;
+if (typeof currentRepProfile !== 'undefined' && currentRepProfile === name) _rsrMsg += `\n\n This rep is currently active on this device. The device will switch to the next available rep.`;
 _rsrMsg += `\n\nThis does not delete any of their existing sales data.`;
 const confirmed = await showGlassConfirm(_rsrMsg, {
 title: `Remove ${name}`,
@@ -15048,8 +15041,8 @@ const duplicates = ids.length - uniqueIds.size;
 const missingIds = records.length - ids.length;
 let statusParts = [`${records.length} records`];
 let hasIssue = false;
-if (duplicates > 0) { statusParts.push(`⚠ ${duplicates} duplicate IDs`); totalIssues += duplicates; hasIssue = true; }
-if (missingIds > 0) { statusParts.push(`⚠ ${missingIds} missing IDs`); totalIssues += missingIds; hasIssue = true; }
+if (duplicates > 0) { statusParts.push(` ${duplicates} duplicate IDs`); totalIssues += duplicates; hasIssue = true; }
+if (missingIds > 0) { statusParts.push(` ${missingIds} missing IDs`); totalIssues += missingIds; hasIssue = true; }
 reportLines.push({
 type: 'row',
 label,
@@ -15068,7 +15061,7 @@ const settingsKeys = [
 ];
 for (const [key, label] of settingsKeys) {
 const present = data[key] !== undefined && data[key] !== null;
-reportLines.push({ type: 'row', label, value: present ? 'Present ✓' : 'Not present', muted: !present });
+reportLines.push({ type: 'row', label, value: present ? 'Present ' : 'Not present', muted: !present });
 }
 const tombstoneCount = Array.isArray(data.deleted_records) ? data.deleted_records.length : 0;
 reportLines.push({ type: 'section', label: 'Deleted Records (Tombstones)' });
@@ -15086,7 +15079,7 @@ if (line.type === 'section') {
 return `<div style="font-size:0.65rem;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:0.08em;margin:14px 0 6px 0;padding-top:10px;border-top:1px solid var(--glass-border);">${esc(line.label)}</div>`;
 }
 if (line.type === 'warning') {
-return `<div style="font-size:0.72rem;color:#f59e0b;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:8px 10px;margin:4px 0;">⚠ ${esc(line.label)}</div>`;
+return `<div style="font-size:0.72rem;color:#f59e0b;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:8px 10px;margin:4px 0;"> ${esc(line.label)}</div>`;
 }
 const valueColor = line.issue ? '#f59e0b' : (line.muted ? 'var(--text-muted)' : 'var(--text-main)');
 return `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:0.72rem;padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.04);">
@@ -15251,7 +15244,7 @@ const modeColor = deviceMode === 'admin' ? '#007aff'
 : '#ff9f0a';
 const modeIcon = '';
 const onlineColor = isOnline ? '#30d158' : '#ff453a';
-const onlineDot = isOnline ? '● Online' : '○ Offline';
+const onlineDot = isOnline ? ' Online' : ' Offline';
 
 let deviceShard = 'N/A';
 if (device.deviceShard) {
@@ -15312,7 +15305,7 @@ const isAdmin = deviceMode === 'admin';
 const adminBg = isAdmin ? 'rgba(0,122,255,0.18)' : 'rgba(0,122,255,0.08)';
 const adminBord = isAdmin ? '2px solid rgba(0,122,255,0.55)' : '1px solid rgba(0,122,255,0.25)';
 const adminFw = isAdmin ? '800' : '600';
-const adminTick = isAdmin ? '✓ ' : '';
+const adminTick = isAdmin ? ' ' : '';
 cardHtml += '<button onclick="remoteControlDevice(\'' + device.deviceId + '\', \'admin\')"';
 cardHtml += ' style="width:100%;padding:9px;background:' + adminBg + ';border:' + adminBord + ';border-radius:99px;color:#007aff;cursor:pointer;font-size:0.72rem;font-weight:' + adminFw + ';margin-bottom:10px;">' + adminTick + 'Admin Mode</button>';
 if (salesRepsList.length > 0) {
@@ -15329,7 +15322,7 @@ const repLocked = deviceMode === 'rep' && assignedRep === rep;
 const repBg = 'rgba(' + c.bg + ',' + (repLocked ? '0.22' : '0.08') + ')';
 const repBord = (repLocked ? '2' : '1') + 'px solid rgba(' + c.bg + ',' + (repLocked ? '0.65' : '0.28') + ')';
 const repFw = repLocked ? '800' : '600';
-const repTick = repLocked ? '✓ ' : '';
+const repTick = repLocked ? ' ' : '';
 cardHtml += '<button onclick="remoteControlDevice(\'' + device.deviceId + '\', \'rep\', \'' + rep + '\')"';
 cardHtml += ' style="padding:8px 5px;background:' + repBg + ';border:' + repBord + ';border-radius:99px;color:' + c.hex + ';cursor:pointer;font-size:0.68rem;font-weight:' + repFw + ';text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">';
 cardHtml += repTick + rep + '</button>';
@@ -15345,7 +15338,7 @@ const userLocked = deviceMode === 'userrole' && device.assignedManager === user.
 const userBg = 'rgba(255,204,2,' + (userLocked ? '0.22' : '0.08') + ')';
 const userBord = (userLocked ? '2' : '1') + 'px solid rgba(255,204,2,' + (userLocked ? '0.65' : '0.28') + ')';
 const userFw = userLocked ? '800' : '600';
-const userTick = userLocked ? '✓ ' : '';
+const userTick = userLocked ? ' ' : '';
 const lookupKey = '_devTabsCache';
 if (!window[lookupKey]) window[lookupKey] = {};
 window[lookupKey][device.deviceId + '_' + ui] = user.tabs || [];
@@ -15443,10 +15436,10 @@ lockedBy: repName ? (currentUser.email || 'Admin') : null,
 };
 await deviceRef.set(updateData, { merge: true });
 const successMsg = targetMode === 'admin'
-? '✓ Device unlocked to Admin mode'
-: targetMode === 'rep' ? `✓ Device locked to Sales Rep: ${repName}`
-: targetMode === 'userrole' ? `✓ Device locked to User: ${repName}`
-: `✓ Command sent: ${targetMode}`;
+? ' Device unlocked to Admin mode'
+: targetMode === 'rep' ? ` Device locked to Sales Rep: ${repName}`
+: targetMode === 'userrole' ? ` Device locked to User: ${repName}`
+: ` Command sent: ${targetMode}`;
 showToast(successMsg, 'success', 3500);
 setTimeout(loadDeviceList, 2000);
 } catch (error) {

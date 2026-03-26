@@ -2209,7 +2209,9 @@ const persistedRoleName = existing.assignedRoleName
 || (persistedRoleType === 'rep' ? existing.assignedRep : existing.assignedManager)
 || null;
 const persistedRep = persistedRoleType === 'rep' ? (persistedRoleName || currentRepProfile || null) : null;
-const persistedManager = (persistedRoleType === 'production' || persistedRoleType === 'factory') ? persistedRoleName : null;
+const persistedManager = (persistedRoleType === 'production' || persistedRoleType === 'factory' || persistedRoleType === 'userrole')
+  ? (persistedRoleName || existing.assignedManager || existing.assignedRoleName || null)
+  : null;
 if (persistedMode !== appMode) {
 appMode = persistedMode;
 const sqliteBatch = [
@@ -2399,7 +2401,10 @@ listenForTeamChanges();
 console.error('Device command listener failed.', _safeErr(error));
 showToast('Device command listener failed.', 'error');
 }
-await cleanupOldDeletions();
+// Fix: cleanupOldDeletions is a Firestore network call — must not block app boot
+setTimeout(() => {
+  cleanupOldDeletions().catch(e => console.warn('[initializeDeviceListeners] cleanup failed:', _safeErr(e)));
+}, 5000);
 }
 window.initializeDeviceListeners = initializeDeviceListeners;
 window.currentUser = null;

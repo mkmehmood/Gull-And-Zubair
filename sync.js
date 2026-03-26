@@ -182,8 +182,10 @@ return false;
 }
 
 async function unifiedSave(sqliteKey, dataArray, specificRecord = null, linkedIds = null) {
+
 if (specificRecord && specificRecord.id) {
   await saveWithTracking(sqliteKey, dataArray, specificRecord);
+  
   _syncQueue.run(async () => {
     try {
       await saveRecordToFirestore(sqliteKey, specificRecord);
@@ -202,7 +204,7 @@ if (specificRecord && specificRecord.id) {
         });
       }
     }
-  });
+  }); 
 } else if (Array.isArray(linkedIds) && linkedIds.length > 0) {
   await saveWithTracking(sqliteKey, dataArray, null, linkedIds);
   const recordsToSync = dataArray.filter(r => r && linkedIds.includes(r.id));
@@ -226,7 +228,7 @@ if (specificRecord && specificRecord.id) {
         }
       }
     }
-  });
+  }); 
 } else {
   await saveWithTracking(sqliteKey, dataArray);
 }
@@ -370,7 +372,16 @@ try {
 console.warn('Failed to save persistent login:', _safeErr(e));
 }
 hideAuthOverlay();
-showToast(`Welcome back, ${user.email.split('@')[0]}`, 'success');
+const _welcomeName = (() => {
+  const _mode = typeof appMode !== 'undefined' ? appMode : 'admin';
+  if (!_mode || _mode === 'admin') return 'MAHMOOD KHAN';
+  if (_mode === 'rep') return (typeof currentRepProfile !== 'undefined' && currentRepProfile) ? currentRepProfile : 'Sales Rep';
+  return (window._assignedManagerName) ? window._assignedManagerName
+    : _mode === 'production' ? 'Production Manager'
+    : _mode === 'factory'    ? 'Factory Manager'
+    : 'User';
+})();
+showToast(`Welcome back, ${_welcomeName}`, 'success');
 sqliteStore.setUserPrefix(user.uid);
 await SQLiteCrypto.initialize();
 const _isGoogleProvider = Array.isArray(user.providerData) &&
@@ -426,7 +437,13 @@ if (typeof firebaseDB !== 'undefined' && firebaseDB && window._firestoreNetworkD
   } catch (_enErr) {  }
 }
 try {
-  if (typeof loadAllData === 'function') await loadAllData();
+  
+  
+  
+  const _bootstrapAlreadyRan = !!sessionStorage.getItem('_gznd_bootstrap_ran');
+  if (!_bootstrapAlreadyRan) {
+    if (typeof loadAllData === 'function') await loadAllData();
+  }
   if (typeof refreshAllDisplays === 'function') await refreshAllDisplays();
 } catch(e) {
   console.warn('Auth: post-login data reload failed:', _safeErr(e));
@@ -466,7 +483,9 @@ console.error('Could not restore device mode:', _safeErr(error));
 }, 1000);
 setTimeout(async () => {
 if (typeof performOneClickSync === 'function' && !isSyncing) {
-performOneClickSync(false);
+  
+  
+  performOneClickSync(true);
 }
 }, 1500);
 } else {
@@ -1847,7 +1866,7 @@ async function executeSmartPull() {
     pendingSocketUpdate = false;
     setTimeout(executeSmartPull, 1000);
   } else {
-    showToast('Data synced via Live Socket', 'success');
+    showToast(' Live update received', 'success', 2000);
   }
 }
 
@@ -2565,7 +2584,7 @@ function performOneClickSync(silent = false) {
 
 async function _doOneClickSync(silent = false) {
   if (!firebaseDB) {
-    if (!silent) { showToast(' Connecting to Cloud... Please wait.', 'info'); initializeFirebaseSystem(); }
+    if (!silent) { showToast('⌛ Connecting to cloud…', 'info', 3000); initializeFirebaseSystem(); }
     return;
   }
   if (!currentUser) {
@@ -2580,8 +2599,8 @@ async function _doOneClickSync(silent = false) {
   isSyncing = true;
   const btn = document.getElementById('sync-btn');
   const originalText = btn ? btn.innerHTML : '';
-  if (!silent && btn) btn.innerHTML = 'Syncing...';
-  if (!silent) showToast('Syncing....', 'info');
+  if (!silent && btn) btn.innerHTML = 'Syncing…';
+  if (!silent) showToast('Syncing with cloud…', 'info', 2000);
 
   try {
     if (typeof initDeviceShard === 'function') {
@@ -2626,6 +2645,9 @@ async function _doOneClickSync(silent = false) {
           : `Data fully restored — ${totalCloudChanges} records downloaded`;
         showToast(msg, 'success');
         if (typeof closeDataMenu === 'function') closeDataMenu();
+      } else if (totalCloudChanges > 0 || totalItemsToWrite > 0) {
+        
+        showToast(` Synced — ${totalCloudChanges} new, ${totalItemsToWrite} uploaded`, 'info', 3000);
       }
       setTimeout(() => {
         _syncQueue.run(async () => {
@@ -2642,15 +2664,18 @@ async function _doOneClickSync(silent = false) {
 
     if (!silent) {
       if (totalCloudChanges === 0 && totalItemsToWrite === 0) {
-        showToast(' Already synced - no changes needed', 'success');
+        showToast(' Already up to date', 'success', 2500);
       } else if (totalCloudChanges === 0) {
-        showToast(`Uploaded ${totalItemsToWrite} local changes`, 'success');
+        showToast(`↑ Uploaded ${totalItemsToWrite} local change${totalItemsToWrite !== 1 ? 's' : ''}`, 'success');
       } else if (totalItemsToWrite === 0) {
-        showToast(`Downloaded ${totalCloudChanges} cloud changes`, 'success');
+        showToast(`↓ Downloaded ${totalCloudChanges} cloud change${totalCloudChanges !== 1 ? 's' : ''}`, 'success');
       } else {
-        showToast(`Synced ${totalCloudChanges} down, ${totalItemsToWrite} up`, 'success');
+        showToast(`↓${totalCloudChanges} downloaded, ↑${totalItemsToWrite} uploaded`, 'success');
       }
       if (typeof closeDataMenu === 'function') closeDataMenu();
+    } else if (totalCloudChanges > 0 || totalItemsToWrite > 0) {
+      
+      showToast(` Synced — ${totalCloudChanges} new, ${totalItemsToWrite} uploaded`, 'info', 3000);
     }
 
     setTimeout(() => {
@@ -2743,8 +2768,8 @@ async function _doPushDataToCloud(silent = false) {
 
     if (!silent) {
       const message = operationCount === 0
-        ? ' Already synced - no changes to upload'
-        : ` Cloud Backup Complete - ${operationCount} items uploaded`;
+        ? ' Already up to date — nothing to upload'
+        : ` Backup complete — ${operationCount} item${operationCount !== 1 ? 's' : ''} uploaded`;
       showToast(message, 'success');
       const display = document.getElementById('lastSyncDisplay');
       if (display) display.textContent = `Last Cloud Sync: ${new Date(now).toLocaleString()}`;
@@ -2761,6 +2786,9 @@ async function _doPushDataToCloud(silent = false) {
 }
 
 function pullDataFromCloud(silent = false, forceDownload = false) {
+  
+  
+  
   return _syncQueue.run(() => _doPullDataFromCloud(silent, forceDownload));
 }
 
@@ -2849,10 +2877,19 @@ async function _doPullDataFromCloud(silent = false, forceDownload = false) {
 
     if (!silent) showToast(' Data Restored Successfully', 'success');
     if (typeof updateUnitsAvailableIndicator === 'function') updateUnitsAvailableIndicator();
-    await refreshAllDisplays();
+    
+    
+    
+    Promise.resolve().then(() => {
+      if (typeof refreshAllDisplays === 'function') refreshAllDisplays().catch(() => {});
+    });
   } catch (error) {
     console.error('[pullDataFromCloud] error:', _safeErr(error));
     if (!silent) showToast('Restore failed. Using local data.', 'error');
+    
+    Promise.resolve().then(() => {
+      if (typeof refreshAllDisplays === 'function') refreshAllDisplays().catch(() => {});
+    });
   } finally {
     isSyncing = false;
     _flushSyncLockQueue().catch(() => {});
@@ -2882,8 +2919,8 @@ async function showSyncHealthPanel() {
         <strong style="font-size:.95rem">Sync Health</strong>
       </div>
       <div style="margin-bottom:8px">
-        <span style="color:#10b981">✔ ${ok} collections OK</span>
-        ${pending ? `&nbsp;·&nbsp;<span style="color:#f59e0b">⚠ ${pending} issues</span>` : ''}
+        <span style="color:#10b981"> ${ok} collections OK</span>
+        ${pending ? `&nbsp;·&nbsp;<span style="color:#f59e0b"> ${pending} issues</span>` : ''}
       </div>
       ${results.issues.map(s => `
         <div style="padding:6px 10px;margin-top:4px;background:rgba(245,158,11,.1);border-radius:8px;font-size:.78rem">
@@ -3484,7 +3521,7 @@ await SQLiteCrypto.setSessionKey(email, password, currentUser.uid);
 sqliteStore.reEncryptAll().catch(() => {});
 try { localStorage.setItem('_gznd_session_active', '1'); sessionStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
 LoginRateLimiter.recordSuccess();
-messageDiv.textContent = '✓ Offline Login Successful';
+messageDiv.textContent = ' Offline Login Successful';
 messageDiv.style.color = 'var(--accent-emerald)';
 
 if (typeof initDeviceShard === 'function') {
@@ -3528,7 +3565,7 @@ await SQLiteCrypto.setSessionKey(email, password, currentUser.uid);
 try { localStorage.setItem('_gznd_session_active', '1'); sessionStorage.setItem('_gznd_session_active', '1'); } catch(e) {}
 if (typeof initDeviceShard === 'function') { await initDeviceShard().catch(() => {}); }
 try { if (typeof loadAllData === 'function') await loadAllData(); } catch(e) {}
-messageDiv.textContent = '✓ Offline Login (Network unavailable)';
+messageDiv.textContent = ' Offline Login (Network unavailable)';
 messageDiv.style.color = 'var(--accent-emerald)';
 setTimeout(() => { hideAuthOverlay(); if(typeof refreshAllDisplays==='function')refreshAllDisplays(); }, 300);
 return;

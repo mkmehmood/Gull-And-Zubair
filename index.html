@@ -170,7 +170,7 @@ function _showUpdateDialog(reg) {
     if (waiting) {
       waiting.postMessage({ type: 'SKIP_WAITING' });
     } else {
-      // No waiting SW — just reload directly
+      
       sessionStorage.setItem('_swJustUpdated', '1');
       window.location.reload();
     }
@@ -203,8 +203,8 @@ if ('serviceWorker' in navigator) {
         });
       });
 
-      // After skipWaiting, wait for the controller to actually change before reloading.
-      // This prevents the race condition where reload fires before the new SW takes control.
+      
+      
       var _reloading = false;
       navigator.serviceWorker.addEventListener('controllerchange', function() {
         if (_reloading) return;
@@ -213,12 +213,12 @@ if ('serviceWorker' in navigator) {
         window.location.reload();
       });
 
-      // Re-check for updates when user returns to the app after being away
+      
       document.addEventListener('visibilitychange', function() {
         if (document.visibilityState === 'visible') reg.update();
       });
 
-      // Also check every 30 minutes in case the tab stays open
+      
       setInterval(function() { reg.update(); }, 30 * 60 * 1000);
 
     }).catch(function(e) { console.error('[SW]', e); });
@@ -1178,14 +1178,14 @@ window._showLogoutConfirmDialog = async function() {
   </div>
 </div>
 <div id="splash-screen">
-<div class="flower flower1">🌸</div>
-<div class="flower flower2">🌺</div>
-<div class="flower flower3">🌼</div>
-<div class="flower flower4">🌻</div>
-<div class="flower flower5">🌷</div>
-<div class="flower flower6">🏵️</div>
-<div class="flower flower7">💐</div>
-<div class="flower flower8">🌹</div>
+<div class="flower flower1"></div>
+<div class="flower flower2"></div>
+<div class="flower flower3"></div>
+<div class="flower flower4"></div>
+<div class="flower flower5"></div>
+<div class="flower flower6"></div>
+<div class="flower flower7"></div>
+<div class="flower flower8"></div>
 <div class="splash-ornament ornament-top"></div>
 <div class="splash-content">
 <div class="splash-brand">
@@ -1229,7 +1229,7 @@ window._showLogoutConfirmDialog = async function() {
 </div>
 <div id="rep-map-container" style="height: 300px; width: 100%; margin-top: 15px; border-radius: 12px; border: 2px solid var(--glass-border); z-index: 1;"></div>
 <div style="text-align: right; font-size: 0.7rem; color: var(--text-muted); margin-top: 5px;">
-● Cash Sale | ● Collection | ○ Credit Sale
+ Cash Sale |  Collection |  Credit Sale
 </div>
 </div>
 <div id="admin-rep-analytics" class="section liquid-card hidden">
@@ -1714,7 +1714,7 @@ No records found
 </div>
 </div>
 <div id="expiredSection" class="hidden" style="grid-column: 1 / -1; margin: 10px 0; padding: 12px; background: rgba(220, 38, 38, 0.08); border-radius: 10px; border: 1px solid var(--danger, #dc2626);">
-<label style="color: var(--danger, #dc2626); font-weight: 800; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;">⚠ Expired Stock — Added to CHORA Raw Material:</label>
+<label style="color: var(--danger, #dc2626); font-weight: 800; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;"> Expired Stock — Added to CHORA Raw Material:</label>
 <div class="u-field-hint" style="margin-top: 6px;">
 * Expired product will be added to the CHORA raw material inventory. It will NOT be added to production stock.
 </div>

@@ -265,7 +265,7 @@ const totalDebt = txs
 .reduce((sum, s) => sum + (s.totalValue || 0) - (s.partialPaymentReceived || 0), 0);
 let msg = `Permanently delete customer "${name}"?`;
 if (txs.length > 0) {
-msg += `\n\n⚠ This customer has ${txs.length} transaction record${txs.length !== 1 ? 's' : ''} on file.`;
+msg += `\n\n This customer has ${txs.length} transaction record${txs.length !== 1 ? 's' : ''} on file.`;
 if (totalDebt > 0) msg += `\n Outstanding debt: ${fmtAmt(totalDebt)}`;
 msg += `\n\nAll sales history for this customer will be permanently deleted.`;
 }
@@ -374,7 +374,7 @@ headerTitle.innerHTML = `
 <button class="sidebar-settings-btn" style="width:auto;padding:5px 10px;font-size:0.75rem;color:var(--accent);background:rgba(29,233,182,0.07);border-radius:8px;border:1px solid rgba(29,233,182,0.25);display:inline-flex;align-items:center;gap:5px;" onclick="openCustomerEditModal('${esc(name).split("'").join("\\'")}')" title="Edit Contact Info"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>Edit</button>
 </div>
 <div style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal; margin-top:4px;">
-${phone ? phoneActionHTML(phone) : 'No Phone'} ${address ? `| ◆ ${esc(address)}` : ''}
+${phone ? phoneActionHTML(phone) : 'No Phone'} ${address ? `|  ${esc(address)}` : ''}
 </div>
 `;
 let currentDebt = 0;
@@ -1296,7 +1296,7 @@ const parts = data.display_name.split(', ');
 finalAddress = parts.slice(0, 3).join(', ');
 }
 addressInput.value = `${finalAddress} (${coordsText})`;
-statusDiv.textContent = `◆ Location Found: ${localArea || placeName || city}`;
+statusDiv.textContent = ` Location Found: ${localArea || placeName || city}`;
 statusDiv.style.color = "var(--accent-emerald)";
 if(typeof showToast === 'function') showToast("Address updated successfully", "success");
 } else {
