@@ -1062,7 +1062,7 @@ const factorySalePrices = (await sqliteStore.get('factory_sale_prices')) || {};
 const factoryDefaultFormulas = (await sqliteStore.get('factory_default_formulas')) || {};
 const factoryAdditionalCosts = (await sqliteStore.get('factory_additional_costs')) || {};
 const factoryCostAdjustmentFactor = (await sqliteStore.get('factory_cost_adjustment_factor')) || {};
-return { salePrice: getSalePriceForStore(store), costPrice: getCostPriceForStore(store) };
+return { salePrice: await getSalePriceForStore(store), costPrice: await getCostPriceForStore(store) };
 }
 
 async function calculateFactoryProduction() {

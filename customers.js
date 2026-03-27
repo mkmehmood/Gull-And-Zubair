@@ -438,7 +438,7 @@ const remaining = effectiveDue;
 btnText = `PARTIAL (${await formatCurrency(remaining)} due)`;
 statusClass = 'partial';
 }
-toggleBtnHtml = `<button class="status-toggle-btn ${statusClass}" onclick="toggleSingleTransactionStatus('${t.id}')">${btnText}</button>`;
+toggleBtnHtml = `<span class="status-toggle-btn ${statusClass}" style="pointer-events:none;cursor:default;">${btnText}</span>`;
 } else if (isPartialPayment) {
 toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(255, 159, 10, 0.1); color:var(--warning);">PARTIAL PAYMENT</span>`;
 } else if (isCollection) {

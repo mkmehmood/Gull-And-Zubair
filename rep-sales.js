@@ -281,7 +281,7 @@ async function calculateRepSalePreview() {
 const repCustomers = ensureArray(await sqliteStore.get('rep_customers'));
 if(repTransactionMode === 'sale') {
 const qty = parseFloat(document.getElementById('rep-quantity').value) || 0;
-const salePrice = getSalePriceForStore('STORE_A');
+const salePrice = await getSalePriceForStore('STORE_A');
 const _repTVS = document.getElementById('rep-total-value');
 if (_repTVS) _repTVS.innerText = "" + fmtAmt(safeNumber(qty * salePrice, 0));
 }
@@ -322,8 +322,8 @@ const _gpsBgPromise = Promise.race([
 ]).catch(() => null);
 const now = new Date();
 const timeString = now.toLocaleTimeString('en-US', {hour: '2-digit', minute:'2-digit', hour12: true});
-const costPerKg = getCostPriceForStore('STORE_A');
-const salePrice = getSalePriceForStore('STORE_A');
+const costPerKg = await getCostPriceForStore('STORE_A');
+const salePrice = await getSalePriceForStore('STORE_A');
 let transactionRecord = {};
 if(repTransactionMode === 'sale') {
 const qty = parseFloat(document.getElementById('rep-quantity').value) || 0;
@@ -775,23 +775,6 @@ if (!tbody) {
 return;
 }
 try {
-const freshRepSales = await sqliteStore.get('rep_sales', []);
-if (Array.isArray(freshRepSales)) {
-const recordMap = new Map(freshRepSales.filter(s => s && s.id).map(s => [s.id, s]));
-if (Array.isArray(repSales)) {
-repSales.forEach(s => {
-if (s && s.id && !recordMap.has(s.id)) {
-recordMap.set(s.id, s);
-}
-});
-}
-const mergedRepSales = Array.from(recordMap.values());
-}
-} catch (error) {
-console.error('Rep sales operation failed.', _safeErr(error));
-showToast('Rep sales operation failed.', 'error');
-}
-try {
 const freshRepCustomersList = await sqliteStore.get('rep_customers', []);
 if (Array.isArray(freshRepCustomersList) && freshRepCustomersList.length > 0) {
 const repRegMap = new Map(freshRepCustomersList.map(c => [c.id, c]));
@@ -805,14 +788,26 @@ console.warn('Rep registry refresh failed, using in-memory:', _safeErr(repRegErr
 }
 const filterInput = document.getElementById('rep-filter');
 const filter = filterInput ? filterInput.value.toLowerCase() : '';
-const myData = repSales.filter(s =>
+let activeRepSales = repSales;
+try {
+const freshRepSales2 = await sqliteStore.get('rep_sales', []);
+if (Array.isArray(freshRepSales2) && freshRepSales2.length > 0) {
+const recordMap2 = new Map(freshRepSales2.filter(s => s && s.id).map(s => [s.id, s]));
+repSales.forEach(s => { if (s && s.id && !recordMap2.has(s.id)) recordMap2.set(s.id, s); });
+activeRepSales = Array.from(recordMap2.values());
+}
+} catch (_e) { /* fall back to repSales */ }
+const myData = activeRepSales.filter(s =>
 s.salesRep === currentRepProfile
 );
 const custMap = {};
 myData.forEach(s => {
 if(!custMap[s.customerName]) custMap[s.customerName] = { debt: 0, count: 0 };
 custMap[s.customerName].count++;
-if(s.paymentType === 'CREDIT' && !s.creditReceived) {
+if (s.transactionType === 'OLD_DEBT' && !s.creditReceived) {
+const partialPaid = s.partialPaymentReceived || 0;
+custMap[s.customerName].debt += ((s.totalValue || 0) - partialPaid);
+} else if(s.paymentType === 'CREDIT' && !s.creditReceived) {
 if (s.isMerged && typeof s.creditValue === 'number') {
 custMap[s.customerName].debt += s.creditValue;
 } else {
@@ -876,7 +871,7 @@ tr.innerHTML = `
 <td style="padding: 8px 2px; font-size: 0.8rem; color: var(--accent); font-weight: 600; cursor:pointer;" onclick="event.stopPropagation(); openRepCustomerManagement('${safeNameForAttr}')">${esc(name)}</td>
 <td class="u-table-td">${phoneActionHTML(phone)}</td>
 <td style="padding: 8px 2px; text-align: right; font-size: 0.8rem; color: ${customerData.debt > 1 ? 'var(--warning)' : 'var(--accent-emerald)'}; font-weight: 700;">
-${customerData.debt.toLocaleString()}
+${fmtAmt(Math.max(0, customerData.debt))}
 </td>`;
 return tr;
 }
@@ -1063,7 +1058,7 @@ const remaining = effectiveDue;
 btnText = `PARTIAL (${await formatCurrency(remaining)} due)`;
 statusClass = 'partial';
 }
-toggleBtnHtml = `<button class="status-toggle-btn ${statusClass}" onclick="toggleRepTransactionStatus('${t.id}')">${btnText}</button>`;
+toggleBtnHtml = `<span class="status-toggle-btn ${statusClass}" style="pointer-events:none;cursor:default;">${btnText}</span>`;
 } else if (isPartialPayment) {
 toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(255,159,10,0.1);color:var(--warning);">PARTIAL PAYMENT</span>`;
 } else if (isCollection) {
@@ -1103,11 +1098,11 @@ ${deleteBtnHtml}
 } else {
 const _repDisplayUnitPrice = (t.unitPrice && t.unitPrice > 0)
   ? t.unitPrice
-  : getSalePriceForStore(t.supplyStore || 'STORE_A');
+  : await getSalePriceForStore(t.supplyStore || 'STORE_A');
 itemContent = `
 <div class="cust-history-info">
 <div style="font-weight:700;font-size:0.85rem;color:var(--text-main);">${formatDisplayDate(t.date)}${_mergedBadgeHtml(t, {inline:true})}</div>
-<div style="font-size:0.75rem;color:var(--text-muted);">${safeToFixed(t.quantity, 2)} kg @ ${await formatCurrency(_repDisplayUnitPrice)}</div>
+<div style="font-size:0.75rem;color:var(--text-muted);">${safeToFixed(t.quantity, 2)} kg @ ${await formatCurrency(_repDisplayUnitPrice)} = ${await formatCurrency(t.totalValue)}</div>
 ${hasPartialPayment ? `<div style="font-size:0.7rem;color:var(--accent-emerald);margin-top:2px;">Paid: ${await formatCurrency(partialPaid)}</div>` : ''}
 </div>
 <div class="cust-history-actions">
@@ -1453,11 +1448,11 @@ doc.setDrawColor(...hdrColor); doc.setLineWidth(0.5);
 doc.line(14, yPos, pageW - 14, yPos);
 yPos += 5;
 if (transactions.length > 0) {
-const buildRow = (t, runBal) => {
+const buildRow = async (t, runBal) => {
 const pt = t.paymentType || 'CASH';
 const isOldDebt = t.transactionType === 'OLD_DEBT';
 let debit = 0, credit = 0, typeLabel = '', detailLabel = '', displayDate = formatDisplayDate(t.date);
-const unitPrice = (t.unitPrice && t.unitPrice > 0) ? t.unitPrice : getSalePriceForStore(t.supplyStore || 'STORE_A');
+const unitPrice = (t.unitPrice && t.unitPrice > 0) ? t.unitPrice : await getSalePriceForStore(t.supplyStore || 'STORE_A');
 if (isOldDebt) {
 debit = parseFloat(t.totalValue) || 0;
 credit = parseFloat(t.partialPaymentReceived) || 0;
@@ -1507,7 +1502,7 @@ const txRunBal = { val: repHasPrior ? repOpeningBalance : 0 };
 const txRows = [];
 let totDebit = 0, totCredit = 0, totQty = 0;
 for (const t of normalTxns) {
-const r = buildRow(t, txRunBal);
+const r = await buildRow(t, txRunBal);
 txRows.push(r.row);
 totDebit += r.debit;
 totCredit += r.credit;
