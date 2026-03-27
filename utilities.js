@@ -14959,10 +14959,29 @@ window.removeSalesRep = removeSalesRep;
 window.openManageRepsModal = openManageRepsModal;
 window.closeManageRepsModal = closeManageRepsModal;
 window.switchManageTeamTab = switchManageTeamTab;
+async function loadUserRolesContent() {
+if (firebaseDB && currentUser) {
+try {
+const teamDoc = await firebaseDB.collection('users').doc(currentUser.uid)
+.collection('settings').doc('team').get();
+if (teamDoc.exists) {
+const data = teamDoc.data();
+if (Array.isArray(data.user_roles) && data.user_roles.length > 0) {
+userRolesList = data.user_roles;
+await sqliteStore.set('user_roles_list', userRolesList).catch(() => {});
+}
+}
+} catch (e) {
+console.warn('loadUserRolesContent: cloud fetch failed, showing cached list', _safeErr(e));
+}
+}
+renderUserRoleList();
+}
 window.addNewUserRole = addNewUserRole;
 window.removeUserRole = removeUserRole;
 window.toggleUserRoleTabAccess = toggleUserRoleTabAccess;
 window.renderUserRoleList = renderUserRoleList;
+window.loadUserRolesContent = loadUserRolesContent;
 window.saveUserRolesList = saveUserRolesList;
 window.lockToUserRoleMode = lockToUserRoleMode;
 function phoneActionHTML(phone, opts = {}) {
