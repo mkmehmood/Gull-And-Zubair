@@ -9674,7 +9674,6 @@ document.addEventListener('DOMContentLoaded', async function _appBootstrap() {
 
     console.error('[Startup] Initialization error:', _safeErr(e));
     if (e && e.code === 'DECRYPT_FAILED') {
-
       console.warn('[Startup] DECRYPT_FAILED with key ready — showing auth overlay');
       if (typeof createAuthOverlay === 'function') createAuthOverlay();
       if (typeof showAuthOverlay === 'function') showAuthOverlay();

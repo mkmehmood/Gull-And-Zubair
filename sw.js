@@ -1,4 +1,4 @@
-const BUILD_HASH = 'sarim-v1';
+const BUILD_HASH = 'sarim-v2';
 const CACHE_NAME = 'app-' + BUILD_HASH;
 
 const ASSETS_TO_CACHE = [
@@ -21,18 +21,41 @@ const ASSETS_TO_CACHE = [
   '/sarim/sql-wasm.wasm',
   '/sarim/sql.js'
 ];
-const FIREBASE_CDN_URLS = [
+
+// Versioned CDN resources — pre-cached opportunistically during install.
+// These are immutable (version-pinned URLs), so cache-first is safe.
+const CDN_ASSETS_TO_PRECACHE = [
   'https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js',
   'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js',
   'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js',
+  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
+  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
   'https://accounts.google.com/gsi/client',
+];
+
+const FIREBASE_CDN_ORIGINS = [
+  'https://www.gstatic.com',
+  'https://unpkg.com',
+  'https://accounts.google.com',
 ];
 
 const SQLJS_CDN_ORIGIN = 'https://cdnjs.cloudflare.com';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS_TO_CACHE))
+    caches.open(CACHE_NAME)
+      .then((cache) => cache.addAll(ASSETS_TO_CACHE))
+      .then(() => {
+        // Pre-cache CDN resources opportunistically — failures do NOT block install
+        return caches.open(CACHE_NAME).then((cache) =>
+          Promise.allSettled(
+            CDN_ASSETS_TO_PRECACHE.map(url =>
+              cache.add(new Request(url, { mode: 'cors', credentials: 'omit' }))
+                   .catch(() => { /* network unavailable — skip silently */ })
+            )
+          )
+        );
+      })
   );
 });
 
@@ -80,8 +103,26 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (FIREBASE_CDN_URLS.includes(url.href)) {
-    event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
+  // Versioned CDN assets (Firebase, Leaflet, GSI): cache-first.
+  // These URLs are version-pinned so stale is never wrong; serve from cache
+  // instantly if available, fetch and cache in background when not.
+  const isCdnAsset = CDN_ASSETS_TO_PRECACHE.some(u => event.request.url === u) ||
+    FIREBASE_CDN_ORIGINS.some(origin => url.origin === origin);
+
+  if (isCdnAsset) {
+    event.respondWith(
+      caches.open(CACHE_NAME).then((cache) =>
+        cache.match(event.request).then((cached) => {
+          if (cached) return cached;
+          return fetch(event.request, { mode: 'cors', credentials: 'omit' })
+            .then((res) => {
+              if (res.ok) cache.put(event.request, res.clone());
+              return res;
+            })
+            .catch(() => cached || new Response('', { status: 503 }));
+        })
+      )
+    );
     return;
   }
 

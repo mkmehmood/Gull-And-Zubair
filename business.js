@@ -1064,16 +1064,8 @@ const sqliteStore = (() => {
     return null;
   }
 
-  async function _canFetch(url) {
-    try {
-      const r = await fetch(url, { method: 'HEAD', cache: 'no-cache' });
-      return r.ok;
-    } catch { return false; }
-  }
-
   function _injectScript(src) {
     return new Promise((resolve, reject) => {
-
       if (document.querySelector('script[src="' + src + '"]')) { resolve(); return; }
       const s   = document.createElement('script');
       s.src     = src;
@@ -1083,37 +1075,50 @@ const sqliteStore = (() => {
     });
   }
 
+  // Load the JS driver — always try the bundled local file first (served instantly
+  // from SW cache), fall back to CDN only if the local inject actually fails.
+  // No HEAD pre-flight: the failed fetch/inject IS the signal to fall back.
   async function _tryLoadWasm() {
-
-    const wasmUrl = (await _canFetch(SQLITE_WASM_LOCAL))
-      ? SQLITE_WASM_LOCAL
-      : SQLITE_WASM_CDN;
-
     if (typeof window.initSqlJs !== 'function') {
-      const jsUrl = (await _canFetch(SQLITE_JS_LOCAL)) ? SQLITE_JS_LOCAL : SQLITE_CDN;
-      await _injectScript(jsUrl);
+      try {
+        await _injectScript(SQLITE_JS_LOCAL);
+      } catch (_e1) {
+        console.warn('[SQLite] local sql-wasm.js failed, trying CDN:', _safeErr(_e1));
+        await _injectScript(SQLITE_CDN);
+      }
     }
 
     if (typeof window.initSqlJs !== 'function') {
       throw new Error('[SQLite] initSqlJs not available after script load');
     }
 
-    const resp   = await fetch(wasmUrl);
-    if (!resp.ok) throw new Error('[SQLite] WASM fetch failed: ' + resp.status);
-    const buffer = await resp.arrayBuffer();
+    // Fetch the WASM binary — local first, CDN fallback on any failure.
+    let buffer;
+    try {
+      const resp = await fetch(SQLITE_WASM_LOCAL);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      buffer = await resp.arrayBuffer();
+    } catch (_e2) {
+      console.warn('[SQLite] local sql-wasm.wasm failed, trying CDN:', _safeErr(_e2));
+      const resp = await fetch(SQLITE_WASM_CDN);
+      if (!resp.ok) throw new Error('[SQLite] WASM CDN fetch failed: ' + resp.status);
+      buffer = await resp.arrayBuffer();
+    }
+
     return window.initSqlJs({ wasmBinary: buffer });
   }
 
   async function _tryLoadAsmJs() {
-
     delete window.initSqlJs;
     delete window.SQL;
 
-    const jsUrl = (await _canFetch(SQLITE_ASMJS_LOCAL))
-      ? SQLITE_ASMJS_LOCAL
-      : SQLITE_ASMJS_CDN;
-
-    await _injectScript(jsUrl);
+    // Same local-first pattern — no HEAD pre-flight.
+    try {
+      await _injectScript(SQLITE_ASMJS_LOCAL);
+    } catch (_e1) {
+      console.warn('[SQLite] local sql.js failed, trying CDN:', _safeErr(_e1));
+      await _injectScript(SQLITE_ASMJS_CDN);
+    }
 
     if (typeof window.initSqlJs !== 'function') {
       throw new Error('[SQLite] asm.js initSqlJs not available after script load');
@@ -1771,6 +1776,13 @@ const sqliteStore = (() => {
     },
 
   };
+})();
+
+// Pre-warm: kick off SQLite init (WASM load + DB open) as soon as business.js
+// is parsed — well before DOMContentLoaded triggers the full bootstrap.
+// By the time the app needs data the DB is already open.
+(function() {
+  try { sqliteStore.init().catch(function() {}); } catch (_) {}
 })();
 
 function ensureArray(value) {
