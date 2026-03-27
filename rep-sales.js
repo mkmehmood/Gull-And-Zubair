@@ -275,7 +275,7 @@ if (_repInfo) _repInfo.classList.remove('hidden');
 if(repTransactionMode === 'collection') {
 const inputAmt = parseFloat(document.getElementById('rep-amount-collected')?.value) || 0;
 const _repTV = document.getElementById('rep-total-value');
-if (_repTV) _repTV.innerText = "" + fmtAmt(safeNumber(debt - inputAmt, 0));
+if (_repTV) _repTV.innerText = "" + fmtAmt(Math.max(0, safeNumber(debt - inputAmt, 0)));
 }
 }
 

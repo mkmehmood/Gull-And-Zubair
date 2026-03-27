@@ -14086,7 +14086,16 @@ const allSales = isRep ?
 const allRegistryNames = !isRep && Array.isArray(salesCustomers)
 ? salesCustomers.filter(c => c && c.name).map(c => String(c.name).trim().toLowerCase())
 : Array.isArray(repCustomers)
-? repCustomers.filter(c => c && c.name).map(c => String(c.name).trim().toLowerCase())
+? (() => {
+const _repSalesAllLower = new Set(
+(Array.isArray(repSales) ? repSales : [])
+.filter(s => s && s.customerName)
+.map(s => s.customerName.toLowerCase())
+);
+return repCustomers
+.filter(c => c && c.name && !_repSalesAllLower.has(String(c.name).trim().toLowerCase()))
+.map(c => String(c.name).trim().toLowerCase());
+})()
 : [];
 const existingNames = [...new Set([
 ...allSales
@@ -14216,17 +14225,21 @@ No matching suppliers found
 }
 break;
 case 'repCustomers': {
+// Only show customers who have at least one transaction with the current rep profile
+const _repNamesFromSales = repSales
+.filter(s => s && s.salesRep === currentRepProfile)
+.map(s => s.customerName)
+.filter(n => n && typeof n === 'string');
+// Include registry customers only if they have no sales for ANY rep (truly unassigned)
+const _repSalesAllNamesLower = new Set(repSales.filter(s => s && s.customerName).map(s => s.customerName.toLowerCase()));
 let _freshRepReg = [];
 try { _freshRepReg = await sqliteStore.get('rep_customers', []) || []; } catch(e) {}
 const _repRegMap = new Map((_freshRepReg).filter(c => c && c.id).map(c => [c.id, c]));
 if (Array.isArray(repCustomers)) repCustomers.forEach(c => { if (c && c.id && !_repRegMap.has(c.id)) _repRegMap.set(c.id, c); });
 const _mergedRepReg = Array.from(_repRegMap.values());
-const _repNamesFromSales = repSales
-.filter(s => s.salesRep === currentRepProfile)
-.map(s => s.customerName)
-.filter(n => n && typeof n === 'string');
 const _repNamesFromRegistry = _mergedRepReg
-.filter(c => c && c.name && typeof c.name === 'string').map(c => c.name);
+.filter(c => c && c.name && typeof c.name === 'string' && !_repSalesAllNamesLower.has(c.name.toLowerCase()))
+.map(c => c.name);
 const repUniqueCustomers = [...new Set([..._repNamesFromSales, ..._repNamesFromRegistry])];
 matches = repUniqueCustomers.filter(name =>
 name && typeof name === 'string' && name.toLowerCase().includes(query.toLowerCase())
