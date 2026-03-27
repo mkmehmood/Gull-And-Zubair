@@ -3201,7 +3201,7 @@ const stockReturns = ensureArray(await sqliteStore.get('stock_returns'));
 const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
 const factoryDefaultFormulas = (await sqliteStore.get('factory_default_formulas')) || {};
 const factoryAdditionalCosts = (await sqliteStore.get('factory_additional_costs')) || {};
-const paymentDateEl = document.getElementById('paymentDate');
+const paymentDateEl = document.getElementById('expenseDate');
 const selectedDate = (paymentDateEl && paymentDateEl.value) || new Date().toISOString().split('T')[0];
 const selectedDateObj = new Date(selectedDate);
 const selectedYear = selectedDateObj.getFullYear();
@@ -3753,7 +3753,7 @@ const factoryInventoryData = ensureArray(_cncBatch.get('factory_inventory_data')
 const factoryProductionHistory = ensureArray(_cncBatch.get('factory_production_history'));
 const factoryDefaultFormulas = _cncBatch.get('factory_default_formulas') || {};
 const factoryAdditionalCosts = _cncBatch.get('factory_additional_costs') || {};
-const paymentDateEl = document.getElementById('paymentDate');
+const paymentDateEl = document.getElementById('expenseDate');
 const selectedDate = (paymentDateEl && paymentDateEl.value) || new Date().toISOString().split('T')[0];
 const selectedDateObj = new Date(selectedDate);
 const selectedYear = selectedDateObj.getFullYear();
@@ -7931,9 +7931,31 @@ const avgCostPerUnit = totalConsumed > 0
 : 0;
 const totalMatValue = totalRawMatCost;
 const avgProfitPerKg = totalOutput > 0 ? totalProfit / totalOutput : 0;
+let totalAdditionalCostProd = 0;
+factoryProductionHistory.forEach(entry => {
+  if (!isInRange(entry.date)) return;
+  const units = entry.units || 0;
+  const addCostPerUnit = factoryAdditionalCosts[entry.store] || 0;
+  totalAdditionalCostProd += addCostPerUnit * units;
+});
+let periodDays = 1;
+if (mode === 'daily') { periodDays = 1; }
+else if (mode === 'weekly') { periodDays = 7; }
+else if (mode === 'monthly') { periodDays = new Date(selectedYear, selectedMonth + 1, 0).getDate(); }
+else if (mode === 'yearly') { periodDays = (new Date(selectedYear, 1, 29).getMonth() === 1) ? 366 : 365; }
+else {
+  const allDates = factoryProductionHistory.map(e => e.date).filter(Boolean);
+  if (allDates.length > 1) {
+    const minD = new Date(Math.min(...allDates.map(d => new Date(d))));
+    const maxD = new Date(Math.max(...allDates.map(d => new Date(d))));
+    periodDays = Math.max(1, Math.round((maxD - minD) / 86400000) + 1);
+  } else { periodDays = 1; }
+}
+const avgAdditionalCostPerDay = totalAdditionalCostProd > 0 ? totalAdditionalCostProd / periodDays : 0;
 const _setSum = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
 _setSum('factorySumUnits', safeNumber(totalAvailable, 0).toFixed(2));
 _setSum('factorySumUsedUnits', safeNumber(totalConsumed, 0).toFixed(2));
+_setSum('factorySumCostPerDay', await formatCurrency(avgAdditionalCostPerDay));
 _setSum('factorySumUnitCost', await formatCurrency(avgCostPerUnit));
 _setSum('factorySumTotalCost', await formatCurrency(totalCost));
 _setSum('factorySumOutput', safeNumber(totalOutput, 0).toFixed(2) + ' kg');
@@ -9695,7 +9717,7 @@ document.addEventListener('DOMContentLoaded', async function _appBootstrap() {
     else if (typeof initFirebase === 'function') initFirebase();
   }, 100);
   const today = new Date().toISOString().split('T')[0];
-  ['sys-date','sale-date','cust-date','factory-date','paymentDate','rep-date'].forEach(id => {
+  ['sys-date','sale-date','cust-date','factory-date','expenseDate','rep-date'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = today;
   });
@@ -9713,7 +9735,6 @@ document.addEventListener('DOMContentLoaded', async function _appBootstrap() {
   if (factoryDateEl) {
     factoryDateEl.addEventListener('change', function() {
       currentFactoryDate = this.value;
-      updateFactorySummaryCard();
     });
   }
   const sellerSelect = document.getElementById('sellerSelect');

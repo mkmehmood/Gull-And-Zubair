@@ -1850,7 +1850,7 @@ No records found
 <h3 class="u-text-accent" >New Production Entry</h3>
 <div style="display:flex; flex-direction:column; align-items:flex-end; gap:2px;">
 <label style="font-size:0.7rem; color:var(--text-muted); margin:0;">Date</label>
-<input type="date" id="factory-date" onchange="refreshFactoryTab(); _filterFactoryHistoryByMode(currentFactorySummaryMode || 'all');" style="font-size:0.8rem; padding:5px 8px;">
+<input type="date" id="factory-date" onchange="refreshFactoryTab(); setFactorySummaryMode(currentFactorySummaryMode || 'daily');" style="font-size:0.8rem; padding:5px 8px;">
 </div>
 </div>
 <div class="factory-store-selector">
@@ -2041,6 +2041,11 @@ Select a store...
 <span style="font-size:0.75rem;color:var(--text-muted);">Used</span>
 <span class="qty-val" id="factorySumUsedUnits" style="font-size:0.88rem;font-weight:600;">0</span>
 </div>
+<div style="height:1px;background:var(--glass-border);margin:2px 0;"></div>
+<div style="display:flex;justify-content:space-between;align-items:center;">
+<span style="font-size:0.75rem;color:var(--text-muted);">Avg Add. Cost/Day</span>
+<span class="cost-val" id="factorySumCostPerDay" style="font-size:0.88rem;font-weight:600;">0.00</span>
+</div>
 </div>
 <div style="background:var(--glass-raised); border-radius:18px; padding:14px 16px; display:flex; flex-direction:column; gap:6px; border:1px solid var(--glass-border);">
 <span style="font-size:0.62rem;font-weight:700;color:var(--accent-purple);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:2px;">Output</span>
@@ -2115,6 +2120,7 @@ Clear
 type="date"
 id="expenseDate"
 style="width: 100%; font-size: 0.85rem; padding: 8px;"
+onchange="setCashTrackerMode(currentCashTrackerMode || 'day'); calculateNetCash();"
 >
 </div>
 <div id="expense-name-wrap" style="flex: 2; min-width: 200px; position: relative;">
