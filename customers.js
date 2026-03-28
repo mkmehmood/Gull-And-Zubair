@@ -447,64 +447,60 @@ toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(48, 209,
 toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(37, 99, 235, 0.1); color:var(--accent);">CASH SALE</span>`;
 }
 const deleteBtnHtml = t.isMerged ? '' : `<button class="btn btn-sm btn-danger u-p-4-8" onclick="deleteTransactionFromOverlay('${esc(t.id)}')">⌫</button>`;
+const safeId = String(t.id).replace(/'/g, "\\'");
+const panelId = `cp-${t.id}`;
+const kebabBtn = t.isMerged
+  ? `<button class="txn-kebab-btn" title="View pre-close details" onclick="_togglePreclosePanel(this,'${panelId}','${safeId}','customer_sales','sale')">⋮</button>`
+  : '';
+const panelPlaceholder = t.isMerged ? `<div class="txn-preclose-panel" id="${panelId}"></div>` : '';
 let itemContent = '';
 if (isPartialPayment || isCollection) {
 itemContent = `
-<div class="cust-history-info">
-<div class="u-mono-bold" >${formatDisplayDate(t.date)}${_mergedBadgeHtml(t, {inline:true})}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(t) : ''}</div>
-<div style="font-size:0.75rem; color:var(--accent-emerald);">
-Payment: ${await formatCurrency(t.totalValue)}
-</div>
-<div style="font-size:0.7rem; color:var(--text-muted); margin-top:2px;">
-${isPartialPayment ? 'Partial Payment' : 'Bulk Payment'}
-</div>
-</div>
-<div class="cust-history-actions">
-${toggleBtnHtml}
-${deleteBtnHtml}
-</div>
-`;
+<div class="txn-card-row">
+  <div class="cust-history-info">
+    <div class="u-mono-bold">${formatDisplayDate(t.date)}${_mergedBadgeHtml(t, {inline:true})}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(t) : ''}</div>
+    <div style="font-size:0.75rem;color:var(--accent-emerald);">Payment: ${await formatCurrency(t.totalValue)}</div>
+    <div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px;">${isPartialPayment ? 'Partial Payment' : 'Bulk Payment'}</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+    ${toggleBtnHtml}${deleteBtnHtml}${kebabBtn}
+  </div>
+</div>${panelPlaceholder}`;
 } else if (isOldDebt) {
 itemContent = `
-<div class="cust-history-info">
-<div class="u-mono-bold" >
-${formatDisplayDate(t.date)}
-<span style="background:rgba(255, 159, 10, 0.15); color:var(--warning); padding:2px 6px; border-radius:4px; font-size:0.65rem; margin-left:6px; font-weight:600;">OLD DEBT</span>${_mergedBadgeHtml(t, {inline:true})}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(t) : ''}
-</div>
-<div style="font-size:0.75rem; color:var(--warning);">
-Previous Balance: ${await formatCurrency(t.totalValue)}
-</div>
-<div style="font-size:0.7rem; color:var(--text-muted); margin-top:2px;">
-${esc(t.notes || 'Brought forward from previous records')}
-</div>
-</div>
-<div class="cust-history-actions">
-${toggleBtnHtml}
-${deleteBtnHtml}
-</div>
-`;
+<div class="txn-card-row">
+  <div class="cust-history-info">
+    <div class="u-mono-bold">
+      ${formatDisplayDate(t.date)}
+      <span style="background:rgba(255,159,10,0.15);color:var(--warning);padding:2px 6px;border-radius:4px;font-size:0.65rem;margin-left:6px;font-weight:600;">OLD DEBT</span>${_mergedBadgeHtml(t, {inline:true})}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(t) : ''}
+    </div>
+    <div style="font-size:0.75rem;color:var(--warning);">Previous Balance: ${await formatCurrency(t.totalValue)}</div>
+    <div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px;">${esc(t.notes || 'Brought forward from previous records')}</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+    ${toggleBtnHtml}${deleteBtnHtml}${kebabBtn}
+  </div>
+</div>${panelPlaceholder}`;
 } else {
 const _displayUnitPrice = (t.unitPrice && t.unitPrice > 0)
   ? t.unitPrice
   : await getEffectiveSalePriceForCustomer(t.customerName, t.supplyStore || 'STORE_A');
 itemContent = `
-<div class="cust-history-info">
-<div class="u-mono-bold" >${formatDisplayDate(t.date)}${_mergedBadgeHtml(t, {inline:true})}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(t) : ''}</div>
-<div class="u-fs-sm2 u-text-muted" >
-${safeToFixed(t.quantity, 2)} kg @ ${await formatCurrency(_displayUnitPrice)} = ${await formatCurrency(_txValue)}
-</div>
-${hasPartialPayment ? `<div style="font-size:0.7rem; color:var(--accent-emerald); margin-top:2px;">Paid: ${await formatCurrency(partialPaid)} | Due: ${await formatCurrency(Math.max(0, _txValue - partialPaid))}</div>` : ''}
-<div style="font-size:0.7rem; color:var(--text-muted); margin-top:2px;">
-${getStoreLabel(t.supplyStore)}
-</div>
-</div>
-<div class="cust-history-actions">
-${toggleBtnHtml}
-${deleteBtnHtml}
-</div>
-`;
+<div class="txn-card-row">
+  <div class="cust-history-info">
+    <div class="u-mono-bold">${formatDisplayDate(t.date)}${_mergedBadgeHtml(t, {inline:true})}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(t) : ''}</div>
+    <div class="u-fs-sm2 u-text-muted">${safeToFixed(t.quantity, 2)} kg @ ${await formatCurrency(_displayUnitPrice)} = ${await formatCurrency(_txValue)}</div>
+    ${hasPartialPayment ? `<div style="font-size:0.7rem;color:var(--accent-emerald);margin-top:2px;">Paid: ${await formatCurrency(partialPaid)} | Due: ${await formatCurrency(Math.max(0, _txValue - partialPaid))}</div>` : ''}
+    <div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px;">${getStoreLabel(t.supplyStore)}</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+    ${toggleBtnHtml}${deleteBtnHtml}${kebabBtn}
+  </div>
+</div>${panelPlaceholder}`;
 }
 item.innerHTML = itemContent;
+item.style.flexDirection = 'column';
+item.style.alignItems = 'stretch';
 _custFrag.appendChild(item);
 }
 list.replaceChildren(_custFrag);

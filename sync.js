@@ -1226,7 +1226,16 @@ function _updateArray(array, docData, collectionName) {
     };
     const cloudMs = _getMs_pre(docData);
     const localMs = _getMs_pre(localRecord);
-    if (cloudMs > 0 && cloudMs <= localMs) return array;
+    // BUG FIX: a cloud merged (year-close) record must always beat a local non-merged record,
+    // regardless of timestamps. Without this, a recently-created local record could block
+    // the year-close merged record from being applied via the real-time snapshot path.
+    if (docData.isMerged === true && localRecord.isMerged !== true) {
+      // fall through — let the merged record overwrite the non-merged one
+    } else if (localRecord.isMerged === true && docData.isMerged !== true) {
+      return array; // local merged beats cloud non-merged — year-close already applied locally
+    } else if (cloudMs > 0 && cloudMs <= localMs) {
+      return array;
+    }
   }
 
   const _getMs = (rec) => {
@@ -1249,10 +1258,18 @@ function _updateArray(array, docData, collectionName) {
   if (existingIdx === -1) {
     array.push(docData);
   } else {
-    const _cmpUpdate = (typeof compareRecordVersions === 'function')
-      ? compareRecordVersions(docData, array[existingIdx])
-      : _getMs(docData) - _getMs(array[existingIdx]);
-    if (_cmpUpdate > 0) {
+    const localItem = array[existingIdx];
+    // BUG FIX: isMerged-wins rule — a merged record from cloud must always replace a
+    // non-merged local record (year-close compaction). A local merged record must never
+    // be overwritten by a cloud non-merged record (restore already deletes merged records
+    // via Firestore 'removed' changes, which the snapshot handler handles separately).
+    const _isMergedWins =
+      (docData.isMerged === true && localItem.isMerged !== true)
+      || (!(localItem.isMerged === true && docData.isMerged !== true)
+          && ((typeof compareRecordVersions === 'function')
+              ? compareRecordVersions(docData, localItem) > 0
+              : _getMs(docData) - _getMs(localItem) > 0));
+    if (_isMergedWins) {
       array[existingIdx] = docData;
     }
   }
@@ -1436,12 +1453,35 @@ async function subscribeToRealtime() {
         if (!Array.isArray(col.data)) continue;
         const merged = col.data.filter(r => r.isMerged === true);
         if (merged.length === 0) continue;
+        // BUG FIX: was `break` on first failure — process every collection so partial
+        // failures don't leave later collections permanently unsynced.
         const result = await _commitMergedBatch(userRef, col.name, merged, col.filter);
-        if (!result.ok) { allOk = false; break; }
+        if (!result.ok) { allOk = false; }
       }
       if (allOk) {
         pendingFirestoreYearClose = false;
         await sqliteStore.set('pendingFirestoreYearClose', false);
+        // BUG FIX: previously the retry never pushed fyCloseCount / lastYearClosed* metadata
+        // to Firestore after collection commits succeeded. Connected devices therefore never
+        // received the updated year counter. Now we push it to settings/config (the same
+        // path _downloadDeltas reads) with a fresh timestamp so their timestamp-guard lets
+        // the new value through.
+        try {
+          const _fySettings = await sqliteStore.get('naswar_default_settings', {});
+          const _fyTs = Date.now();
+          await sqliteStore.set('naswar_default_settings_timestamp', _fyTs);
+          await userRef.collection('settings').doc('config').set({
+            naswar_default_settings: {
+              fyCloseCount:       _fySettings.fyCloseCount       || 0,
+              lastYearClosedAt:   _fySettings.lastYearClosedAt   || null,
+              lastYearClosedDate: _fySettings.lastYearClosedDate || null,
+            },
+            naswar_default_settings_timestamp: _fyTs,
+          }, { merge: true });
+          if (typeof DeltaSync !== 'undefined') await DeltaSync.setLastSyncTimestamp('settings');
+        } catch (_metaRetryErr) {
+          console.warn('pendingFirestoreYearClose: metadata push failed:', _safeErr(_metaRetryErr));
+        }
         showToast('Cloud sync for year-close completed successfully', 'success', 4000);
       }
     } catch (e) { console.warn('pendingFirestoreYearClose retry failed:', _safeErr(e)); }
@@ -1525,7 +1565,25 @@ async function subscribeToRealtime() {
           const ct = cloudSettings.naswar_default_settings_timestamp || 0;
           const lt = (await sqliteStore.get('naswar_default_settings_timestamp')) || 0;
           if (ct > lt) {
-            defaultSettings = cloudSettings.naswar_default_settings;
+            // BUG FIX: same guard as _syncSettings — deep-merge FY fields so the locally-closed
+            // device's fyCloseCount is never clobbered by a stale snapshot from another device.
+            const cloudFy = cloudSettings.naswar_default_settings;
+            const localFy = (await sqliteStore.get('naswar_default_settings')) || {};
+            const mergedFy = {
+              ...localFy,
+              ...cloudFy,
+              fyCloseCount: Math.max(
+                typeof cloudFy.fyCloseCount === 'number' ? cloudFy.fyCloseCount : 0,
+                typeof localFy.fyCloseCount  === 'number' ? localFy.fyCloseCount  : 0
+              ),
+              lastYearClosedAt: Math.max(cloudFy.lastYearClosedAt || 0, localFy.lastYearClosedAt || 0) || null,
+              lastYearClosedDate: (
+                (cloudFy.lastYearClosedAt || 0) >= (localFy.lastYearClosedAt || 0)
+                  ? cloudFy.lastYearClosedDate
+                  : localFy.lastYearClosedDate
+              ) || null,
+            };
+            defaultSettings = mergedFy;
             await sqliteStore.setBatch([
               ['naswar_default_settings', defaultSettings],
               ['naswar_default_settings_timestamp', ct],
@@ -2041,7 +2099,8 @@ async function _commitMergedBatch(userRef, collectionName, mergedRecords, delete
         batchesFailed++;
         if (!firstError) firstError = batchErr;
         console.error(`_commitMergedBatch [${collectionName}] batch ${batchesTotal} failed:`, _safeErr(batchErr));
-        throw batchErr;
+        // Do NOT re-throw — continue remaining batches and return {ok:false} so callers
+        // can call _markRowSyncWarning and set pendingFirestoreYearClose correctly.
       }
     }
   } catch (outerErr) {
@@ -2096,7 +2155,13 @@ function mergeArrays(localArray, cloudArray, collectionName) {
 
       const cloudWins = (typeof compareRecordVersions === 'function')
         ? compareRecordVersions(cloudItem, localRecord) > 0
-        : _toMs(cloudItem.updatedAt || cloudItem.timestamp) > _toMs(localRecord?.updatedAt || localRecord?.timestamp);
+        // BUG FIX: if the cloud record is a merged (year-close) record and the local one is
+        // not, the cloud record must always win regardless of timestamps. This handles the case
+        // where a connected device has the original pre-close records and receives the merged
+        // compacted record from the device that just ran Close Financial Year.
+        : (cloudItem.isMerged === true && localRecord.isMerged !== true)
+          || (!(localRecord.isMerged === true && cloudItem.isMerged !== true)
+              && _toMs(cloudItem.updatedAt || cloudItem.timestamp) > _toMs(localRecord?.updatedAt || localRecord?.timestamp));
 
       if (cloudWins) {
         merged[idx] = ensureRecordIntegrity(cloudItem, false, true);
@@ -2292,7 +2357,76 @@ async function _mergeAndPersist(cloudData) {
   const _localBatch = await sqliteStore.getBatch(_localKeys);
   const _deletedArr = ensureArray(await sqliteStore.get('deleted_records'));
   const _notDeleted = item => !_deletedArr.includes(item.id);
-  const _m = (key, col, cloudKey) => mergeArrays(ensureArray(_localBatch.get(key)), data[cloudKey] || [], col).filter(_notDeleted);
+
+  // BUG FIX: After a year close the closing device deletes all non-merged records from
+  // Firestore and writes only merged records. A connected device running _mergeAndPersist
+  // only adds/updates from cloud — it never removes local records that disappeared from
+  // Firestore. So its SQLite ends up with both old non-merged records AND the new merged
+  // records, corrupting balances and making the year-close state inconsistent.
+  //
+  // Detection: a "year-close compaction" occurred on a collection when ALL cloud records
+  // for that collection have isMerged===true AND there is at least one merged record
+  // (an empty cloud collection just means nothing was downloaded yet — skip it).
+  //
+  // When detected: remove local non-merged records whose IDs are absent from cloud (the
+  // pre-close originals that the closing device deleted), while keeping any post-close
+  // records the local device may have added after the close epoch.
+  const _yearCloseCollectionKeys = [
+    ['mfg_pro_pkr',                'mfg_pro_pkr'],
+    ['customer_sales',             'customer_sales'],
+    ['noman_history',              'noman_history'],
+    ['rep_sales',                  'rep_sales'],
+    ['payment_transactions',       'payment_transactions'],
+    ['factory_production_history', 'factory_production_history'],
+    ['stock_returns',              'stock_returns'],
+    ['expenses',                   'expenses'],
+  ];
+  const _applyYearCloseCompaction = (localArr, cloudArr) => {
+    if (!Array.isArray(cloudArr) || cloudArr.length === 0) return localArr;
+    const cloudAllMerged = cloudArr.every(r => r.isMerged === true);
+    if (cloudAllMerged) {
+      // YEAR-CLOSE direction: cloud has only merged records; drop local non-merged originals
+      // that the closing device deleted from Firestore.
+      const cloudIds = new Set(cloudArr.map(r => String(r.id)));
+      return localArr.filter(r => {
+        if (!r || !r.id) return false;
+        if (cloudIds.has(String(r.id))) return true;   // present in cloud — keep
+        if (r.isMerged === true) return false;          // merged record NOT in cloud — stale, drop
+        // Non-merged record absent from cloud: keep (it is a post-close record on this device).
+        return true;
+      });
+    }
+    // RESTORE direction: cloud has only non-merged (original) records. If local still
+    // has merged records for the same collection, they represent a year-close that has now
+    // been reversed — drop them so the restore propagates correctly to this device.
+    const cloudNoneMerged = cloudArr.every(r => r.isMerged !== true);
+    const localHasMerged  = localArr.some(r => r && r.isMerged === true);
+    if (cloudNoneMerged && localHasMerged && cloudArr.length > 0) {
+      const cloudIds = new Set(cloudArr.map(r => String(r.id)));
+      return localArr.filter(r => {
+        if (!r || !r.id) return false;
+        if (cloudIds.has(String(r.id))) return true;   // in cloud — keep
+        if (r.isMerged === true) return false;          // local merged record absent from cloud — drop (restore reversed it)
+        return true;                                    // non-merged post-restore record — keep
+      });
+    }
+    return localArr; // Normal delta sync — no compaction/restore adjustment needed.
+  };
+
+  // Apply compaction filter before mergeArrays so mergeArrays doesn't re-add dropped records.
+  const _preFilter = {};
+  for (const [localKey, cloudKey] of _yearCloseCollectionKeys) {
+    const localArr = ensureArray(_localBatch.get(localKey));
+    const cloudArr = data[cloudKey] || [];
+    _preFilter[localKey] = _applyYearCloseCompaction(localArr, cloudArr);
+  }
+
+  const _m = (key, col, cloudKey) =>
+    mergeArrays(
+      ensureArray(_preFilter[key] !== undefined ? _preFilter[key] : _localBatch.get(key)),
+      data[cloudKey] || [],
+      col
+    ).filter(_notDeleted);
   const _merged = {
   mfg_pro_pkr:                _m('mfg_pro_pkr',                'production',       'mfg_pro_pkr'),
   customer_sales:             _m('customer_sales',             'sales',             'customer_sales'),
@@ -2354,8 +2488,61 @@ async function _syncSettings(cloudData) {
   if (settingsSnap && settingsSnap.exists) {
     const sd = settingsSnap.data();
     if (sd && sd.naswar_default_settings) {
-      defaultSettings = sd.naswar_default_settings;
-      await sqliteStore.set('naswar_default_settings', defaultSettings);
+      // BUG FIX: previously overwrote defaultSettings blindly with the cloud copy, ignoring
+      // timestamps. A device that just closed the year offline then came online would have its
+      // fyCloseCount / lastYearClosed* reset to 0/null by any connected device that pulled
+      // before the pending retry had a chance to push the new counter.
+      // Now: honour the naswar_default_settings_timestamp. Only apply the cloud FY fields when
+      // the cloud timestamp is strictly newer than our local one. Deep-merge so non-FY fields
+      // (like appMode, themePreference) still update normally.
+      const ct = sd.naswar_default_settings_timestamp || 0;
+      const lt = (await sqliteStore.get('naswar_default_settings_timestamp')) || 0;
+      const localSettings = (await sqliteStore.get('naswar_default_settings')) || {};
+      if (ct >= lt) {
+        // Cloud is newer or same age — take cloud value but preserve any locally-higher fyCloseCount
+        // to guard against replication lag where two devices closed in rapid succession.
+        const cloudFy = sd.naswar_default_settings;
+        const mergedFy = {
+          ...localSettings,
+          ...cloudFy,
+          // Always keep the higher fyCloseCount between cloud and local.
+          fyCloseCount: Math.max(
+            typeof cloudFy.fyCloseCount  === 'number' ? cloudFy.fyCloseCount  : 0,
+            typeof localSettings.fyCloseCount === 'number' ? localSettings.fyCloseCount : 0
+          ),
+          // Keep the most recent lastYearClosedAt.
+          lastYearClosedAt: Math.max(
+            cloudFy.lastYearClosedAt   || 0,
+            localSettings.lastYearClosedAt || 0
+          ) || null,
+          lastYearClosedDate: (
+            (cloudFy.lastYearClosedAt || 0) >= (localSettings.lastYearClosedAt || 0)
+              ? cloudFy.lastYearClosedDate
+              : localSettings.lastYearClosedDate
+          ) || null,
+        };
+        defaultSettings = mergedFy;
+        await sqliteStore.setBatch([
+          ['naswar_default_settings', defaultSettings],
+          ['naswar_default_settings_timestamp', ct || Date.now()],
+        ]);
+      } else {
+        // Local is strictly newer — keep it, but still update non-FY cloud fields that local
+        // may not have (e.g. settings written by another device for a different key).
+        const cloudFy = sd.naswar_default_settings;
+        const mergedFy = {
+          ...cloudFy,
+          ...localSettings,
+          // Always keep the higher fyCloseCount.
+          fyCloseCount: Math.max(
+            typeof cloudFy.fyCloseCount  === 'number' ? cloudFy.fyCloseCount  : 0,
+            typeof localSettings.fyCloseCount === 'number' ? localSettings.fyCloseCount : 0
+          ),
+        };
+        defaultSettings = mergedFy;
+        await sqliteStore.set('naswar_default_settings', defaultSettings);
+        // Do NOT update the local timestamp — local is already newer.
+      }
     }
 
     if (sd && sd.repProfile) {

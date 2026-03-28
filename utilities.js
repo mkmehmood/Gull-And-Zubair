@@ -1581,6 +1581,130 @@ console.warn('[cleanupOldDeletions] cloud cleanup failed, will retry when online
 }
 }
 
+// ── Pre-close inline panel builder ────────────────────────────────────────
+async function _buildPreclosePanel(record, type, panelId) {
+  const ms  = record.mergedSummary || {};
+  const dr  = ms.dateRange || {};
+  const fmt = async (v) => (v != null && v !== '' && !isNaN(Number(v))) ? await formatCurrency(v) : '—';
+  const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'2-digit'}) : '—';
+  const row = (label, v, cls) =>
+    `<div class="txn-preclose-row"><span class="txn-preclose-label">${label}</span><span class="txn-preclose-val${cls ? ' '+cls : ''}">${v}</span></div>`;
+  const sec = (t) => `<div class="txn-preclose-section">${t}</div>`;
+
+  const fromDate = fmtDate(dr.from);
+  const toDate   = fmtDate(dr.to);
+  const recCount = ms.recordCount || record.mergedRecordCount || '—';
+
+  let html = sec('📅 Year-Close Overview');
+  html += row('Period',          `${fromDate} → ${toDate}`, 'muted');
+  html += row('Transactions',    `${recCount} merged`, 'purple');
+  html += row('Merge Date',      fmtDate(record.date), 'muted');
+
+  if (type === 'sale') {
+    const storeLabel = typeof getStoreLabel === 'function'
+      ? getStoreLabel(record.supplyStore || 'STORE_A') : (record.supplyStore || '—');
+
+    if (record.quantity > 0 || record.totalValue > 0) {
+      html += sec('Sales Volume');
+      if (record.quantity > 0)   html += row('Total Quantity',  `${safeToFixed(record.quantity, 2)} kg`);
+      if (record.unitPrice > 0)  html += row('Unit Price',      `${await fmt(record.unitPrice)}/kg`);
+      if (record.supplyStore)    html += row('Supply Store',    storeLabel, 'muted');
+      html += row('Gross Sale Value', await fmt(record.totalValue));
+    }
+
+    html += sec('Sales Breakdown');
+    if (ms.cashSales    != null) html += row('Cash Sales',         await fmt(ms.cashSales),    'green');
+    if (ms.unpaidCredit  > 0)    html += row('Credit (Unpaid)',    await fmt(ms.unpaidCredit), 'red');
+    if (ms.oldDebt       > 0)    html += row('Old Debt Carried',  await fmt(ms.oldDebt),      'warn');
+
+    html += sec('Payments & Collections');
+    if (ms.collectionsReceived > 0) html += row('Collections Received', await fmt(ms.collectionsReceived), 'green');
+    if (ms.partialPayments     > 0) html += row('Partial Payments',     await fmt(ms.partialPayments),     'green');
+    if (ms.advanceCreditHeld   > 0) html += row('Advance Held',         await fmt(ms.advanceCreditHeld),   'green');
+    if (record.partialPaymentReceived > 0)
+                                    html += row('Total Paid So Far',    await fmt(record.partialPaymentReceived), 'green');
+    if (ms.grossOutstanding    > 0) html += row('Gross Outstanding',    await fmt(ms.grossOutstanding), 'red');
+    const netOut = ms.netOutstanding != null ? ms.netOutstanding : (record.creditValue || 0);
+    html += row('Net Outstanding', await fmt(netOut), netOut <= 0.01 ? 'green' : 'red');
+
+    html += sec('Profitability');
+    if (record.totalCost > 0)         html += row('Total Cost',        await fmt(record.totalCost),       'red');
+    if (ms.realizedProfit   != null)   html += row('Realized Profit',  await fmt(ms.realizedProfit),      ms.realizedProfit   >= 0 ? 'green' : 'red');
+    if (ms.unrealizedProfit != null && ms.unrealizedProfit !== 0)
+                                       html += row('Unrealized Profit', await fmt(ms.unrealizedProfit),   'warn');
+    if (record.profit != null) {
+      const pSign = record.profit < 0 ? '− ' : '';
+      html += row('Total Profit', `${pSign}${await fmt(Math.abs(record.profit))}`, record.profit >= 0 ? 'green' : 'red');
+    }
+
+    html += sec('Status');
+    const settled = ms.isSettled || netOut <= 0.01;
+    html += row('Settlement', settled ? '✓ Fully Settled' : '⏳ Outstanding', settled ? 'green' : 'red');
+    if (record.creditReceivedDate) html += row('Settled On', fmtDate(record.creditReceivedDate), 'muted');
+    html += row('Payment Type', record.paymentType || '—', 'muted');
+    if (record.salesRep && record.salesRep !== 'NONE' && record.salesRep !== 'ADMIN')
+      html += row('Sales Rep', esc(record.salesRep), 'muted');
+  }
+
+  if (type === 'entity') {
+    const isOut  = record.type === 'OUT';
+    const netBal = ms.netBalance != null ? ms.netBalance : (isOut ? -record.amount : record.amount);
+    const netLbl = netBal >= 0 ? 'Receivable' : 'Payable';
+
+    html += sec('Payment Breakdown');
+    if (ms.originalIn  != null) html += row('Total Payments IN',  await fmt(ms.originalIn),  'green');
+    if (ms.originalOut != null) html += row('Total Payments OUT', await fmt(ms.originalOut), 'red');
+    html += row('Net Balance',        `${await fmt(Math.abs(netBal))} (${netLbl})`, netBal >= 0 ? 'green' : 'red');
+    html += row('Carried Forward As', `${await fmt(record.amount)} ${isOut ? 'Payable' : 'Receivable'}`);
+    if (ms.hasSupplierMaterials) html += row('Note', 'Includes supplier material payments', 'muted');
+
+    html += sec('Details');
+    html += row('Type',   record.type === 'OUT' ? 'Payment OUT' : 'Payment IN', isOut ? 'red' : 'green');
+    html += row('Amount', await fmt(record.amount));
+    if (record.description) html += row('Description', esc(record.description), 'muted');
+  }
+
+  if (record.notes) {
+    html += `<div style="margin-top:8px;font-size:0.67rem;color:var(--text-muted);font-style:italic;line-height:1.5;border-top:1px solid rgba(175,82,222,0.1);padding-top:8px;">${esc(record.notes)}</div>`;
+  }
+
+  return `<div class="txn-preclose-panel" id="${panelId}">
+    <div class="txn-preclose-title">Pre-Close Year Data</div>
+    ${html}
+  </div>`;
+}
+
+// Toggle an inline preclose panel; builds content on first open
+async function _togglePreclosePanel(btn, panelId, recordId, storeKey, type) {
+  const panel = document.getElementById(panelId);
+  if (!panel) return;
+  const isOpen = panel.classList.contains('open');
+  if (isOpen) {
+    panel.classList.remove('open');
+    btn.classList.remove('active');
+    return;
+  }
+  // Build content if not yet done
+  if (!panel.dataset.built) {
+    try {
+      const store = ensureArray(await sqliteStore.get(storeKey));
+      const rec   = store.find(x => String(x.id) === String(recordId));
+      if (rec) {
+        const inner = await _buildPreclosePanel(rec, type, panelId);
+        // inner is a full div — extract body
+        const tmp = document.createElement('div');
+        tmp.innerHTML = inner;
+        const built = tmp.firstElementChild;
+        panel.innerHTML = built ? built.innerHTML : '';
+        panel.dataset.built = '1';
+      }
+    } catch(e) { console.warn('preclose panel build error', e); }
+  }
+  panel.classList.add('open');
+  btn.classList.add('active');
+}
+// ── End pre-close inline panel ─────────────────────────────────────────────
+
 async function openEntityDetailsOverlay(id) {
 const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
 const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
@@ -1700,20 +1824,30 @@ const colorClass = isOut ? 'cost-val' : 'profit-val';
 const badgeBg = isOut ? 'rgba(220, 38, 38, 0.1)' : 'rgba(5, 150, 105, 0.1)';
 const badgeColor = isOut ? 'var(--danger)' : 'var(--accent-emerald)';
 const label = isOut ? 'PAYMENT OUT' : 'PAYMENT IN';
+const safeId = String(t.id).replace(/'/g, "\\'");
 const item = document.createElement('div');
 item.className = `cust-history-item${t.isSettled ? ' is-settled-record' : ''}`;
+item.style.flexDirection = 'column';
+item.style.alignItems = 'stretch';
 item.innerHTML = `
-<div class="cust-history-info">
-<div class="u-mono-bold" >${formatDisplayDate(t.date)}</div>
-<div class="u-fs-sm2 u-text-muted" >${esc(t.description || 'No description')}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(t) : ''}</div>
-${t.isMerged ? _mergedBadgeHtml(t) : ''}
+<div class="txn-card-row">
+  <div class="cust-history-info">
+    <div class="u-mono-bold">${formatDisplayDate(t.date)}</div>
+    <div class="u-fs-sm2 u-text-muted">${esc(t.description || 'No description')}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(t) : ''}</div>
+    ${t.isMerged ? _mergedBadgeHtml(t) : ''}
+  </div>
+  <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+    <div style="text-align:right;">
+      <span style="background:${badgeBg};color:${badgeColor};padding:2px 6px;border-radius:4px;font-size:0.65rem;font-weight:700;">${label}</span>
+      <div class="${colorClass}" style="font-size:0.9rem;margin-top:2px;">${fmtAmt(t.amount)}</div>
+    </div>
+    ${t.isMerged
+      ? `<button class="txn-kebab-btn" title="View pre-close details" onclick="_togglePreclosePanel(this,'ep-${t.id}','${safeId}','payment_transactions','entity')">⋮</button>`
+      : `<button class="btn btn-sm btn-danger u-p-4-8" onclick="deleteEntityTransaction('${esc(t.id)}')">⌫</button>`
+    }
+  </div>
 </div>
-<div style="text-align:right; margin-right:10px;">
-<span style="background:${badgeBg}; color:${badgeColor}; padding:2px 6px; border-radius:4px; font-size:0.65rem; font-weight:700;">${label}</span>
-<div class="${colorClass}" style="font-size:0.9rem; margin-top:2px;">${fmtAmt(t.amount)}</div>
-</div>
-${t.isMerged ? '' : `<button class="btn btn-sm btn-danger u-p-4-8" onclick="deleteEntityTransaction('${esc(t.id)}')">⌫</button>`}
-`;
+${t.isMerged ? `<div class="txn-preclose-panel" id="ep-${t.id}"></div>` : ''}`;
 _entityFrag.appendChild(item);
 });
 list.replaceChildren(_entityFrag);
@@ -1724,7 +1858,8 @@ const term = document.getElementById('entity-trans-search').value.toLowerCase();
 const items = document.querySelectorAll('#entityManagementHistoryList .cust-history-item');
 items.forEach(item => {
 const text = item.innerText.toLowerCase();
-item.style.display = text.includes(term) ? 'flex' : 'none';
+if (!text.includes(term)) { item.style.display = 'none'; return; }
+item.style.display = item.style.flexDirection === 'column' ? 'flex' : 'flex';
 });
 }
 
@@ -7140,32 +7275,107 @@ const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventor
 const factoryProductionHistory = ensureArray(await sqliteStore.get('factory_production_history'));
 const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
 const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
-const factoryDefaultFormulas = (await sqliteStore.get('factory_default_formulas')) || {};
-const factoryAdditionalCosts = (await sqliteStore.get('factory_additional_costs')) || {};
-const factorySalePrices = (await sqliteStore.get('factory_sale_prices')) || {};
-const factoryCostAdjustmentFactor = (await sqliteStore.get('factory_cost_adjustment_factor')) || {};
-const factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {};
+const currentDb = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
+const currentSalesHistory = ensureArray(await sqliteStore.get('noman_history'));
+let factoryDefaultFormulas = (await sqliteStore.get('factory_default_formulas')) || {};
+let factoryAdditionalCosts = (await sqliteStore.get('factory_additional_costs')) || {};
+let factorySalePrices = (await sqliteStore.get('factory_sale_prices')) || {};
+let factoryCostAdjustmentFactor = (await sqliteStore.get('factory_cost_adjustment_factor')) || {};
+let factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {};
   data = normaliseBackupFields(data);
   showToast('↩ Reversing financial year close — replacing data...', 'info', 5000);
+
+  // Tombstone all current merged records (created by THIS year-close) so they
+  // can never be resurrected by cloud sync.  Records whose IDs already appear
+  // in the backup are pre-existing and must NOT be tombstoned.
+  const _backupIds = new Set([
+    ...ensureArray(data.mfg || data.mfg_pro_pkr),
+    ...ensureArray(data.sales || data.noman_history),
+    ...ensureArray(data.customerSales),
+    ...ensureArray(data.repSales),
+    ...ensureArray(data.paymentTransactions),
+    ...ensureArray(data.factoryProductionHistory),
+    ...ensureArray(data.stockReturns),
+    ...ensureArray(data.expenses),
+  ].filter(r => r && r.id).map(r => String(r.id)));
+
+  const _mergedToTombstone = [
+    ...ensureArray(currentDb),
+    ...ensureArray(currentSalesHistory),
+    ...ensureArray(customerSales),
+    ...ensureArray(repSales),
+    ...ensureArray(paymentTransactions),
+    ...ensureArray(factoryProductionHistory),
+    ...ensureArray(stockReturns),
+    ...ensureArray(expenseRecords),
+  ].filter(r => r && r.id && r.isMerged === true && !_backupIds.has(String(r.id)));
+
+  if (_mergedToTombstone.length > 0) {
+    _mergedToTombstone.forEach(r => deletedRecordIds.add(String(r.id)));
+    await sqliteStore.set('deleted_records', Array.from(deletedRecordIds));
+  }
+
   const isAlive = honourPostCloseDeletions
     ? (item) => item && item.id && !deletedRecordIds.has(item.id)
     : (item) => item && item.id;
+
   const _ycRepNameSet = new Set((Array.isArray(salesRepsList) ? salesRepsList : []).map(r => r.toLowerCase()));
-const _ycNotRepName = (c) => !c || !c.name || !_ycRepNameSet.has(c.name.toLowerCase());
-const replaceData = {
-    mfg_pro_pkr:                ensureArray(data.mfg || data.mfg_pro_pkr).filter(isAlive),
-    noman_history:              ensureArray(data.sales || data.noman_history).filter(isAlive),
-    customer_sales:             ensureArray(data.customerSales).filter(isAlive),
-    rep_sales:                  ensureArray(data.repSales).filter(isAlive),
+  const _ycNotRepName = (c) => !c || !c.name || !_ycRepNameSet.has(c.name.toLowerCase());
+
+  // Records created AFTER the backup was taken are new post-close entries —
+  // they must survive the restore unchanged.  Records at or before the backup
+  // timestamp belong to the closed year and are fully replaced by the backup.
+  const _backupCreatedAt = (data._meta && data._meta.createdAt) || 0;
+  const _recTs = r => r.createdAt || r.timestamp || 0;
+  const _isPostClose  = r => r && r.id && _recTs(r) > _backupCreatedAt;
+
+  // Helper: from a current collection keep only genuine post-close records:
+  //  - created after the backup timestamp (truly new)
+  //  - not a merged record from THIS year-close (those are tombstoned above)
+  //  - alive (not deleted) and not already in the backup (no duplicate risk)
+  const _postCloseKeep = (current, backupArr) => {
+    const backupIdSet = new Set(ensureArray(backupArr).filter(r => r && r.id).map(r => String(r.id)));
+    return ensureArray(current).filter(r =>
+      isAlive(r) &&
+      _isPostClose(r) &&
+      !backupIdSet.has(String(r.id)) &&
+      !(r.isMerged === true && !_backupIds.has(String(r.id)))
+    );
+  };
+
+  const replaceData = {
+    mfg_pro_pkr:                [...ensureArray(data.mfg || data.mfg_pro_pkr).filter(isAlive),
+                                  ..._postCloseKeep(currentDb, data.mfg || data.mfg_pro_pkr)],
+    noman_history:              [...ensureArray(data.sales || data.noman_history).filter(isAlive),
+                                  ..._postCloseKeep(currentSalesHistory, data.sales || data.noman_history)],
+    customer_sales:             [...ensureArray(data.customerSales).filter(isAlive),
+                                  ..._postCloseKeep(customerSales, data.customerSales)],
+    rep_sales:                  [...ensureArray(data.repSales).filter(isAlive),
+                                  ..._postCloseKeep(repSales, data.repSales)],
     rep_customers:              mergeDatasets(ensureArray(data.repCustomers).filter(isAlive), ensureArray(repCustomers || []).filter(isAlive)),
     sales_customers:            mergeDatasets(ensureArray(data.salesCustomers).filter(isAlive).filter(_ycNotRepName), ensureArray(salesCustomers || []).filter(isAlive).filter(_ycNotRepName)),
     factory_inventory_data:     ensureArray(data.factoryInventoryData).filter(isAlive),
-    factory_production_history: ensureArray(data.factoryProductionHistory).filter(isAlive),
-    stock_returns:              ensureArray(data.stockReturns).filter(isAlive),
-    payment_transactions:       ensureArray(data.paymentTransactions).filter(isAlive),
+    factory_production_history: [...ensureArray(data.factoryProductionHistory).filter(isAlive),
+                                  ..._postCloseKeep(factoryProductionHistory, data.factoryProductionHistory)],
+    stock_returns:              [...ensureArray(data.stockReturns).filter(isAlive),
+                                  ..._postCloseKeep(stockReturns, data.stockReturns)],
+    payment_transactions:       [...ensureArray(data.paymentTransactions).filter(isAlive),
+                                  ..._postCloseKeep(paymentTransactions, data.paymentTransactions)],
     payment_entities:           ensureArray(data.paymentEntities).filter(isAlive),
-    expenses:                   mergeDatasets(ensureArray(data.expenses).filter(isAlive), ensureArray(expenseRecords || []).filter(isAlive))
+    expenses:                   [...ensureArray(data.expenses).filter(isAlive),
+                                  ..._postCloseKeep(expenseRecords, data.expenses)],
   };
+
+  // Deduplicate each collection by id, favouring the backup record on conflict
+  const _dedupReplace = (arr) => {
+    const map = new Map();
+    ensureArray(arr).forEach(r => { if (r && r.id) map.set(String(r.id), r); });
+    return Array.from(map.values());
+  };
+  for (const key of Object.keys(replaceData)) {
+    replaceData[key] = _dedupReplace(replaceData[key]);
+  }
+
   await sqliteStore.setBatch([
     ['mfg_pro_pkr',                replaceData.mfg_pro_pkr],
     ['noman_history',              replaceData.noman_history],
@@ -7180,6 +7390,69 @@ const replaceData = {
     ['payment_entities',           replaceData.payment_entities],
     ['expenses',                   replaceData.expenses],
   ]);
+
+  // ── Reset DeltaSync for every restored collection so cloud sync treats
+  //    the tombstoned merged records as already-deleted and never re-pushes them.
+  try {
+    const _restoreDeltaMap = {
+      production:          replaceData.mfg_pro_pkr,
+      sales:               replaceData.customer_sales,
+      calculator_history:  replaceData.noman_history,
+      rep_sales:           replaceData.rep_sales,
+      rep_customers:       replaceData.rep_customers,
+      sales_customers:     replaceData.sales_customers,
+      inventory:           replaceData.factory_inventory_data,
+      factory_history:     replaceData.factory_production_history,
+      returns:             replaceData.stock_returns,
+      transactions:        replaceData.payment_transactions,
+      entities:            replaceData.payment_entities,
+      expenses:            replaceData.expenses,
+    };
+    for (const [deltaName, records] of Object.entries(_restoreDeltaMap)) {
+      if (typeof DeltaSync !== 'undefined') {
+        DeltaSync.clearDirty(deltaName);
+        await DeltaSync.setLastSyncTimestamp(deltaName);
+        // Mark every tombstoned merged ID as already uploaded+downloaded
+        // so DeltaSync never queues them for re-push from cloud
+        _mergedToTombstone.forEach(r => {
+          DeltaSync.markUploaded(deltaName, r.id);
+          DeltaSync.markDownloaded(deltaName, r.id);
+        });
+        // Mark the restored records as clean
+        ensureArray(records).forEach(r => {
+          if (r && r.id) {
+            DeltaSync.markUploaded(deltaName, r.id);
+            DeltaSync.markDownloaded(deltaName, r.id);
+          }
+        });
+      }
+    }
+  } catch(_dsErr) { console.warn('DeltaSync reset after restore failed:', _safeErr(_dsErr)); }
+
+  // ── Sync in-memory JS globals so UI re-renders immediately with correct data
+  //    without waiting for a full loadAllData() cloud round-trip.
+  try {
+    if (typeof customerSales !== 'undefined' && Array.isArray(customerSales)) {
+      customerSales.length = 0;
+      replaceData.customer_sales.forEach(r => customerSales.push(r));
+    }
+    if (typeof repSales !== 'undefined' && Array.isArray(repSales)) {
+      repSales.length = 0;
+      replaceData.rep_sales.forEach(r => repSales.push(r));
+    }
+    if (typeof paymentTransactions !== 'undefined' && Array.isArray(paymentTransactions)) {
+      paymentTransactions.length = 0;
+      replaceData.payment_transactions.forEach(r => paymentTransactions.push(r));
+    }
+    if (typeof paymentEntities !== 'undefined' && Array.isArray(paymentEntities)) {
+      paymentEntities.length = 0;
+      replaceData.payment_entities.forEach(r => paymentEntities.push(r));
+    }
+    if (typeof expenseRecords !== 'undefined' && Array.isArray(expenseRecords)) {
+      expenseRecords.length = 0;
+      replaceData.expenses.forEach(r => expenseRecords.push(r));
+    }
+  } catch(_memErr) { console.warn('In-memory sync after restore failed:', _safeErr(_memErr)); }
   const settingsTimestamp = Date.now();
   if (data.factoryDefaultFormulas) { await sqliteStore.set('factory_default_formulas', data.factoryDefaultFormulas); await sqliteStore.set('factory_default_formulas_timestamp', settingsTimestamp); factoryDefaultFormulas = data.factoryDefaultFormulas; }
   if (data.factoryAdditionalCosts) { await sqliteStore.set('factory_additional_costs', data.factoryAdditionalCosts); await sqliteStore.set('factory_additional_costs_timestamp', settingsTimestamp); factoryAdditionalCosts = data.factoryAdditionalCosts; }
@@ -7194,14 +7467,27 @@ const replaceData = {
     currentSettings.lastYearClosedDate = snap.lastYearClosedDate ?? null;
     currentSettings.pendingFirestoreYearClose = false;
     pendingFirestoreYearClose = false;
+    // BUG FIX: write a fresh timestamp so connected devices' _syncSettings timestamp-guard
+    // lets the restored FY counter through (previously the timestamp was never updated here).
+    const _restoreMetaTs = Date.now();
     await sqliteStore.set('naswar_default_settings', currentSettings);
+    await sqliteStore.set('naswar_default_settings_timestamp', _restoreMetaTs);
     await sqliteStore.set('pendingFirestoreYearClose', false);
     defaultSettings = currentSettings;
     if (firebaseDB && currentUser) {
       try {
         await firebaseDB.collection('users').doc(currentUser.uid)
           .collection('settings').doc('config')
-          .set({ naswar_default_settings: { fyCloseCount: currentSettings.fyCloseCount, lastYearClosedAt: currentSettings.lastYearClosedAt, lastYearClosedDate: currentSettings.lastYearClosedDate } }, { merge: true });
+          .set({
+            naswar_default_settings: {
+              fyCloseCount:      currentSettings.fyCloseCount,
+              lastYearClosedAt:  currentSettings.lastYearClosedAt,
+              lastYearClosedDate:currentSettings.lastYearClosedDate
+            },
+            // Include timestamp so connected devices' guard lets the update through.
+            naswar_default_settings_timestamp: _restoreMetaTs
+          }, { merge: true });
+        if (typeof DeltaSync !== 'undefined') await DeltaSync.setLastSyncTimestamp('settings');
       } catch(e) { console.warn('Cloud FY meta reversal failed:', _safeErr(e)); }
     }
   } catch(metaErr) { console.warn('Could not reverse FY metadata:', _safeErr(metaErr)); }
