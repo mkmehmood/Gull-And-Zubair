@@ -4564,7 +4564,7 @@ for (const [store, items] of Object.entries(storeGroups)) {
     return acc;
   }, { net:0, totalCost:0, totalSale:0, profit:0, formulaUnits:0, formulaCost:0 });
   const avgCp = totals.net > 0 ? parseFloat((totals.totalCost / totals.net).toFixed(4)) : (items[0]?.cp || 0);
-  const canonicalSp = getSalePriceForStore(store);
+  const canonicalSp = await getSalePriceForStore(store);
   const avgSp = canonicalSp > 0 ? canonicalSp : (items[0]?.sp || 0);
   const allDates = items.map(i => i.date).filter(Boolean).sort();
   const mergedId = generateUUID('prod-merged');
@@ -4613,7 +4613,7 @@ for (const [, grp] of Object.entries(sellerReturnGroups)) {
     totalProfit += (item.profit    || 0);
   });
   const avgCp = totalNet > 0 ? parseFloat((totalCost / totalNet).toFixed(4)) : (items[0]?.cp || 0);
-  const canonicalSpRet = getSalePriceForStore(store);
+  const canonicalSpRet = await getSalePriceForStore(store);
   const avgSp = canonicalSpRet > 0 ? canonicalSpRet : (items[0]?.sp || 0);
   const allDates = items.map(i => i.date).filter(Boolean).sort();
   const mergedId = generateUUID('ret-merged');
@@ -4654,7 +4654,7 @@ if (firebaseDB && currentUser) {
   const userRef = firebaseDB.collection('users').doc(currentUser.uid);
   const commitResult = await _commitMergedBatch(userRef, 'production', mergedRecords);
   if (!commitResult.ok) {
-    console.warn(`mergeProductionData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, commitResult.error);
+    console.warn(`mergeProductionData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, _safeErr(commitResult.error));
     _markRowSyncWarning('prod', commitResult);
   }
 }
@@ -4743,7 +4743,7 @@ for (const [customer, b] of Object.entries(customerBuckets)) {
   const recordCount = sales.length + (oldDebt > 0 ? 1 : 0) + (collectionTotal > 0 ? 1 : 0);
   const mergedId = generateUUID('sale-merged');
   const _mergedSupplyStore = supplyStore || firstItem.supplyStore || 'STORE_A';
-  const canonicalUnitPrice = getEffectiveSalePriceForCustomer(customer, _mergedSupplyStore);
+  const canonicalUnitPrice = await getEffectiveSalePriceForCustomer(customer, _mergedSupplyStore);
   const lastUnitPrice = canonicalUnitPrice > 0
     ? canonicalUnitPrice
     : (firstItem.unitPrice || (firstItem.quantity > 0 ? firstItem.totalValue / firstItem.quantity : 0) || 0);
@@ -4798,7 +4798,7 @@ if (firebaseDB && currentUser) {
   const userRef = firebaseDB.collection('users').doc(currentUser.uid);
   const commitResult = await _commitMergedBatch(userRef, 'sales', mergedRecords, d => !d.isMerged);
   if (!commitResult.ok) {
-    console.warn(`mergeSalesData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, commitResult.error);
+    console.warn(`mergeSalesData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, _safeErr(commitResult.error));
     _markRowSyncWarning('sales', commitResult);
   }
 }
@@ -4853,7 +4853,7 @@ for (const [seller, items] of Object.entries(repGroups)) {
     return acc;
   }, { totalSold:0, returned:0, netSold:0, creditQty:0, cashQty:0, revenue:0, profit:0, totalCost:0, creditValue:0, prevColl:0, received:0, totalExpected:0, returnsByStore:{} });
   const mergedNetSold = sellerTotals.totalSold - sellerTotals.returned;
-  const _calcCanonicalSp = getSalePriceForStore('STORE_A');
+  const _calcCanonicalSp = await getSalePriceForStore('STORE_A');
   const avgUnitPrice = _calcCanonicalSp > 0
     ? _calcCanonicalSp
     : (firstItem.unitPrice || 0);
@@ -4900,7 +4900,7 @@ if (firebaseDB && currentUser) {
   const userRef = firebaseDB.collection('users').doc(currentUser.uid);
   const commitResult = await _commitMergedBatch(userRef, 'calculator_history', mergedRecords);
   if (!commitResult.ok) {
-    console.warn(`mergeCalculatorData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, commitResult.error);
+    console.warn(`mergeCalculatorData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, _safeErr(commitResult.error));
     _markRowSyncWarning('calc', commitResult);
   }
 }
@@ -4980,7 +4980,7 @@ if (firebaseDB && currentUser) {
   const userRef = firebaseDB.collection('users').doc(currentUser.uid);
   const commitResult = await _commitMergedBatch(userRef, 'transactions', mergedRecords);
   if (!commitResult.ok) {
-    console.warn(`mergePaymentData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, commitResult.error);
+    console.warn(`mergePaymentData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, _safeErr(commitResult.error));
     _markRowSyncWarning('pay', commitResult);
   }
 }
@@ -5052,7 +5052,7 @@ if (firebaseDB && currentUser) {
   const userRef = firebaseDB.collection('users').doc(currentUser.uid);
   const commitResult = await _commitMergedBatch(userRef, 'factory_history', mergedRecords);
   if (!commitResult.ok) {
-    console.warn(`mergeFactoryData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, commitResult.error);
+    console.warn(`mergeFactoryData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, _safeErr(commitResult.error));
     _markRowSyncWarning('factory', commitResult);
   }
 }
@@ -5146,7 +5146,7 @@ for (const [, b] of Object.entries(repBuckets)) {
   const recordCount = sales.length + (oldDebt > 0 ? 1 : 0) + (collectionTotal > 0 ? 1 : 0);
   const mergedId = generateUUID('sale-merged');
   const _repMergedStore = supplyStore || firstItem.supplyStore || 'STORE_A';
-  const repCanonicalPrice = getSalePriceForStore(_repMergedStore);
+  const repCanonicalPrice = await getSalePriceForStore(_repMergedStore);
   const lastUnitPrice = repCanonicalPrice > 0
     ? repCanonicalPrice
     : (firstItem.unitPrice || (firstItem.quantity > 0 ? firstItem.totalValue / firstItem.quantity : 0) || 0);
@@ -5200,7 +5200,7 @@ if (firebaseDB && currentUser) {
   const userRef = firebaseDB.collection('users').doc(currentUser.uid);
   const commitResult = await _commitMergedBatch(userRef, 'rep_sales', mergedRecords, d => !d.isMerged);
   if (!commitResult.ok) {
-    console.warn(`mergeRepSalesData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, commitResult.error);
+    console.warn(`mergeRepSalesData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, _safeErr(commitResult.error));
     _markRowSyncWarning('repsales', commitResult);
   }
 }
@@ -5269,7 +5269,7 @@ if (firebaseDB && currentUser) {
   const userRef = firebaseDB.collection('users').doc(currentUser.uid);
   const commitResult = await _commitMergedBatch(userRef, 'expenses', mergedRecords, d => !d.isMerged);
   if (!commitResult.ok) {
-    console.warn(`mergeExpensesData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, commitResult.error);
+    console.warn(`mergeExpensesData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, _safeErr(commitResult.error));
     _markRowSyncWarning('exp', commitResult);
   }
 }
@@ -5345,7 +5345,7 @@ if (firebaseDB && currentUser) {
   const userRef = firebaseDB.collection('users').doc(currentUser.uid);
   const commitResult = await _commitMergedBatch(userRef, 'returns', mergedRecords, d => !d.isMerged);
   if (!commitResult.ok) {
-    console.warn(`mergeStockReturnsData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, commitResult.error);
+    console.warn(`mergeStockReturnsData: Firestore commit partial failure — ${commitResult.batchesFailed}/${commitResult.batchesTotal} batch(es) failed`, _safeErr(commitResult.error));
     _markRowSyncWarning('ret', commitResult);
   }
 }
@@ -11297,8 +11297,8 @@ await sqliteStore.set('deletion_records', _deduped);
 await sqliteStore.set('deleted_records', Array.from(deletedRecordIds));
 triggerAutoSync();
 
-uploadDeletionToCloud(deletionRecord).catch(e => console.warn('[registerDeletion] cloud upload failed:', e));
-cleanupOldDeletions().catch(e => console.warn('[registerDeletion] cleanup failed:', e));
+uploadDeletionToCloud(deletionRecord).catch(e => console.warn('[registerDeletion] cloud upload failed:', _safeErr(e)));
+cleanupOldDeletions().catch(e => console.warn('[registerDeletion] cleanup failed:', _safeErr(e)));
 }
 
 async function _captureRecordSnapshot(id, collectionName) {
@@ -12146,7 +12146,7 @@ async function _exportDocAsImageAndOpenWhatsApp(doc, phone, filenameBase) {
         showToast('Share cancelled', 'info');
         return;
       }
-      console.warn('[PDF share] Web Share failed, falling back to download:', err);
+      console.warn('[PDF share] Web Share failed, falling back to download:', _safeErr(err));
     }
   }
 
@@ -14174,8 +14174,8 @@ const profit = totalValue - totalCost;
 const existingCustomer = customerSales.find(s => s && s.customerName && name && s.customerName.toLowerCase() === name.toLowerCase());
 let existingCredit = 0;
 if (existingCustomer) {
-customerSales.forEach(async sale => {
-if (!(sale && sale.customerName && name && sale.customerName.toLowerCase() === name.toLowerCase())) return;
+for (const sale of customerSales) {
+if (!(sale && sale.customerName && name && sale.customerName.toLowerCase() === name.toLowerCase())) continue;
 if (sale.transactionType === 'OLD_DEBT' && !sale.creditReceived) {
 existingCredit += (await getSaleTransactionValue(sale)) - (sale.partialPaymentReceived || 0);
 } else if (sale.paymentType === 'CREDIT' && !sale.creditReceived) {
@@ -14189,7 +14189,7 @@ existingCredit -= (sale.totalValue || 0);
 } else if (sale.paymentType === 'PARTIAL_PAYMENT') {
 existingCredit -= (sale.totalValue || 0);
 }
-});
+}
 existingCredit = Math.max(0, existingCredit);
 }
 if (paymentType === 'CREDIT') {
@@ -14887,7 +14887,7 @@ const originalOpenDataMenu = window.openDataMenu;
 window.openDataMenu = function() {
 if (typeof updateSyncButton === 'function') updateSyncButton();
 if (typeof performOneClickSync === 'function') {
-performOneClickSync().catch(e => console.error('[openDataMenu] sync error:', e));
+performOneClickSync().catch(e => console.error('[openDataMenu] sync error:', _safeErr(e)));
 } else if (typeof originalOpenDataMenu === 'function') {
 originalOpenDataMenu();
 }
@@ -16174,7 +16174,7 @@ if (totalItems === 0) {
 histContainer.replaceChildren(Object.assign(document.createElement('p'), {textContent:'No records found for this selection.',style:'text-align:center;color:var(--text-muted);width:100%;font-size:0.85rem'}));
 } else {
 const fragment = document.createDocumentFragment();
-filteredProduction.forEach(async item => {
+for (const item of filteredProduction) {
 const isSelected = item.date === selectedDate;
 const highlightClass = isSelected ? 'highlight-card' : '';
 const dateDisplay = isSelected ? `${formatDisplayDate(item.date)} (Selected)` : formatDisplayDate(item.date);
@@ -16222,7 +16222,7 @@ ${item.formulaCost && !item.isReturn ? `<p><span>Formula Cost:</span> <span clas
 ${item.isMerged ? '' : `<button class="tbl-action-btn danger u-w-full u-mt-8" onclick="(async () => { await deleteProdEntry('${esc(item.id)}') })()">Delete</button>`}
 `;
 fragment.appendChild(div);
-});
+}
 histContainer.replaceChildren(fragment);
 }
 const updateStats = (idPrefix, statObj) => {
@@ -17360,7 +17360,7 @@ await tabLoaders[tab]();
 notifyDataChange(tab);
 } catch(e) {
 if (e instanceof DOMException) return;
-console.warn('[showTab] tab load error:', e && e.message || e);
+console.warn('[showTab] tab load error:', _safeErr(e));
 }
 }, 50);
 }
@@ -17894,9 +17894,9 @@ let stdConsumed = 0, asaanConsumed = 0;
 let totalCost = 0, totalOutput = 0, totalProfit = 0;
 let totalSaleValue = 0, totalRawMatCost = 0;
 let totalRawUsed = 0;
-db.forEach(async entry => {
-if (entry.isReturn === true) return;
-if (!isInRange(entry.date)) return;
+for (const entry of db) {
+if (entry.isReturn === true) continue;
+if (!isInRange(entry.date)) continue;
 const formulaStore = (entry.formulaStore === 'asaan' || entry.store === 'STORE_C') ? 'asaan' : 'standard';
 const units = entry.formulaUnits || 0;
 if (formulaStore === 'asaan') asaanConsumed += units;
@@ -17908,7 +17908,7 @@ totalProfit += entry.profit || 0;
 totalRawMatCost += entry.formulaCost || entry.totalCost || 0;
 const weightPerUnit = await getWeightPerUnit(formulaStore);
 totalRawUsed += weightPerUnit * units;
-});
+}
 const totalConsumed = stdConsumed + asaanConsumed;
 const stdCostPerUnit = await getCostPerUnit('standard');
 const asaanCostPerUnit = await getCostPerUnit('asaan');
@@ -18674,7 +18674,7 @@ period.credit += item.totalValue;
 } else if(isRepLinked) {
 if (item.paymentType === 'CREDIT' && !item.creditReceived) {
 const partialPaid = item.partialPaymentReceived || 0;
-period.credit += (getSaleTransactionValue ? getSaleTransactionValue(item) : item.totalValue || 0) - partialPaid;
+period.credit += (getSaleTransactionValue ? await getSaleTransactionValue(item) : item.totalValue || 0) - partialPaid;
 } else if (item.paymentType === 'COLLECTION' || item.paymentType === 'PARTIAL_PAYMENT') {
 period.credit -= (item.totalValue || 0);
 }
@@ -18720,7 +18720,7 @@ if (totalItems === 0) {
 histContainer.replaceChildren(Object.assign(document.createElement('p'), {textContent:'No sales found.',style:'text-align:center;color:var(--text-muted);width:100%;font-size:0.85rem'}));
 } else {
 const fragment = document.createDocumentFragment();
-displayData.forEach(async item => {
+for (const item of displayData) {
 const isSelected = item.date === selectedDate;
 const highlightClass = isSelected ? 'highlight-card' : '';
 const dateDisplay = isSelected ? `${formatDisplayDate(item.date)} (Selected)` : formatDisplayDate(item.date);
@@ -18749,9 +18749,9 @@ let creditSection = '';
 if (!isOldDebtItem) {
 if (paymentType === 'CREDIT' && !creditReceived) {
 creditSection = `
-<div class="credit-checkbox-container" onclick="(async () => { await toggleCustomerCreditReceived('${esc(item.id)}', event) })()">
-<input type="checkbox" class="credit-checkbox" onclick="(async () => { await toggleCustomerCreditReceived(${item.id}, event); })()">
-<label class="credit-checkbox-label">Mark as Received</label>
+<div class="credit-checkbox-container" style="pointer-events:none;cursor:default;opacity:0.5;">
+<input type="checkbox" class="credit-checkbox" style="pointer-events:none;" disabled>
+<label class="credit-checkbox-label" style="pointer-events:none;">Mark as Received</label>
 </div>
 `;
 } else if (paymentType === 'CREDIT' && creditReceived) {
@@ -18801,7 +18801,7 @@ ${deleteBtnHtml}
 `;
 }
 fragment.appendChild(card);
-});
+}
 histContainer.replaceChildren(fragment);
 }
 const _custDate = (document.getElementById('cust-date') || {}).value || new Date().toISOString().split('T')[0];
@@ -19269,7 +19269,7 @@ hours = hours % 12;
 hours = hours ? hours : 12;
 const timeString = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')} ${ampm}`;
 const formulaStore = storeKey === 'STORE_C' ? 'asaan' : 'standard';
-const salePrice = getSalePriceForStore(storeKey);
+const salePrice = await getSalePriceForStore(storeKey);
 const costPerKg = getCostPriceForStore(storeKey);
 const totalCost = quantity * costPerKg;
 const totalSale = quantity * salePrice;
@@ -20220,7 +20220,7 @@ return;
 }
 const _phFrag = document.createDocumentFragment();
 const sortedTransactions = [...paymentTransactions].sort((a, b) => b.timestamp - a.timestamp);
-sortedTransactions.forEach(async transaction => {
+for (const transaction of sortedTransactions) {
 const entity = paymentEntities.find(e => String(e.id) === String(transaction.entityId));
 const badgeClass = transaction.type === 'IN' ? 'transaction-in' : 'transaction-out';
 const badgeText = transaction.type === 'IN' ? 'IN' : 'OUT';
@@ -20249,7 +20249,7 @@ ${creatorBadge}
 ${deleteButton}
 `;
 _phFrag.appendChild(card);
-});
+}
 if (sortedTransactions.length === 0) {
 historyList.replaceChildren(Object.assign(document.createElement('p'), {textContent:'No payment transactions found.',style:'text-align:center;color:var(--text-muted);width:100%;font-size:0.85rem'}));
 } else {
@@ -22378,7 +22378,7 @@ return;
 }
 if (typeof updateSyncButton === 'function') updateSyncButton();
 if (typeof performOneClickSync === 'function') {
-performOneClickSync().catch(e => console.error('[openDataMenu] sync error:', e));
+performOneClickSync().catch(e => console.error('[openDataMenu] sync error:', _safeErr(e)));
 }
 }
 
@@ -23499,7 +23499,7 @@ timeout: 60000
 await navigator.credentials.get({ publicKey });
 return true;
 } catch (err) {
-console.error('[BiometricAuth] authenticate error:', err.name, err.message);
+console.error('[BiometricAuth] authenticate error:', _safeErr(err));
 throw err;
 }
 }
@@ -26221,7 +26221,7 @@ ${deleteBtnHtml}
 } else {
 const _displayUnitPrice = (t.unitPrice && t.unitPrice > 0)
   ? t.unitPrice
-  : getEffectiveSalePriceForCustomer(t.customerName, t.supplyStore || 'STORE_A');
+  : await getEffectiveSalePriceForCustomer(t.customerName, t.supplyStore || 'STORE_A');
 itemContent = `
 <div class="cust-history-info">
 <div class="u-mono-bold" >${formatDisplayDate(t.date)}${_mergedBadgeHtml(t, {inline:true})}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(t) : ''}</div>
