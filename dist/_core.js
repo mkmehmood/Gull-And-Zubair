@@ -17137,11 +17137,11 @@ const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventor
 const factoryProductionHistory = ensureArray(await sqliteStore.get('factory_production_history'));
 const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
 const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
-const factoryDefaultFormulas = (await sqliteStore.get('factory_default_formulas')) || {};
-const factoryAdditionalCosts = (await sqliteStore.get('factory_additional_costs')) || {};
-const factorySalePrices = (await sqliteStore.get('factory_sale_prices')) || {};
-const factoryCostAdjustmentFactor = (await sqliteStore.get('factory_cost_adjustment_factor')) || {};
-const factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {};
+let factoryDefaultFormulas = (await sqliteStore.get('factory_default_formulas')) || {};
+let factoryAdditionalCosts = (await sqliteStore.get('factory_additional_costs')) || {};
+let factorySalePrices = (await sqliteStore.get('factory_sale_prices')) || {};
+let factoryCostAdjustmentFactor = (await sqliteStore.get('factory_cost_adjustment_factor')) || {};
+let factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {};
   data = normaliseBackupFields(data);
   showToast('↩ Reversing financial year close — replacing data...', 'info', 5000);
   const isAlive = honourPostCloseDeletions
