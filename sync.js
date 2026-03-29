@@ -3110,11 +3110,11 @@ async function _doOneClickSync(silent = false) {
       if (totalCloudChanges === 0 && totalItemsToWrite === 0) {
         showToast(' Already up to date', 'success', 2500);
       } else if (totalCloudChanges === 0) {
-        showToast(`↑ Uploaded ${totalItemsToWrite} local change${totalItemsToWrite !== 1 ? 's' : ''}`, 'success');
+        showToast(`↑ ${totalItemsToWrite} local change${totalItemsToWrite !== 1 ? 's' : ''} uploaded`, 'success');
       } else if (totalItemsToWrite === 0) {
-        showToast(`↓ Downloaded ${totalCloudChanges} cloud change${totalCloudChanges !== 1 ? 's' : ''}`, 'success');
+        showToast(`↓ ${totalCloudChanges} cloud change${totalCloudChanges !== 1 ? 's' : ''} downloaded`, 'success');
       } else {
-        showToast(`↓${totalCloudChanges} downloaded, ↑${totalItemsToWrite} uploaded`, 'success');
+        showToast(`${totalCloudChanges} downloaded · ${totalItemsToWrite} uploaded`, 'success');
       }
       if (typeof closeDataMenu === 'function') closeDataMenu();
     } else if (totalCloudChanges > 0 || totalItemsToWrite > 0) {
@@ -3496,7 +3496,7 @@ overlay.innerHTML = `
 GULL AND ZUBAIR NASWAR DEALER'S
 </h2>
 <div style="display:flex;align-items:center;justify-content:center;gap:6px;margin-bottom:20px;">
-<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1de9b6" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+<svg width="14" height="14" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M18 3 L30 8 V18 C30 25 24 31 18 33 C12 31 6 25 6 18 V8 Z" fill="#1de9b6" opacity="0.12" stroke="#1de9b6" stroke-width="1.6" stroke-linejoin="round"/><rect x="14" y="19" width="8" height="7" rx="1.5" fill="#1de9b6" opacity="0.3" stroke="#1de9b6" stroke-width="1.3"/><path d="M15 19 V17 A3 3 0 0 1 21 17 V19" stroke="#1de9b6" stroke-width="1.3" fill="none" stroke-linecap="round"/><circle cx="18" cy="22.5" r="1.2" fill="#1de9b6"/></svg>
 <span style="font-size:0.7rem;color:var(--accent);font-weight:700;letter-spacing:0.06em;text-transform:uppercase;">Login Required</span>
 </div>
 <p style="color: var(--text-muted); margin-bottom: 22px; font-size: 0.82rem; line-height: 1.5;">

@@ -1595,7 +1595,7 @@ async function _buildPreclosePanel(record, type, panelId) {
   const toDate   = fmtDate(dr.to);
   const recCount = ms.recordCount || record.mergedRecordCount || '—';
 
-  let html = sec('📅 Year-Close Overview');
+  let html = sec('<svg width="13" height="13" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:inline-block;vertical-align:-2px;margin-right:4px;"><rect x="4" y="8" width="28" height="22" rx="3" fill="currentColor" opacity="0.08" stroke="currentColor" stroke-width="1.5"/><line x1="4" y1="15" x2="32" y2="15" stroke="currentColor" stroke-width="1.4"/><line x1="12" y1="4" x2="12" y2="11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="24" y1="4" x2="24" y2="11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="22" r="1.5" fill="currentColor" opacity="0.6"/><circle cx="18" cy="22" r="1.5" fill="currentColor" opacity="0.6"/><circle cx="24" cy="22" r="1.5" fill="currentColor" opacity="0.6"/></svg>Year-Close Overview');
   html += row('Period',          `${fromDate} → ${toDate}`, 'muted');
   html += row('Transactions',    `${recCount} merged`, 'purple');
   html += row('Merge Date',      fmtDate(record.date), 'muted');
@@ -1639,7 +1639,7 @@ async function _buildPreclosePanel(record, type, panelId) {
 
     html += sec('Status');
     const settled = ms.isSettled || netOut <= 0.01;
-    html += row('Settlement', settled ? '✓ Fully Settled' : '⏳ Outstanding', settled ? 'green' : 'red');
+    html += row('Settlement', settled ? '<svg width="12" height="12" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:inline-block;vertical-align:-1px;margin-right:3px;"><circle cx="18" cy="18" r="13" fill="currentColor" fill-opacity="0.12" stroke="currentColor" stroke-width="1.5"/><polyline points="10,18 15,23 26,12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>Fully Settled' : '<svg width="12" height="12" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:inline-block;vertical-align:-1px;margin-right:3px;"><circle cx="18" cy="18" r="13" fill="currentColor" fill-opacity="0.08" stroke="currentColor" stroke-width="1.5"/><line x1="18" y1="10" x2="18" y2="19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="18" y1="19" x2="23" y2="22" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>Outstanding', settled ? 'green' : 'red');
     if (record.creditReceivedDate) html += row('Settled On', fmtDate(record.creditReceivedDate), 'muted');
     html += row('Payment Type', record.paymentType || '—', 'muted');
     if (record.salesRep && record.salesRep !== 'NONE' && record.salesRep !== 'ADMIN')
@@ -1746,7 +1746,7 @@ if (_manageET) {
 const phone = entity.phone || '';
 const wallet = entity.wallet || '';
 const _safeEntityId = String(entity.id).replace(/'/g, "\\'");
-_manageET.innerHTML = `<div style="display:flex;align-items:center;gap:8px;"><span class="u-fw-700">${esc(entity.name)}</span><button class="sidebar-settings-btn" style="width:auto;padding:5px 10px;font-size:0.75rem;color:var(--accent);background:rgba(29,233,182,0.07);border-radius:8px;border:1px solid rgba(29,233,182,0.25);display:inline-flex;align-items:center;gap:5px;" onclick="editEntityBasicInfo('${_safeEntityId}')" title="Edit Entity"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>Edit</button></div>${(phone || wallet) ? `<div style="font-size:0.75rem;color:var(--text-muted);font-weight:normal;margin-top:3px;">${phone ? phoneActionHTML(phone) : ''}${phone && wallet ? ' &middot; ' : ''}${esc(wallet)}</div>` : ''}`;
+_manageET.innerHTML = `<div style="display:flex;align-items:center;gap:8px;"><span class="u-fw-700">${esc(entity.name)}</span><button class="sidebar-settings-btn" style="width:auto;padding:5px 10px;font-size:0.75rem;color:var(--accent);background:rgba(29,233,182,0.07);border-radius:8px;border:1px solid rgba(29,233,182,0.25);display:inline-flex;align-items:center;gap:5px;" onclick="editEntityBasicInfo('${_safeEntityId}')" title="Edit Entity"><svg width="13" height="13" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="5" y="5" width="26" height="7" rx="2.5" fill="currentColor" opacity="0.15" stroke="currentColor" stroke-width="1.4"/><rect x="5" y="15" width="26" height="7" rx="2.5" fill="currentColor" opacity="0.1" stroke="currentColor" stroke-width="1.4"/><rect x="5" y="25" width="18" height="7" rx="2.5" fill="currentColor" opacity="0.08" stroke="currentColor" stroke-width="1.4"/><line x1="27" y1="26" x2="32" y2="21" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="26" cy="27" r="1" fill="currentColor"/></svg>Edit</button></div>${(phone || wallet) ? `<div style="font-size:0.75rem;color:var(--text-muted);font-weight:normal;margin-top:3px;">${phone ? phoneActionHTML(phone) : ''}${phone && wallet ? ' &middot; ' : ''}${esc(wallet)}</div>` : ''}`;
 }
 
 try {
@@ -6640,7 +6640,7 @@ async function promptVerifiedBackupPassword({ title = 'Confirm Password', subtit
         <button type="button" tabindex="-1"
           onclick="(function(btn){const inp=document.getElementById('${inputId}');inp.type=inp.type==='password'?'text':'password';btn.querySelector('svg').style.opacity=inp.type==='text'?'1':'0.45';})(this)"
           style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:2px;color:var(--text-muted);line-height:0;">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.45;transition:opacity 0.2s;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          <svg width="16" height="16" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="opacity:0.45;transition:opacity 0.2s;"><path d="M6 18 C6 18 10 10 18 10 C26 10 30 18 30 18 C30 18 26 26 18 26 C10 26 6 18 6 18 Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="currentColor" fill-opacity="0.05"/><circle cx="18" cy="18" r="4" fill="currentColor" opacity="0.25" stroke="currentColor" stroke-width="1.4"/><circle cx="18" cy="18" r="1.5" fill="currentColor"/></svg>
         </button>
       </div>
       <div id="${inputId}_err" style="font-size:0.74rem;color:var(--danger);min-height:18px;margin-bottom:10px;text-align:left;padding-left:2px;"></div>
@@ -7563,14 +7563,11 @@ let factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {}
       showToast(' Cloud data replaced with pre-close snapshot', 'success', 3000);
     } catch(cloudErr) {
       console.warn('Cloud replace failed:', _safeErr(cloudErr));
-      // FIX: set pendingFirestoreRestore so subscribeToRealtime retries on reconnect
       pendingFirestoreRestore = true;
       await sqliteStore.set('pendingFirestoreRestore', true)
         .catch(e => console.warn('[ycRestore] Could not persist pendingFirestoreRestore:', _safeErr(e)));
       showToast('Local data reversed. Cloud sync failed — will retry automatically.', 'warning', 5000);
     }
-    // FIX: only broadcast the cross-device signal after cloud writes succeeded.
-    // Broadcasting before meant other devices would wipe+rebuild from incomplete Firestore.
     if (_restoreCloudOk) {
       try {
         const _restoreSigTs = Date.now();
@@ -7587,7 +7584,6 @@ let factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {}
       }
     }
   } else {
-    // Offline: flag for retry when connection returns
     pendingFirestoreRestore = true;
     await sqliteStore.set('pendingFirestoreRestore', true)
       .catch(e => console.warn('[ycRestore] Could not persist pendingFirestoreRestore:', _safeErr(e)));
@@ -13287,7 +13283,7 @@ async function renderRecycleBin(filterCollection = 'all') {
 
       const _rbDeletedByRaw = rec.deleted_by || null;
       const _rbDeletedByBadge = (_rbDeletedByRaw && _rbDeletedByRaw !== 'user')
-        ? `<span style="display:inline-flex;align-items:center;gap:3px;padding:2px 7px;font-size:0.62rem;font-weight:700;letter-spacing:0.04em;color:#f87171;background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.28);border-radius:999px;white-space:nowrap;"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>del by ${esc(_rbDeletedByRaw)}</span>`
+        ? `<span style="display:inline-flex;align-items:center;gap:3px;padding:2px 7px;font-size:0.62rem;font-weight:700;letter-spacing:0.04em;color:#f87171;background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.28);border-radius:999px;white-space:nowrap;"><svg width="9" height="9" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;"><path d="M8 11 L10 31 A2 2 0 0 0 12 33 H24 A2 2 0 0 0 26 31 L28 11 Z" fill="currentColor" opacity="0.15" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><line x1="6" y1="11" x2="30" y2="11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M14 8 H22 M14 8 A1 1 0 0 1 15 7 H21 A1 1 0 0 1 22 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>del by ${esc(_rbDeletedByRaw)}</span>`
         : '';
 
       const nameHtml = displayName
@@ -13326,9 +13322,12 @@ async function renderRecycleBin(filterCollection = 'all') {
             Deleted ${daysAgo === 0 ? 'today' : daysAgo + 'd ago'} · ${deletedDate} · expires in ${expiresIn}d
           </div>
         </div>
-        ${canRecover
-          ? `<button onclick="attemptRecoverRecord('${esc(rec.id)}','${esc(col)}')" style="flex-shrink:0;padding:7px 13px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);border-radius:999px;font-size:0.78rem;font-weight:700;cursor:pointer;">↩ Recover</button>`
-          : `<span style="flex-shrink:0;font-size:0.7rem;color:var(--text-muted);padding:4px 8px;">—</span>`}
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex-shrink:0;">
+          ${canRecover
+            ? `<button onclick="attemptRecoverRecord('${esc(rec.id)}','${esc(col)}')" style="display:inline-flex;align-items:center;gap:4px;padding:7px 13px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);border-radius:999px;font-size:0.78rem;font-weight:700;cursor:pointer;white-space:nowrap;"><svg width="13" height="13" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;"><path d="M10 8 A10 10 0 0 1 28 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/><polyline points="25,6 28,10 24,11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M26 28 A10 10 0 0 1 8 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/><polyline points="11,30 8,26 12,25" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg> Recover</button>`
+            : `<span style="font-size:0.7rem;color:var(--text-muted);padding:4px 8px;">—</span>`}
+          <button onclick="attemptHardDeleteRecord('${esc(rec.id)}','${esc(col)}')" style="display:inline-flex;align-items:center;gap:4px;padding:5px 10px;background:rgba(239,68,68,0.12);color:#ef4444;border:1px solid rgba(239,68,68,0.3);border-radius:999px;font-size:0.7rem;font-weight:700;cursor:pointer;white-space:nowrap;"><svg width="11" height="11" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;"><path d="M8 11 L10 31 A2 2 0 0 0 12 33 H24 A2 2 0 0 0 26 31 L28 11 Z" fill="currentColor" opacity="0.15" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><line x1="6" y1="11" x2="30" y2="11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M14 8 H22 M14 8 A1 1 0 0 1 15 7 H21 A1 1 0 0 1 22 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M15 17 C15 17 13 20 15 23 C17 26 21 26 21 26" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" fill="none"/><polyline points="19,24 21,26 19,28" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg> Delete Forever</button>
+        </div>
       </div>`;
     }).join('');
   } catch(e) {
@@ -13345,7 +13344,7 @@ const deletionRecords = ensureArray(await sqliteStore.get('deletion_records'));
   const label = `${tabLabel} › ${RECYCLE_BIN_COLLECTION_LABELS[collectionName] || collectionName}`;
   if (!(await showGlassConfirm(
     `Recover this ${label}?\n\nIt will be restored to its original collection and become visible again in all views.`,
-    { title: '↩ Recover Record', confirmText: 'Recover', danger: false }
+    { title: 'Recover Record', confirmText: 'Recover', danger: false }
   ))) return;
   showToast('Recovering record…', 'info', 1500);
   const ok = await recoverRecord(id, collectionName);
@@ -13365,6 +13364,103 @@ window.openRecycleBin = openRecycleBin;
 window.closeRecycleBin = closeRecycleBin;
 window.renderRecycleBin = renderRecycleBin;
 window.attemptRecoverRecord = attemptRecoverRecord;
+
+// ── Hard Delete (permanent) ────────────────────────────────────────────────
+async function hardDeleteRecord(id, collectionName) {
+  if (!id || !collectionName) return false;
+  const sid = String(id);
+  try {
+    // 1. Remove from deleted_records set
+    const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
+    deletedRecordIds.delete(sid);
+    await sqliteStore.set('deleted_records', Array.from(deletedRecordIds));
+
+    // 2. Remove from deletion_records list
+    const deletionRecords = ensureArray(await sqliteStore.get('deletion_records'));
+    const pruned = deletionRecords.filter(r => String(r.id) !== sid && String(r.recordId || r.id) !== sid);
+    await sqliteStore.set('deletion_records', pruned);
+
+    // 3. Mark recovered this session so it vanishes from the UI
+    _recoveredThisSession.add(sid);
+
+    // 4. Remove from every relevant SQLite data store
+    const sqliteKey = getSQLiteKey(collectionName);
+    if (sqliteKey) {
+      const store = ensureArray(await sqliteStore.get(sqliteKey));
+      const filtered = store.filter(r => String(r.id) !== sid);
+      if (filtered.length !== store.length) {
+        await sqliteStore.set(sqliteKey, filtered);
+      }
+    }
+
+    // 5. Remove from OfflineQueue (cancel any pending ops for this id)
+    if (typeof OfflineQueue !== 'undefined') {
+      const isThisId = (item) => {
+        const op = item.operation || {};
+        return op.docId === sid;
+      };
+      const qBefore = OfflineQueue.queue.length;
+      OfflineQueue.queue = OfflineQueue.queue.filter(item => !isThisId(item));
+      if (OfflineQueue.queue.length !== qBefore) {
+        try { await OfflineQueue.saveQueue(); } catch(e) {}
+      }
+      if (Array.isArray(OfflineQueue.deadLetterQueue)) {
+        OfflineQueue.deadLetterQueue = OfflineQueue.deadLetterQueue.filter(item => !isThisId(item));
+        try { await OfflineQueue.saveDeadLetterQueue(); } catch(e) {}
+      }
+    }
+
+    // 6. Delete from Firestore (deletions tombstone + original collection doc)
+    if (firebaseDB && currentUser) {
+      (async () => {
+        try {
+          const userRef = firebaseDB.collection('users').doc(currentUser.uid);
+          const batch = firebaseDB.batch();
+          batch.delete(userRef.collection('deletions').doc(sid));
+          batch.delete(userRef.collection(collectionName).doc(sid));
+          await batch.commit();
+          trackFirestoreWrite(2);
+        } catch(e) {
+          console.warn('[RecycleBin] Hard delete cloud failed — queuing:', _safeErr(e));
+          if (typeof OfflineQueue !== 'undefined') {
+            await OfflineQueue.add({ action: 'delete', collection: 'deletions',      docId: sid, data: null });
+            await OfflineQueue.add({ action: 'delete', collection: collectionName,   docId: sid, data: null });
+          }
+        }
+      })();
+    }
+    return true;
+  } catch(e) {
+    console.error('[RecycleBin] hardDeleteRecord error:', _safeErr(e));
+    return false;
+  }
+}
+
+async function attemptHardDeleteRecord(id, collectionName) {
+  const tabKey   = RECYCLE_COLLECTION_TO_TAB[collectionName] || 'tab_payments';
+  const tabLabel = RECYCLE_TAB_LABELS[tabKey] || tabKey;
+  const label    = `${tabLabel} › ${RECYCLE_BIN_COLLECTION_LABELS[collectionName] || collectionName}`;
+  const confirmed = await showGlassConfirm(
+    `Permanently delete this ${label}?\n\nThis action CANNOT be undone. The record will be erased from all local storage and the cloud.`,
+    { title: 'Delete Forever', confirmText: 'Delete Forever', danger: true }
+  );
+  if (!confirmed) return;
+  showToast('Deleting permanently…', 'info', 1500);
+  const ok = await hardDeleteRecord(id, collectionName);
+  if (ok) {
+    showToast(`${label} permanently deleted.`, 'success');
+    notifyDataChange('all');
+    if (typeof calculateNetCash === 'function') calculateNetCash();
+    if (typeof calculateCashTracker === 'function') calculateCashTracker();
+    const filterSel = document.getElementById('recycleBinFilter');
+    const current = filterSel ? filterSel.value : 'all';
+    await renderRecycleBin(current);
+  } else {
+    showToast('Hard delete failed. Please try again.', 'error');
+  }
+}
+window.hardDeleteRecord = hardDeleteRecord;
+window.attemptHardDeleteRecord = attemptHardDeleteRecord;
 async function triggerLocalBackup() {
 const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
 const factoryDefaultFormulas = (await sqliteStore.get('factory_default_formulas')) || {};

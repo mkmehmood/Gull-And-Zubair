@@ -1095,6 +1095,16 @@ if (_prodCostEl) _prodCostEl.innerText = await formatCurrency(baseCost);
 }
 
 async function saveFactoryProductionEntry() {
+// Require explicit store selection before saving
+const storeSelectorEl = document.getElementById('storeSelector');
+if (!storeSelectorEl || !storeSelectorEl.value) {
+  const chosen = await showStorePicker('production');
+  if (!chosen) return; // cancelled
+  storeSelectorEl.value = chosen;
+  const labelEl = document.getElementById('storeSelectorLabel');
+  if (labelEl) labelEl.textContent = getStoreLabel(chosen);
+  await updateProductionCostOnStoreChange();
+}
 const _sfpeBatch = await sqliteStore.getBatch([
 'factory_default_formulas','factory_additional_costs',
 'factory_inventory_data','factory_production_history',
@@ -1191,6 +1201,11 @@ await refreshFactoryTab();
 calculateNetCash();
 calculateCashTracker();
 document.getElementById('factoryProductionUnits').value = '1';
+// Reset store — cleared so next save requires explicit selection via dialog
+const _storeSel = document.getElementById('storeSelector');
+if (_storeSel) _storeSel.value = '';
+const _storeLbl = document.getElementById('storeSelectorLabel');
+if (_storeLbl) _storeLbl.textContent = '—';
 showToast('Production saved successfully!', 'success');
 } catch (error) {
 factoryInventoryData.length = 0;
@@ -1487,6 +1502,7 @@ return { available, sufficient: available >= requestedUnits, deficit: Math.max(0
 async function updateUnitsAvailableIndicator() {
 const factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {};
 const store = document.getElementById('storeSelector').value;
+if (!store) return; // no store selected yet — dialog will prompt on save
 const formulaStore = store === 'STORE_C' ? 'asaan' : 'standard';
 const available = factoryUnitTracking[formulaStore]?.available || 0;
 const indicator = document.getElementById('currentUnitsAvailable');
@@ -1508,6 +1524,7 @@ const factoryAdditionalCosts = (await sqliteStore.get('factory_additional_costs'
 const factorySalePrices = (await sqliteStore.get('factory_sale_prices')) || {};
 const net = parseFloat(document.getElementById('net-wt').value) || 0;
 const store = document.getElementById('storeSelector').value;
+if (!store) return; // no store selected yet — dialog will prompt on save
 const formulaUnits = parseFloat(document.getElementById('formula-units').value) || 0;
 const costData = await calculateDynamicCost(store, formulaUnits, net);
 const salePrice = await getSalePriceForStore(store);
@@ -1526,6 +1543,7 @@ updateUnitsAvailableIndicator();
 async function updateProductionCostOnStoreChange() {
 const factorySalePrices = (await sqliteStore.get('factory_sale_prices')) || {};
 const store = document.getElementById('storeSelector').value;
+if (!store) return; // no store selected yet
 currentStore = store;
 const salePrice = await getSalePriceForStore(store);
 const _setStore = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };

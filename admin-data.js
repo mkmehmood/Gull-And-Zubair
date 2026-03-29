@@ -46,7 +46,7 @@ modal.id = 'delta-stats-modal';
 modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.82);display:flex;align-items:center;justify-content:center;z-index:10300;padding:16px;';
 modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
 modal.innerHTML = `<div style="background:var(--glass);padding:40px;border-radius:20px;text-align:center;">
-  <div style="font-size:2.2rem;margin-bottom:12px;">🗄️</div>
+  <div style="margin-bottom:12px;display:flex;justify-content:center;"><svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="opacity:0.5;"><rect x="5" y="5" width="26" height="7" rx="2.5" fill="currentColor" opacity="0.2" stroke="currentColor" stroke-width="1.4"/><rect x="5" y="15" width="26" height="7" rx="2.5" fill="currentColor" opacity="0.15" stroke="currentColor" stroke-width="1.4"/><rect x="5" y="25" width="26" height="7" rx="2.5" fill="currentColor" opacity="0.1" stroke="currentColor" stroke-width="1.4"/><circle cx="27" cy="8.5" r="1.5" fill="currentColor"/><circle cx="27" cy="18.5" r="1.5" fill="currentColor" opacity="0.6"/><circle cx="27" cy="28.5" r="1.5" fill="currentColor" opacity="0.35"/><line x1="9" y1="8.5" x2="22" y2="8.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity="0.5"/><line x1="9" y1="18.5" x2="20" y2="18.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity="0.4"/><line x1="9" y1="28.5" x2="18" y2="28.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity="0.3"/></svg></div>
   <div style="color:var(--text-muted);font-size:0.85rem;">Loading database structure…</div>
 </div>`;
 document.body.appendChild(modal);
@@ -186,7 +186,7 @@ try {
   <!-- title bar -->
   <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 20px 0;flex-shrink:0">
     <div style="display:flex;align-items:center;gap:10px">
-      <span style="font-size:1.3rem">🗄️</span>
+      <span style="display:flex;align-items:center;"><svg width="20" height="20" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="5" y="5" width="26" height="7" rx="2.5" fill="currentColor" opacity="0.2" stroke="currentColor" stroke-width="1.4"/><rect x="5" y="15" width="26" height="7" rx="2.5" fill="currentColor" opacity="0.15" stroke="currentColor" stroke-width="1.4"/><rect x="5" y="25" width="26" height="7" rx="2.5" fill="currentColor" opacity="0.1" stroke="currentColor" stroke-width="1.4"/><circle cx="27" cy="8.5" r="1.5" fill="currentColor"/><circle cx="27" cy="18.5" r="1.5" fill="currentColor" opacity="0.6"/><circle cx="27" cy="28.5" r="1.5" fill="currentColor" opacity="0.35"/></svg></span>
       <div>
         <div style="font-weight:700;font-size:1rem;color:var(--text)">Database Structure</div>
         <div style="font-size:0.67rem;color:var(--text-muted);font-family:'Geist Mono','Courier New',monospace;margin-top:1px">
@@ -195,7 +195,7 @@ try {
       </div>
     </div>
     <button onclick="document.getElementById('delta-stats-modal').remove()"
-      style="background:rgba(255,255,255,0.07);border:none;border-radius:50%;width:32px;height:32px;font-size:1rem;cursor:pointer;color:var(--text-muted);display:flex;align-items:center;justify-content:center">✕</button>
+      style="background:rgba(255,255,255,0.07);border:none;border-radius:50%;width:32px;height:32px;cursor:pointer;color:var(--text-muted);display:flex;align-items:center;justify-content:center"><svg width="14" height="14" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><line x1="10" y1="10" x2="26" y2="26" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="26" y1="10" x2="10" y2="26" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
   </div>
 
   <!-- tab bar -->
@@ -260,7 +260,7 @@ try {
     <div style="text-align:right;flex-shrink:0">
       <div style="font-size:0.78rem;font-weight:700;color:var(--accent)">${fsDocs} FS</div>
       <div style="font-size:0.72rem;color:${mismatch?'#ff453a':'var(--text-muted)'}">
-        ${sqDocs} local${mismatch?' ⚠':''}
+        ${sqDocs} local${mismatch?' <svg width="11" height="11" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:inline-block;vertical-align:-1px;margin-left:2px;"><path d="M27 10 H33 L29 17 H31 L27 24 H33 L29 17 H31 Z" fill="#f59e0b" opacity="0.6" stroke="#f59e0b" stroke-width="1" stroke-linejoin="round"/><circle cx="18" cy="18" r="2" fill="#f59e0b" opacity="0.8"/></svg>':''}
       </div>
     </div>
   </div>
@@ -314,7 +314,7 @@ try {
           ${doc.fsFields.map(k => {
             const present = k in data;
             return `<div style="font-size:0.62rem;display:flex;justify-content:space-between;gap:6px;padding:1px 0">
-              <span style="color:${present?'var(--text)':'#ff453a'};font-family:'Geist Mono','Courier New',monospace;flex-shrink:0">${present?'':'⚠ '}${k}</span>
+              <span style="color:${present?'var(--text)':'#ff453a'};font-family:'Geist Mono','Courier New',monospace;flex-shrink:0">${present?'':'<svg width="11" height="11" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:inline-block;vertical-align:-1px;margin-right:2px;"><path d="M27 10 H33 L29 17 H31 L27 24 H33 L29 17 H31 Z" fill="currentColor" opacity="0.6" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/><circle cx="18" cy="18" r="2" fill="currentColor" opacity="0.8"/></svg>'}${k}</span>
               <span>${present ? fmtVal(data[k]) : ''}</span>
             </div>`;
           }).join('')}
@@ -389,7 +389,7 @@ try {
             <td style="padding:3px 6px;color:var(--accent)">${c.fsName}</td>
             <td style="padding:3px 6px;color:var(--accent-cyan)">${c.sqliteKey}</td>
             <td style="padding:3px 6px;color:var(--text-muted)">${c.jsVar}</td>
-            <td style="padding:3px 6px;text-align:right;color:${ok?'var(--text)':'#ff453a'}">${fs} / ${sq}${ok?'':' ⚠'}</td>
+            <td style="padding:3px 6px;text-align:right;color:${ok?'var(--text)':'#ff453a'}">${fs} / ${sq}${ok?'':' <svg width="11" height="11" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:inline-block;vertical-align:-1px;margin-left:2px;"><path d="M27 10 H33 L29 17 H31 L27 24 H33 L29 17 H31 Z" fill="#f59e0b" opacity="0.6" stroke="#f59e0b" stroke-width="1" stroke-linejoin="round"/><circle cx="18" cy="18" r="2" fill="#f59e0b" opacity="0.8"/></svg>'}</td>
           </tr>`;
         }).join('')}
       </tbody>
@@ -455,7 +455,7 @@ try {
 } catch (err) {
   console.error('[showDeltaSyncDetails] error:', err);
   modal.innerHTML = `<div style="background:var(--glass);padding:40px;border-radius:20px;text-align:center;max-width:400px">
-    <div style="font-size:2rem;margin-bottom:12px">⚠️</div>
+    <div style="margin-bottom:12px;display:flex;justify-content:center;"><svg width="32" height="32" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="opacity:0.85;"><path d="M27 10 H33 L29 17 H31 L27 24 H33 L29 17 H31 Z" fill="#f59e0b" opacity="0.5" stroke="#f59e0b" stroke-width="1" stroke-linejoin="round"/><rect x="4" y="8" width="20" height="20" rx="3" fill="#f59e0b" opacity="0.1" stroke="#f59e0b" stroke-width="1.5"/><line x1="14" y1="14" x2="14" y2="20" stroke="#f59e0b" stroke-width="1.6" stroke-linecap="round"/><circle cx="14" cy="23" r="1" fill="#f59e0b"/></svg></div>
     <div style="color:var(--text);margin-bottom:20px">Failed to load database structure</div>
     <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:20px">${err && err.message ? err.message : String(err)}</div>
     <button onclick="document.getElementById('delta-stats-modal').remove()"
@@ -872,7 +872,7 @@ _cyBody.innerHTML = `
     <div id="cy-input-wrap">
       <div id="cy-danger-notice">
         <div id="cy-danger-icon-wrap">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,110,100,0.92)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <svg width="14" height="14" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M27 10 H33 L29 17 H31 L27 24 H33 L29 17 H31 Z" fill="rgba(255,110,100,0.5)" stroke="rgba(255,110,100,0.92)" stroke-width="1" stroke-linejoin="round"/><rect x="5" y="10" width="18" height="18" rx="2.5" fill="rgba(255,110,100,0.1)" stroke="rgba(255,110,100,0.92)" stroke-width="1.4"/><line x1="14" y1="15" x2="14" y2="21" stroke="rgba(255,110,100,0.92)" stroke-width="1.4" stroke-linecap="round"/><circle cx="14" cy="24" r="1" fill="rgba(255,110,100,0.92)"/></svg>
         </div>
         <div>
           <p id="cy-danger-title">Irreversible — original records will be compacted</p>
@@ -886,7 +886,7 @@ _cyBody.innerHTML = `
           onkeydown="if(event.key==='Enter'&&!document.getElementById('close-year-confirm-btn').disabled){verifyAndExecuteCloseYear();}">
         <button type="button" id="cy-pwd-eye" tabindex="-1"
           onclick="(function(b){const i=document.getElementById('close-year-confirm-input');i.type=i.type==='password'?'text':'password';b.querySelector('svg').style.opacity=i.type==='text'?'1':'0.40';})(this)">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.40;transition:opacity 0.2s;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          <svg width="15" height="15" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="opacity:0.4;transition:opacity 0.2s;"><path d="M6 18 C6 18 10 10 18 10 C26 10 30 18 30 18 C30 18 26 26 18 26 C10 26 6 18 6 18 Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="currentColor" fill-opacity="0.05"/><circle cx="18" cy="18" r="4" fill="currentColor" opacity="0.25" stroke="currentColor" stroke-width="1.4"/><circle cx="18" cy="18" r="1.5" fill="currentColor"/></svg>
         </button>
       </div>
       <div id="close-year-pwd-error"></div>
@@ -1120,14 +1120,14 @@ if (Array.isArray(stockReturns)) {
 }
 const storeCodeToLabel = _storeCodeToLabel;
 const CY_ICONS = {
-  prod:     '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
-  sales:    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>',
-  calc:     '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="12" y2="14"/></svg>',
-  pay:      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>',
-  factory:  '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z"/></svg>',
-  repsales: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
-  exp:      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>',
-  ret:      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.9L1 10"/></svg>'
+  prod:     '<svg width="15" height="15" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="20" width="28" height="12" rx="3" fill="currentColor" opacity="0.15" stroke="currentColor" stroke-width="1.6"/><rect x="10" y="14" width="16" height="7" rx="2" fill="currentColor" opacity="0.25" stroke="currentColor" stroke-width="1.4"/><rect x="14" y="8" width="8" height="7" rx="1.5" fill="currentColor" opacity="0.4" stroke="currentColor" stroke-width="1.4"/><rect x="16" y="4" width="4" height="5" rx="1" fill="currentColor"/></svg>',
+  sales:    '<svg width="15" height="15" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="7" y="3" width="22" height="30" rx="3" fill="currentColor" opacity="0.1" stroke="currentColor" stroke-width="1.6"/><path d="M7 30 L12 27 L17 30 L22 27 L29 30" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="12" x2="24" y2="12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="12" y1="17" x2="24" y2="17" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="12" y1="22" x2="19" y2="22" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+  calc:     '<svg width="15" height="15" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="5" y="4" width="26" height="28" rx="4" fill="currentColor" opacity="0.08" stroke="currentColor" stroke-width="1.6"/><rect x="8" y="8" width="20" height="7" rx="2" fill="currentColor" opacity="0.2" stroke="currentColor" stroke-width="1.3"/><circle cx="12" cy="21" r="2" fill="currentColor" opacity="0.7"/><circle cx="18" cy="21" r="2" fill="currentColor" opacity="0.7"/><circle cx="24" cy="21" r="2" fill="currentColor" opacity="0.7"/><circle cx="12" cy="27" r="2" fill="currentColor" opacity="0.5"/><circle cx="18" cy="27" r="2" fill="currentColor" opacity="0.5"/><rect x="21" y="25" width="6" height="4" rx="1.5" fill="currentColor" opacity="0.8"/></svg>',
+  pay:      '<svg width="15" height="15" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="14" width="22" height="14" rx="3" fill="currentColor" opacity="0.12" stroke="currentColor" stroke-width="1.5"/><line x1="4" y1="19" x2="26" y2="19" stroke="currentColor" stroke-width="1.4"/><rect x="7" y="22" width="6" height="2.5" rx="1" fill="currentColor" opacity="0.6"/><ellipse cx="28" cy="19.5" rx="5" ry="2" fill="currentColor" opacity="0.35" stroke="currentColor" stroke-width="1.3"/><ellipse cx="28" cy="17" rx="5" ry="2" fill="currentColor" opacity="0.5" stroke="currentColor" stroke-width="1.3"/></svg>',
+  factory:  '<svg width="15" height="15" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="22" width="30" height="11" rx="2.5" fill="currentColor" opacity="0.12" stroke="currentColor" stroke-width="1.5"/><rect x="6" y="15" width="10" height="8" rx="1.5" fill="currentColor" opacity="0.18" stroke="currentColor" stroke-width="1.4"/><rect x="20" y="12" width="9" height="11" rx="1.5" fill="currentColor" opacity="0.18" stroke="currentColor" stroke-width="1.4"/><rect x="22" y="6" width="2.5" height="7" rx="1" fill="currentColor" opacity="0.6"/><rect x="13" y="25" width="10" height="8" rx="1.5" fill="currentColor" opacity="0.3"/></svg>',
+  repsales: '<svg width="15" height="15" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="13" cy="10" r="5" fill="currentColor" opacity="0.2" stroke="currentColor" stroke-width="1.5"/><path d="M4 30 C4 24 22 24 22 30" stroke="currentColor" stroke-width="1.5" fill="currentColor" fill-opacity="0.1" stroke-linecap="round"/><rect x="24" y="22" width="3.5" height="9" rx="1" fill="currentColor" opacity="0.4"/><rect x="28.5" y="17" width="3.5" height="14" rx="1" fill="currentColor" opacity="0.65"/><circle cx="32" cy="10" r="2" fill="currentColor"/></svg>',
+  exp:      '<svg width="15" height="15" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="7" y="3" width="22" height="30" rx="3" fill="currentColor" opacity="0.08" stroke="currentColor" stroke-width="1.5"/><line x1="12" y1="12" x2="24" y2="12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="12" y1="17" x2="24" y2="17" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="12" y1="22" x2="18" y2="22" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="24" cy="22" r="3.5" fill="currentColor" opacity="0.2" stroke="currentColor" stroke-width="1.3"/></svg>',
+  ret:      '<svg width="15" height="15" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M10 8 A10 10 0 0 1 28 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/><polyline points="25,6 28,10 24,11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M26 28 A10 10 0 0 1 8 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/><polyline points="11,30 8,26 12,25" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'
 };
 const previewRow = (id, label, key, recCount, details, mergeNote, accent, hasData) => {
   const cssAccentVar = accent.replace('var(--','').replace(')','');
@@ -1735,7 +1735,7 @@ if (completeSection) {
   const closedDateStr = fyMeta2.lastYearClosedDate || new Date().toLocaleDateString('en-PK', { day:'numeric', month:'short', year:'numeric' });
   const syncWarnBlock = hasSyncWarnings ? `
     <div class="cy-sync-warn">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px;"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <svg width="15" height="15" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;margin-top:1px;"><path d="M27 10 H33 L29 17 H31 L27 24 H33 L29 17 H31 Z" fill="var(--warning)" opacity="0.5" stroke="var(--warning)" stroke-width="1" stroke-linejoin="round"/><rect x="5" y="10" width="18" height="18" rx="2.5" fill="var(--warning)" fill-opacity="0.1" stroke="var(--warning)" stroke-width="1.4"/><line x1="14" y1="15" x2="14" y2="21" stroke="var(--warning)" stroke-width="1.4" stroke-linecap="round"/><circle cx="14" cy="24" r="1" fill="var(--warning)"/></svg>
       <div>
         <div class="cy-sync-warn-title">Cloud Sync Incomplete</div>
         <div class="cy-sync-warn-body">Local data is fully merged and safe. Marked rows will re-sync automatically when connectivity is restored, or force a manual sync from Settings.</div>
@@ -1745,7 +1745,7 @@ if (completeSection) {
   <div class="cy-complete-card">
     <div class="cy-complete-header">
       <div class="cy-complete-icon">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent-emerald)" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" style="stroke-dasharray:40;stroke-dashoffset:0;animation:cy-checkmark-draw 0.55s 0.2s cubic-bezier(0.22,1,0.36,1) both;"><polyline points="20 6 9 17 4 12"/></svg>
+        <svg width="22" height="22" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="stroke-dasharray:60;stroke-dashoffset:0;animation:cy-checkmark-draw 0.55s 0.2s cubic-bezier(0.22,1,0.36,1) both;"><circle cx="18" cy="18" r="13" fill="var(--accent-emerald)" fill-opacity="0.12" stroke="var(--accent-emerald)" stroke-width="1.5"/><polyline points="10,18 15,23 26,12" stroke="var(--accent-emerald)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
       </div>
       <div class="cy-complete-header-text">
         <h3 class="cy-complete-title">Financial Year Closed</h3>
