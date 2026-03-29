@@ -6218,7 +6218,7 @@ async function unifiedSave(sqliteKey, dataArray, specificRecord = null, linkedId
 
 if (specificRecord && specificRecord.id) {
   await saveWithTracking(sqliteKey, dataArray, specificRecord);
-  
+
   _syncQueue.run(async () => {
     try {
       await saveRecordToFirestore(sqliteKey, specificRecord);
@@ -6237,7 +6237,7 @@ if (specificRecord && specificRecord.id) {
         });
       }
     }
-  }); 
+  });
 } else if (Array.isArray(linkedIds) && linkedIds.length > 0) {
   await saveWithTracking(sqliteKey, dataArray, null, linkedIds);
   const recordsToSync = dataArray.filter(r => r && linkedIds.includes(r.id));
@@ -6261,7 +6261,7 @@ if (specificRecord && specificRecord.id) {
         }
       }
     }
-  }); 
+  });
 } else {
   await saveWithTracking(sqliteKey, dataArray);
 }
@@ -6470,9 +6470,7 @@ if (typeof firebaseDB !== 'undefined' && firebaseDB && window._firestoreNetworkD
   } catch (_enErr) {  }
 }
 try {
-  
-  
-  
+
   const _bootstrapAlreadyRan = !!sessionStorage.getItem('_gznd_bootstrap_ran');
   if (!_bootstrapAlreadyRan) {
     if (typeof loadAllData === 'function') await loadAllData();
@@ -6516,8 +6514,7 @@ console.error('Could not restore device mode:', _safeErr(error));
 }, 1000);
 setTimeout(async () => {
 if (typeof performOneClickSync === 'function' && !isSyncing) {
-  
-  
+
   performOneClickSync(true);
 }
 }, 1500);
@@ -8679,7 +8676,7 @@ async function _doOneClickSync(silent = false) {
         showToast(msg, 'success');
         if (typeof closeDataMenu === 'function') closeDataMenu();
       } else if (totalCloudChanges > 0 || totalItemsToWrite > 0) {
-        
+
         showToast(` Synced — ${totalCloudChanges} new, ${totalItemsToWrite} uploaded`, 'info', 3000);
       }
       setTimeout(() => {
@@ -8707,7 +8704,7 @@ async function _doOneClickSync(silent = false) {
       }
       if (typeof closeDataMenu === 'function') closeDataMenu();
     } else if (totalCloudChanges > 0 || totalItemsToWrite > 0) {
-      
+
       showToast(` Synced — ${totalCloudChanges} new, ${totalItemsToWrite} uploaded`, 'info', 3000);
     }
 
@@ -8819,9 +8816,7 @@ async function _doPushDataToCloud(silent = false) {
 }
 
 function pullDataFromCloud(silent = false, forceDownload = false) {
-  
-  
-  
+
   return _syncQueue.run(() => _doPullDataFromCloud(silent, forceDownload));
 }
 
@@ -8910,16 +8905,14 @@ async function _doPullDataFromCloud(silent = false, forceDownload = false) {
 
     if (!silent) showToast(' Data Restored Successfully', 'success');
     if (typeof updateUnitsAvailableIndicator === 'function') updateUnitsAvailableIndicator();
-    
-    
-    
+
     Promise.resolve().then(() => {
       if (typeof refreshAllDisplays === 'function') refreshAllDisplays().catch(() => {});
     });
   } catch (error) {
     console.error('[pullDataFromCloud] error:', _safeErr(error));
     if (!silent) showToast('Restore failed. Using local data.', 'error');
-    
+
     Promise.resolve().then(() => {
       if (typeof refreshAllDisplays === 'function') refreshAllDisplays().catch(() => {});
     });
@@ -11176,7 +11169,6 @@ function _dedupDeletionRecordsLocal(arr) {
 }
 
 async function registerDeletion(id, collectionName = 'unknown', preDeletedRecord = null) {
-
 
 const deletionRecords = ensureArray(await sqliteStore.get('deletion_records'));
 const deletedRecordIds = new Set(ensureArray(await sqliteStore.get('deleted_records')));
@@ -13677,7 +13669,6 @@ card.style.display = 'none';
 }
 
 async function getAvailableCashInHand() {
-
 
 const _gacBatch = await sqliteStore.getBatch([
 'noman_history','mfg_pro_pkr','customer_sales','payment_transactions','expenses',
@@ -18656,7 +18647,7 @@ const rowDate = new Date(item.date);
 const rowYear = rowDate.getFullYear();
 const rowMonth = rowDate.getMonth();
 const rowDay = rowDate.getDate();
-const updatePeriod = (period) => {
+const updatePeriod = async (period) => {
 if (isAdminCollection) {
 
 return;
@@ -19407,8 +19398,7 @@ return isNaN(value) || !isFinite(value) ? 0 : value;
 }
 
 async function refreshAllDisplays() {
-// Fix: load all SQLite data in one batch up front, then run all independent tab
-// refreshes in parallel via Promise.all instead of sequentially awaiting each one.
+
 const _radBatch = await sqliteStore.getBatch([
 'mfg_pro_pkr','customer_sales','rep_sales','noman_history',
 'payment_transactions','payment_entities','expenses','stock_returns',
@@ -19434,29 +19424,28 @@ const factoryCostAdjustmentFactor = _radBatch.get('factory_cost_adjustment_facto
 const factoryUnitTracking = _radBatch.get('factory_unit_tracking') || {};
 const deletedRecordIds = new Set(ensureArray(_radBatch.get('deleted_records')));
 
-// Run all independent tab refreshes in parallel — total time = slowest tab, not sum of all
 await Promise.all([
-  // Production stats + production tab
+
   (async () => {
     try { await syncFactoryProductionStats(); } catch (e) { console.error('syncFactoryProductionStats failed.', _safeErr(e)); }
     try { if (typeof refreshUI === 'function') await refreshUI(1, true); } catch (e) { console.error('refreshUI failed.', _safeErr(e)); }
   })(),
-  // Customer sales tab
+
   (async () => {
     try {
       if (typeof refreshCustomerSales === 'function') await refreshCustomerSales(1, true);
       else if (typeof renderCustomersTable === 'function') renderCustomersTable();
     } catch (e) { console.error('refreshCustomerSales failed.', _safeErr(e)); }
   })(),
-  // Sales comparison tab
+
   (async () => {
     try { if (typeof loadSalesData === 'function') await loadSalesData(currentCompMode); } catch (e) { console.error('loadSalesData failed.', _safeErr(e)); }
   })(),
-  // Factory tab (sync)
+
   (async () => {
     try { if (typeof initFactoryTab === 'function') initFactoryTab(); } catch (e) { console.error('initFactoryTab failed.', _safeErr(e)); }
   })(),
-  // Payments tab — only if visible; calculateNetCash is sync
+
   (async () => {
     try {
       if (document.getElementById('tab-payments') && !document.getElementById('tab-payments').classList.contains('hidden')) {
@@ -19465,7 +19454,7 @@ await Promise.all([
       if (typeof calculateNetCash === 'function') calculateNetCash();
     } catch (e) { console.error('refreshPaymentTab failed.', _safeErr(e)); }
   })(),
-  // Rep mode tab
+
   (async () => {
     try {
       if (appMode === 'rep') {
@@ -19558,7 +19547,7 @@ document.addEventListener('DOMContentLoaded', async function _appBootstrap() {
     await initializeDeviceListeners();
     if (typeof OfflineQueue !== 'undefined') await OfflineQueue.init();
     loadFirestoreStats();
-    // Mark that bootstrap has completed so onAuthStateChanged skips double loadAllData
+
     try { sessionStorage.setItem('_gznd_bootstrap_ran', '1'); } catch(_) {}
   } catch (e) {
 
