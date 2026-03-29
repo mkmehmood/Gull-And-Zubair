@@ -4687,10 +4687,6 @@ scroll-padding-top: 4px;
 #vs-scroller-factory-inventory, #unified-table-container { max-height: 340px !important; }
 }
 #recycleBinList {
--webkit-overflow-scrolling: touch;
-overscroll-behavior-y: contain;
-touch-action: pan-y;
-will-change: scroll-position;
 scroll-padding-bottom: 16px;
 }
 #manage-accounts-list { max-height: min(320px, 40dvh); overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior-y: contain; touch-action: pan-y; will-change: scroll-position; padding-right: 2px; }
@@ -4967,13 +4963,6 @@ touch-action: pan-y;
 will-change: scroll-position;
 }
 #recycle-bin-screen .screen-body #recycleBinList {
-flex: 1;
-min-height: 0;
-overflow-y: auto;
--webkit-overflow-scrolling: touch;
-overscroll-behavior-y: contain;
-touch-action: pan-y;
-will-change: scroll-position;
 padding-right: 2px;
 }
 #manage-accounts-list {
@@ -5571,3 +5560,38 @@ to   { transform: translateY(100%); opacity: 0;   }
   border-top: 1px solid rgba(175,82,222,0.12);
 }
 .txn-preclose-section:first-child { margin-top: 2px; border-top: none; padding-top: 0; }
+
+/* ── DB Structure Screen ────────────────────────────────────────────────── */
+/* When #dbv-root is injected into the screen, hide the modal title bar
+   (duplicates the screen topbar) and let .screen-body be the sole scroller. */
+#db-structure-screen #delta-sync-details-container {
+  padding: 0;
+}
+#db-structure-screen #dbv-root {
+  max-height: none !important;
+  overflow: visible !important;
+  border-radius: 0;
+  background: transparent;
+}
+/* Hide the duplicate title row (has the ✕ button) inside the screen */
+#db-structure-screen #dbv-root > div:first-child {
+  display: none !important;
+}
+/* Tab bar: sticky so it stays visible while scrolling */
+#db-structure-screen #dbv-root > div:nth-child(2) {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg-gradient, #121212);
+  padding: 10px 0 10px;
+  margin: 0 0 4px;
+  border-bottom: 1px solid var(--glass-border);
+}
+/* Body: no internal scroll — .screen-body handles it */
+#db-structure-screen #dbv-body {
+  overflow: visible !important;
+  flex: none !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  padding: 0;
+}

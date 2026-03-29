@@ -2318,13 +2318,8 @@ displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'Use
 lastActivity: firebase.firestore.FieldValue.serverTimestamp(),
 accountCreated: firebase.firestore.FieldValue.serverTimestamp()
 }, { merge: true });
-const preferencesRef = userRef.collection('account').doc('preferences');
-await preferencesRef.set({
-defaultRepProfile: currentRepProfile || salesRepsList[0] || 'NORAN SHAH',
-timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
-language: navigator.language || 'en',
-theme: document.documentElement.getAttribute('data-theme') || 'dark'
-}, { merge: true });
+// NOTE: account/preferences removed — theme, currency, timezone, defaultRepProfile
+// live in naswar_default_settings (settings/config) and are never read from this path.
 startDeviceHeartbeat(deviceRef);
 
 setTimeout(() => {

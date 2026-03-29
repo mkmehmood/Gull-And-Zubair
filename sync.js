@@ -631,14 +631,9 @@ displayName: this.currentUser.displayName || 'User',
 accountCreated: firebase.firestore.FieldValue.serverTimestamp(),
 lastActivity: firebase.firestore.FieldValue.serverTimestamp()
 });
-const preferencesRef = this.userRef.collection('account').doc('preferences');
-await preferencesRef.set({
-defaultRepProfile: salesRepsList[0] || 'NORAN SHAH',
-timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
-language: navigator.language || 'en',
-theme: 'dark',
-currency: 'PKR'
-});
+// NOTE: account/preferences removed — fields (theme, currency, timezone, defaultRepProfile)
+// are stored in naswar_default_settings (settings/config) and never read from this path.
+// Writing to an unreachable path creates misleading dead data in Firestore.
 this.results.success.push('account');
 } catch (error) {
 this.results.errors.push({ collection: 'account', error: error.message });
@@ -1482,9 +1477,114 @@ async function subscribeToRealtime() {
         } catch (_metaRetryErr) {
           console.warn('pendingFirestoreYearClose: metadata push failed:', _safeErr(_metaRetryErr));
         }
+        // FIX: Re-broadcast yearCloseSignal now that Firestore is fully populated.
+        // Other devices may have already wiped and rebuilt from an incomplete cloud state
+        // (only partially-written collections were present). Broadcasting again forces them
+        // to do a second wipe+rebuild from the now-complete Firestore data.
+        try {
+          const _retryDeviceId = (typeof getDeviceId === 'function') ? await getDeviceId().catch(() => 'unknown') : 'unknown';
+          await userRef.collection('settings').doc('yearCloseSignal').set({
+            type:        'close',
+            triggeredAt: Date.now(),
+            triggeredBy: _retryDeviceId,
+            fyCloseCount: (await sqliteStore.get('naswar_default_settings', {})).fyCloseCount || 0,
+            _retryBroadcast: true,
+          });
+        } catch (_reBroadcastErr) {
+          console.warn('pendingFirestoreYearClose: re-broadcast signal failed:', _safeErr(_reBroadcastErr));
+        }
         showToast('Cloud sync for year-close completed successfully', 'success', 4000);
       }
     } catch (e) { console.warn('pendingFirestoreYearClose retry failed:', _safeErr(e)); }
+  }
+
+  // FIX: Retry year-close restore cloud writes if they failed during a previous restore attempt.
+  // Mirrors the pendingFirestoreYearClose retry above but for the restore path.
+  if (!pendingFirestoreRestore) {
+    try {
+      const _storedRestoreFlag = await sqliteStore.get('pendingFirestoreRestore');
+      if (_storedRestoreFlag === true) pendingFirestoreRestore = true;
+    } catch (_rfErr) {}
+  }
+  if (pendingFirestoreRestore) {
+    try {
+      showToast('Retrying restore cloud sync...', 'info', 3000);
+      const _restoreUserRef = firebaseDB.collection('users').doc(currentUser.uid);
+      const _restoreKeys = [
+        'mfg_pro_pkr', 'customer_sales', 'noman_history', 'rep_sales',
+        'rep_customers', 'sales_customers', 'factory_inventory_data',
+        'factory_production_history', 'stock_returns', 'payment_transactions',
+        'payment_entities', 'expenses',
+      ];
+      const _restoreColMap = {
+        mfg_pro_pkr: 'production', customer_sales: 'sales', noman_history: 'calculator_history',
+        rep_sales: 'rep_sales', rep_customers: 'rep_customers', sales_customers: 'sales_customers',
+        factory_inventory_data: 'inventory', factory_production_history: 'factory_history',
+        stock_returns: 'returns', payment_transactions: 'transactions',
+        payment_entities: 'entities', expenses: 'expenses',
+      };
+      let _restoreAllOk = true;
+      for (const sqlKey of _restoreKeys) {
+        const colName = _restoreColMap[sqlKey];
+        try {
+          const records = ensureArray(await sqliteStore.get(sqlKey, []));
+          if (records.length === 0) continue;
+          const colRef = _restoreUserRef.collection(colName);
+          const incomingIds = new Set(records.filter(r => r && r.id).map(r => String(r.id)));
+          // Mark stale Firestore docs for deletion
+          const preSnap = await colRef.get();
+          const staleDocs = preSnap.docs.filter(d => !incomingIds.has(d.id) && d.id !== '_placeholder_' && !d.data()._placeholder);
+          if (staleDocs.length > 0) {
+            const mBatches = [firebaseDB.batch()]; let mOps = 0;
+            staleDocs.forEach(d => {
+              if (mOps >= 495) { mBatches.push(firebaseDB.batch()); mOps = 0; }
+              mBatches[mBatches.length-1].update(d.ref, { _pendingDelete: true }); mOps++;
+            });
+            await Promise.all(mBatches.map(b => b.commit()));
+          }
+          // Write all current local records
+          const wBatches = [firebaseDB.batch()]; let wOps = 0;
+          for (const record of records) {
+            if (!record || !record.id) continue;
+            const san = (typeof sanitizeForFirestore === 'function') ? sanitizeForFirestore(record) : record;
+            if (!san) continue;
+            if (wOps >= 495) { wBatches.push(firebaseDB.batch()); wOps = 0; }
+            wBatches[wBatches.length-1].set(colRef.doc(String(record.id)), san, { merge: false }); wOps++;
+          }
+          if (wOps > 0) await Promise.all(wBatches.map(b => b.commit()));
+          // Hard-delete the stale docs
+          if (staleDocs.length > 0) {
+            const dBatches = [firebaseDB.batch()]; let dOps = 0;
+            staleDocs.forEach(d => {
+              if (dOps >= 495) { dBatches.push(firebaseDB.batch()); dOps = 0; }
+              dBatches[dBatches.length-1].delete(d.ref); dOps++;
+            });
+            await Promise.all(dBatches.map(b => b.commit()));
+          }
+          if (typeof DeltaSync !== 'undefined') await DeltaSync.setLastSyncTimestamp(colName);
+        } catch (_rColErr) {
+          console.warn(`pendingFirestoreRestore: retry failed for ${colName}:`, _safeErr(_rColErr));
+          _restoreAllOk = false;
+        }
+      }
+      if (_restoreAllOk) {
+        pendingFirestoreRestore = false;
+        await sqliteStore.set('pendingFirestoreRestore', false);
+        // Broadcast the restore signal now that cloud is fully populated
+        try {
+          const _rRetryDeviceId = (typeof getDeviceId === 'function') ? await getDeviceId().catch(() => 'unknown') : 'unknown';
+          await _restoreUserRef.collection('settings').doc('yearCloseSignal').set({
+            type:        'restore',
+            triggeredAt: Date.now(),
+            triggeredBy: _rRetryDeviceId,
+            _retryBroadcast: true,
+          });
+        } catch (_rSigErr) {
+          console.warn('pendingFirestoreRestore: re-broadcast signal failed:', _safeErr(_rSigErr));
+        }
+        showToast('Cloud sync for year-close restore completed successfully', 'success', 4000);
+      }
+    } catch (_rErr) { console.warn('pendingFirestoreRestore retry failed:', _safeErr(_rErr)); }
   }
 
   updateSignalUI('connecting');
@@ -1555,6 +1655,8 @@ async function subscribeToRealtime() {
         const timestampChecks = [
           { cloud: cloudSettings.naswar_default_settings_timestamp, local: await sqliteStore.get('naswar_default_settings_timestamp') },
           { cloud: cloudSettings.repProfile_timestamp,              local: await sqliteStore.get('repProfile_timestamp') },
+          // FIX: also watch for sales_reps written to settings/config during account init
+          { cloud: cloudSettings.sales_reps_timestamp,             local: await sqliteStore.get('sales_reps_list_timestamp') },
         ];
         for (const check of timestampChecks) {
           if ((check.cloud || 0) > (check.local || 0)) { hasUpdates = true; break; }
@@ -1602,6 +1704,18 @@ async function subscribeToRealtime() {
           }
         }
         if (cloudSettings.last_synced) await sqliteStore.set('last_synced', cloudSettings.last_synced);
+        // FIX: sync sales_reps embedded in settings/config (written during account init)
+        if (Array.isArray(cloudSettings.sales_reps) && cloudSettings.sales_reps.length > 0) {
+          const ct = cloudSettings.sales_reps_timestamp || 0;
+          const lt = (await sqliteStore.get('sales_reps_list_timestamp')) || 0;
+          if (ct > lt) {
+            salesRepsList = cloudSettings.sales_reps;
+            await sqliteStore.setBatch([
+              ['sales_reps_list', salesRepsList],
+              ['sales_reps_list_timestamp', ct || Date.now()],
+            ]);
+          }
+        }
         emitSyncUpdate({ settings: null});
         flashLivePulse();
         recordSuccessfulConnection();
@@ -1901,6 +2015,151 @@ async function subscribeToRealtime() {
       else { updateSignalUI('error'); scheduleListenerReconnect(); }
     });
     realtimeRefs.push(teamUnsub);
+
+    // ── YEAR-CLOSE / RESTORE CROSS-DEVICE LISTENER ──────────────────────────────
+    // When another device writes to settings/yearCloseSignal (triggered by either
+    // executeCloseFinancialYear or _doYearCloseRestore), every OTHER device must:
+    //   1. Clear its entire SQLite store and DeltaSync timestamps.
+    //   2. Re-download all data fresh from Firestore (full rebuild).
+    // This guarantees no device is left with a stale mix of pre-close and post-close
+    // records after a year-close or reversal.
+    const _handleYearCloseSignal = async (doc) => {
+      try {
+        if (!doc.exists) return;
+        // Ignore writes from cache / pending (only react to server-confirmed writes)
+        if (doc.metadata.hasPendingWrites) return;
+        if (doc.metadata.fromCache) return;
+        const sig = doc.data();
+        if (!sig || typeof sig !== 'object') return;
+        const sigType       = sig.type;        // 'close' | 'restore'
+        const sigTriggeredAt = sig.triggeredAt || 0;
+        const sigTriggeredBy = sig.triggeredBy || 'unknown';
+
+        // Only process close or restore signals
+        if (sigType !== 'close' && sigType !== 'restore') return;
+
+        // Guard: don't react to our own signal (the device that fired it already
+        // has the correct data). We track the last signal we handled ourselves.
+        const _myDeviceId = (typeof getDeviceId === 'function')
+          ? await getDeviceId().catch(() => null)
+          : null;
+        if (_myDeviceId && sigTriggeredBy === _myDeviceId) return;
+
+        // Guard: only process signals newer than the last one we handled.
+        const _lastHandledSig = (await sqliteStore.get('_lastHandledYearCloseSignal')) || 0;
+        if (sigTriggeredAt <= _lastHandledSig) return;
+
+        // Mark as handled before doing the heavy work to prevent double-processing
+        // if the snapshot fires again before the rebuild finishes.
+        await sqliteStore.set('_lastHandledYearCloseSignal', sigTriggeredAt);
+
+        const _sigLabel = sigType === 'close' ? 'Financial Year Close' : 'Year-Close Restore';
+        console.log(`[sync] yearCloseSignal received (${sigType}) from device ${sigTriggeredBy} — wiping SQLite and rebuilding from cloud.`);
+        showToast(`↻ ${_sigLabel} detected on another device — refreshing data…`, 'info', 6000);
+
+        // Stop any in-progress sync to avoid interference.
+        if (typeof OfflineQueue !== 'undefined') OfflineQueue.cancelRetry && OfflineQueue.cancelRetry();
+
+        // Wipe all user data collections from SQLite.
+        try {
+          const _wipeKeys = [
+            'mfg_pro_pkr', 'customer_sales', 'noman_history', 'rep_sales',
+            'rep_customers', 'sales_customers', 'payment_transactions',
+            'payment_entities', 'factory_inventory_data', 'factory_production_history',
+            'stock_returns', 'expenses', 'deleted_records', 'deletion_records',
+          ];
+          await sqliteStore.setBatch(_wipeKeys.map(k => [k, []]));
+        } catch (_wipeErr) {
+          console.warn('[yearCloseSignal] SQLite wipe failed:', _safeErr(_wipeErr));
+        }
+
+        // Clear DeltaSync and UUIDSyncRegistry so the next pull downloads everything.
+        try {
+          await DeltaSync.clearAllTimestamps();
+          if (typeof UUIDSyncRegistry !== 'undefined') await UUIDSyncRegistry.clearAll().catch(() => {});
+        } catch (_dsErr) { /* non-fatal */ }
+
+        // Re-download all data from Firestore.
+        try {
+          await pullDataFromCloud(false, true);
+        } catch (_rebuildErr) {
+          console.warn('[yearCloseSignal] pullDataFromCloud failed:', _safeErr(_rebuildErr));
+          showToast('Auto-refresh failed — please sync manually.', 'warning', 5000);
+          return;
+        }
+
+        // Refresh UI.
+        try {
+          if (typeof loadAllData === 'function')        await loadAllData();
+          if (typeof invalidateAllCaches === 'function') await invalidateAllCaches();
+          if (typeof refreshAllDisplays === 'function') await refreshAllDisplays();
+        } catch (_uiErr) { /* non-fatal */ }
+
+        showToast(` Data refreshed after ${_sigLabel} from another device.`, 'success', 4000);
+        recordSuccessfulConnection();
+      } catch (_sigHandlerErr) {
+        console.warn('[sync] yearCloseSignal handler error:', _safeErr(_sigHandlerErr));
+      }
+    };
+    const yearCloseSignalUnsub = userRef.collection('settings').doc('yearCloseSignal').onSnapshot(async (doc) => {
+      if (isSyncing) { _enqueueSyncLocked(_handleYearCloseSignal, doc); return; }
+      await _handleYearCloseSignal(doc);
+    }, _e => {
+      const _ec = _e && _e.code;
+      console.warn('[sync] yearCloseSignal listener error:', _ec, _safeErr(_e));
+    });
+    realtimeRefs.push(yearCloseSignalUnsub);
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    // ── DEVICE MODE LISTENER ─────────────────────────────────────────────────────
+    // Watch this device's own Firestore document so remote mode changes (admin→rep,
+    // rep→admin, etc.) applied by another device take effect immediately, without
+    // requiring a page reload or re-login.
+    try {
+      const _listenDeviceId = (typeof getDeviceId === 'function') ? await getDeviceId().catch(() => null) : null;
+      if (_listenDeviceId) {
+        const _deviceDocRef = userRef.collection('devices').doc(_listenDeviceId);
+        const _handleDeviceSnapshot = async (docSnap) => {
+          try {
+            if (!docSnap.exists) return;
+            if (docSnap.metadata.hasPendingWrites) return;
+            if (docSnap.metadata.fromCache) return;
+            const data = docSnap.data();
+            if (!data) return;
+            const cloudMode      = data.currentMode || 'admin';
+            const cloudTimestamp = data.appMode_timestamp || 0;
+            // Only act if this is a remotely applied command (flag set by remoteControlDevice)
+            if (!data.remoteAppliedMode) return;
+            const localTimestamp = Number(await sqliteStore.get('appMode_timestamp').catch(() => 0)) || 0;
+            if (cloudTimestamp <= localTimestamp) return;
+            if (cloudMode === appMode) return; // already in this mode
+            // Apply the remote mode change live — _applyModeFromData reloads the page
+            if (typeof _applyModeFromData === 'function') {
+              _applyModeFromData(
+                cloudMode, cloudTimestamp,
+                data.assignedRep    || null,
+                data.assignedManager || null,
+                data.assignedUserTabs || [],
+                true /* remoteApplied */
+              );
+            }
+          } catch (_devSnapErr) {
+            console.warn('[sync] device snapshot handler error:', _safeErr(_devSnapErr));
+          }
+        };
+        const deviceDocUnsub = _deviceDocRef.onSnapshot(async (docSnap) => {
+          if (isSyncing) { _enqueueSyncLocked(_handleDeviceSnapshot, docSnap); return; }
+          await _handleDeviceSnapshot(docSnap);
+        }, _e => {
+          // Non-fatal — device doc listener failing doesn't break core sync
+          console.warn('[sync] device doc listener error:', _e && _e.code, _safeErr(_e));
+        });
+        realtimeRefs.push(deviceDocUnsub);
+      }
+    } catch (_devListenErr) {
+      console.warn('[sync] failed to register device doc listener (non-fatal):', _safeErr(_devListenErr));
+    }
+    // ─────────────────────────────────────────────────────────────────────────────
 
     updateSignalUI('online');
     recordSuccessfulConnection();

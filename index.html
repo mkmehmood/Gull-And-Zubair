@@ -549,8 +549,8 @@ input:checked + .theme-toggle-track::before { transform: translateX(22px); }
   <div class="screen-topbar">
     <h2 class="screen-title">Recycle Bin</h2>
   </div>
-  <div class="screen-body" style="display:flex;flex-direction:column;gap:10px;">
-    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+  <div class="screen-body">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
       <div id="recycleBinStats" style="font-size:0.75rem;color:var(--text-muted);"></div>
       <select id="recycleBinFilter" onchange="renderRecycleBin(this.value)" style="padding:5px 10px;border-radius:999px;border:1px solid var(--glass-border);background:var(--input-bg);color:var(--text-main);font-size:0.78rem;cursor:pointer;">
         <option value="all">All Tabs</option>
@@ -562,10 +562,10 @@ input:checked + .theme-toggle-track::before { transform: translateX(22px); }
         <option value="tab_payments">Payments Tab</option>
       </select>
     </div>
-    <div style="background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.18);border-radius:14px;padding:9px 13px;font-size:0.73rem;color:var(--text-muted);line-height:1.5;">
+    <div style="background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.18);border-radius:14px;padding:9px 13px;font-size:0.73rem;color:var(--text-muted);line-height:1.5;margin-bottom:10px;">
       Recover restores the record to its original collection. Records expire after <strong style="color:var(--text-main);">90 days</strong>.
     </div>
-    <div id="recycleBinList" style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-y:contain;touch-action:pan-y;will-change:scroll-position;"></div>
+    <div id="recycleBinList"></div>
   </div>
 </div>
 
@@ -2809,12 +2809,13 @@ window.loadDbStructureScreen = async function() {
     container.innerHTML = '<div style="color:var(--text-muted);padding:20px;text-align:center;font-size:0.82rem;">Requires an active Firestore connection.</div>';
     return;
   }
+  // Intercept the modal that showDeltaSyncDetails appends to document.body
   var originalAppend = document.body.appendChild.bind(document.body);
   var capturedModal = null;
   document.body.appendChild = function(el) {
     if (el && el.id === 'delta-stats-modal') {
       document.body.appendChild = originalAppend;
-      el.style.display = 'none';
+      el.style.cssText = 'display:none!important;position:fixed;';
       capturedModal = el;
       return originalAppend(el);
     }
@@ -2823,13 +2824,17 @@ window.loadDbStructureScreen = async function() {
   try {
     await showFn();
     if (capturedModal) {
-      var inner = capturedModal.querySelector('[style*="background: var(--glass)"]') || capturedModal.firstElementChild;
-      if (inner) {
-        container.innerHTML = inner.innerHTML;
-        var injectedH3 = container.querySelector('h3');
-        if (injectedH3) injectedH3.remove();
+      var dbvRoot = capturedModal.querySelector('#dbv-root');
+      if (dbvRoot) {
+        // CSS (#db-structure-screen #dbv-root) handles flattening.
+        // Just move the node into the container — no JS style overrides needed.
+        container.innerHTML = '';
+        container.appendChild(dbvRoot);
       } else {
-        container.innerHTML = '<div style="color:var(--text-muted);padding:20px;text-align:center;">No content returned.</div>';
+        // Fallback for any older build that doesn't produce #dbv-root
+        var inner = capturedModal.firstElementChild;
+        if (inner) { container.innerHTML = inner.innerHTML; }
+        else { container.innerHTML = '<div style="color:var(--text-muted);padding:20px;text-align:center;">No content returned.</div>'; }
       }
       capturedModal.remove();
     } else {

@@ -7492,6 +7492,7 @@ let factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {}
     }
   } catch(metaErr) { console.warn('Could not reverse FY metadata:', _safeErr(metaErr)); }
   if (firebaseDB && currentUser) {
+    let _restoreCloudOk = false;
     try {
       showToast('Uploading reversed data to cloud...', 'info');
       const userRef = firebaseDB.collection('users').doc(currentUser.uid);
@@ -7558,11 +7559,38 @@ let factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {}
           await DeltaSync.setLastSyncTimestamp(colName);
         } catch(colErr) { console.warn(`Cloud replace warning for ${colName}:`, _safeErr(colErr)); }
       }
+      _restoreCloudOk = true;
       showToast(' Cloud data replaced with pre-close snapshot', 'success', 3000);
     } catch(cloudErr) {
       console.warn('Cloud replace failed:', _safeErr(cloudErr));
-      showToast('Local data reversed. Cloud sync failed — sync manually.', 'warning', 5000);
+      // FIX: set pendingFirestoreRestore so subscribeToRealtime retries on reconnect
+      pendingFirestoreRestore = true;
+      await sqliteStore.set('pendingFirestoreRestore', true)
+        .catch(e => console.warn('[ycRestore] Could not persist pendingFirestoreRestore:', _safeErr(e)));
+      showToast('Local data reversed. Cloud sync failed — will retry automatically.', 'warning', 5000);
     }
+    // FIX: only broadcast the cross-device signal after cloud writes succeeded.
+    // Broadcasting before meant other devices would wipe+rebuild from incomplete Firestore.
+    if (_restoreCloudOk) {
+      try {
+        const _restoreSigTs = Date.now();
+        const _restoreDeviceId = (typeof getDeviceId === 'function') ? await getDeviceId().catch(() => 'unknown') : 'unknown';
+        await firebaseDB.collection('users').doc(currentUser.uid)
+          .collection('settings').doc('yearCloseSignal')
+          .set({
+            type:        'restore',
+            triggeredAt: _restoreSigTs,
+            triggeredBy: _restoreDeviceId,
+          });
+      } catch (_restoreSigErr) {
+        console.warn('[ycRestore] Failed to write cross-device signal (non-fatal):', _safeErr(_restoreSigErr));
+      }
+    }
+  } else {
+    // Offline: flag for retry when connection returns
+    pendingFirestoreRestore = true;
+    await sqliteStore.set('pendingFirestoreRestore', true)
+      .catch(e => console.warn('[ycRestore] Could not persist pendingFirestoreRestore:', _safeErr(e)));
   }
   await loadAllData();
   try { syncFactoryProductionStats(); } catch(e) {}

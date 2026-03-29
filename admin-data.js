@@ -35,304 +35,440 @@ async function updateDeltaSyncStatsDisplay() {
 }
 
 async function showDeltaSyncDetails() {
-  const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
-  const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
-  const repSales = ensureArray(await sqliteStore.get('rep_sales'));
-  const salesHistory = ensureArray(await sqliteStore.get('noman_history'));
-  const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
-  const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
-  const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
-  const factoryProductionHistory = ensureArray(await sqliteStore.get('factory_production_history'));
-  const stockReturns = ensureArray(await sqliteStore.get('stock_returns'));
-  const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
 if (!firebaseDB || !currentUser) {
-showToast('Please log in to view Firestore structure', 'warning', 3000);
-return;
+  showToast('Please log in to view database structure', 'warning', 3000);
+  return;
 }
-const statsInitialized = await initializeSyncStatsIfNeeded();
-if (statsInitialized) {
-}
-const loadingModal = document.createElement('div');
-loadingModal.id = 'delta-stats-modal';
-loadingModal.style.cssText = 'position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 10300;';
-loadingModal.innerHTML = `
-<div style="background: var(--glass); padding: 40px; border-radius: 100px; text-align: center;">
-<div style="margin-bottom: 15px; font-size: 4rem; line-height: 1;"></div>
-<div style="color: var(--text); font-size: 1rem;">Loading Firestore</div>
-</div>
-`;
-document.body.appendChild(loadingModal);
+
+// ── Spinner ─────────────────────────────────────────────────────────────────
+const modal = document.createElement('div');
+modal.id = 'delta-stats-modal';
+modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.82);display:flex;align-items:center;justify-content:center;z-index:10300;padding:16px;';
+modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+modal.innerHTML = `<div style="background:var(--glass);padding:40px;border-radius:20px;text-align:center;">
+  <div style="font-size:2.2rem;margin-bottom:12px;">🗄️</div>
+  <div style="color:var(--text-muted);font-size:0.85rem;">Loading database structure…</div>
+</div>`;
+document.body.appendChild(modal);
+
 try {
-const userRef = firebaseDB.collection('users').doc(currentUser.uid);
-const [
-productionSnap, salesSnap, calcHistorySnap, repSalesSnap, repCustomersSnap,
-salesCustomersSnap,
-transactionsSnap, entitiesSnap, inventorySnap, factoryHistorySnap,
-returnsSnap, expensesSnap, deletionsSnap,
-settingsDoc, factorySettingsDoc, expenseCategoriesDoc, teamDoc
-] = await Promise.all([
-userRef.collection('production').get(),
-userRef.collection('sales').get(),
-userRef.collection('calculator_history').get(),
-userRef.collection('rep_sales').get(),
-userRef.collection('rep_customers').get(),
-userRef.collection('sales_customers').get(),
-userRef.collection('transactions').get(),
-userRef.collection('entities').get(),
-userRef.collection('inventory').get(),
-userRef.collection('factory_history').get(),
-userRef.collection('returns').get(),
-userRef.collection('expenses').get(),
-userRef.collection('deletions').get(),
-userRef.collection('settings').doc('config').get(),
-userRef.collection('factorySettings').doc('config').get(),
-userRef.collection('expenseCategories').doc('categories').get(),
-userRef.collection('settings').doc('team').get()
-]);
-const stats = await DeltaSync.getSyncStats();
-const uuidStats = (typeof UUIDSyncRegistry !== 'undefined') ? UUIDSyncRegistry.stats() : {};
-const myDeviceShard = uuidStats._myDeviceShard ? uuidStats._myDeviceShard.toUpperCase() : '—';
-const collections = [
-{ name: 'production',         snap: productionSnap,            sqliteKey: 'mfg_pro_pkr',               jsVar: 'db',                       description: 'Factory production records' },
-{ name: 'sales',              snap: salesSnap,                  sqliteKey: 'customer_sales',             jsVar: 'customerSales',            description: 'Direct customer sales' },
-{ name: 'rep_sales',          snap: repSalesSnap,               sqliteKey: 'rep_sales',                  jsVar: 'repSales',                 description: 'Rep sales to customers' },
-{ name: 'rep_customers',      snap: repCustomersSnap,           sqliteKey: 'rep_customers',              jsVar: 'repCustomers',             description: 'Rep customer contact registry' },
-{ name: 'sales_customers',    snap: salesCustomersSnap,         sqliteKey: 'sales_customers',            jsVar: 'salesCustomers',           description: 'Sales tab customer contact registry' },
-{ name: 'calculator_history', snap: calcHistorySnap,            sqliteKey: 'noman_history',              jsVar: 'salesHistory',             description: 'Calculator / daily ledger entries' },
-{ name: 'transactions',       snap: transactionsSnap,           sqliteKey: 'payment_transactions',       jsVar: 'paymentTransactions',      description: 'Cash & entity payment transactions' },
-{ name: 'entities',           snap: entitiesSnap,               sqliteKey: 'payment_entities',           jsVar: 'paymentEntities',          description: 'Payment entity accounts' },
-{ name: 'inventory',          snap: inventorySnap,              sqliteKey: 'factory_inventory_data',     jsVar: 'factoryInventoryData',     description: 'Factory raw material inventory' },
-{ name: 'factory_history',    snap: factoryHistorySnap,         sqliteKey: 'factory_production_history', jsVar: 'factoryProductionHistory', description: 'Factory batch production history' },
-{ name: 'returns',            snap: returnsSnap,                sqliteKey: 'stock_returns',              jsVar: 'stockReturns',             description: 'Stock return records' },
-{ name: 'expenses',           snap: expensesSnap,               sqliteKey: 'expenses',                   jsVar: 'expenseRecords',           description: 'Expense entries' },
-{ name: 'deletions',          snap: deletionsSnap,              sqliteKey: 'deletion_records',           jsVar: 'deletedRecordIds',         description: 'Tombstone records for deleted IDs' }
-];
-const documents = [
-{
-name: 'settings/config',
-doc: settingsDoc,
-icon: '',
-description: 'App settings (defaultSettings, last_synced)',
-keys: ['naswar_default_settings', 'last_synced', 'initialized_at', 'version']
-},
-{
-name: 'settings/team',
-doc: teamDoc,
-icon: '',
-description: 'Team lists (salesRepsList, userRolesList)',
-keys: ['sales_reps', 'user_roles', 'updated_at']
-},
-{
-name: 'factorySettings/config',
-doc: factorySettingsDoc,
-icon: '',
-description: 'Factory formulas & costs (factoryDefaultFormulas, factoryAdditionalCosts, factoryUnitTracking)',
-keys: ['default_formulas', 'additional_costs', 'cost_adjustment_factor', 'sale_prices', 'unit_tracking']
-},
-{
-name: 'expenseCategories/categories',
-doc: expenseCategoriesDoc,
-icon: '',
-description: 'Expense categories (expenseCategories)',
-keys: ['categories']
-}
-];
-let html = `
-<div style="background: var(--glass); padding: 20px; border-radius: 20px; max-width: 700px; max-height: 80vh; overflow-y: auto;">
-<h3 style="margin: 0 0 15px 0; color: var(--accent); display:flex; align-items:center; gap:8px;"> Firestore Database Structure</h3>
-<div style="margin-bottom: 20px; padding: 12px; background: var(--input-bg); border-radius: 16px; border-left: 3px solid var(--accent);">
-<div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 5px;">Database Path:</div>
-<div style="font-size: 0.8rem; color: var(--accent); font-family: 'Geist Mono', 'Courier New', monospace;">
-users/${currentUser.uid}/
-</div>
-</div>
+  const userRef = firebaseDB.collection('users').doc(currentUser.uid);
+  const deviceId = (typeof getDeviceId === 'function') ? await getDeviceId().catch(() => '—') : '—';
 
-<div class="u-mb-20" >
-<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-<h4 style="margin: 0; color: var(--text); font-size: 0.9rem;"> Collections (${collections.length})</h4>
-<div style="font-size: 0.65rem; color: var(--text-muted); font-family:'Geist Mono','Courier New',monospace;" title="This device's FNV-1a 32-bit shard encoded in every UUID generated here">
-Shard: <span style="color: var(--accent); font-weight: 700; letter-spacing: 0.08em;">${myDeviceShard}</span>
-</div>
-</div>
-`;
-let totalDocs = 0;
-const actualReads = firestoreStats.reads || 0;
-const actualWrites = firestoreStats.writes || 0;
-collections.forEach(col => {
-const count = col.snap.size;
-totalDocs += count;
-const stat = stats[col.name] || { syncCount: 0, totalReads: 0, totalWrites: 0, lastSync: null };
-const lastSync = stat.lastSync ? new Date(stat.lastSync).toLocaleString() : 'Never';
-const hasListener = col.name !== 'deletions';
-const uuidColStat = uuidStats[col.name] || {};
-const uploadedCount = uuidColStat.uploaded || 0;
-const downloadedCount = uuidColStat.downloaded || 0;
-const isDirty = DeltaSync.isDirty(col.name);
-const dirtyColor = isDirty ? '#f59e0b' : '#30d158';
-const dirtyLabel = isDirty ? ' pending' : ' clean';
-html += `
-<div style="margin-bottom: 10px; padding: 12px; background: var(--input-bg); border-radius: 16px; border: 1px solid var(--glass-border);">
-<div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
-<div style="flex:1; min-width:0;">
-<div style="font-weight: 600; font-size: 0.85rem; color: var(--text); font-family:'Geist Mono','Courier New',monospace;">${col.name}</div>
-<div style="font-size: 0.68rem; color: var(--text-muted); margin-top: 3px;">${col.description}</div>
-<div style="font-size: 0.62rem; color: var(--text-muted); margin-top: 2px; font-family:'Geist Mono','Courier New',monospace;">
-SQLite: <span style="color:var(--accent)">${col.sqliteKey}</span> → JS: <span style="color:var(--accent)">${col.jsVar}</span>
-</div>
-</div>
-<div style="text-align: right; flex-shrink:0; margin-left:8px;">
-<div style="font-size: 0.75rem; font-weight: 600; color: var(--accent);">${count} docs</div>
-${hasListener ? '<div style="font-size: 0.65rem; color: #30d158;"> Live</div>' : '<div style="font-size: 0.65rem; color: var(--text-muted);"> Polling</div>'}
-</div>
-</div>
-<div style="border-top: 1px solid var(--glass-border); padding-top: 7px; margin-top: 2px;">
-<div style="display: grid; grid-template-columns: auto auto auto; gap: 4px 14px; font-size: 0.64rem; color: var(--text-muted); margin-bottom: 5px;">
-<div title="Number of times this collection completed a sync cycle">Syncs: <span style="color:var(--text)">${stat.syncCount || 0}</span></div>
-<div title="Timestamp of last completed sync">Last: <span style="color:var(--text)">${lastSync}</span></div>
-<div title="Local changes not yet pushed to Firestore" style="color:${dirtyColor};">${dirtyLabel}</div>
-</div>
-<div style="display: flex; gap: 12px; font-size: 0.64rem;">
-<div title="Records pushed to Firestore this session" style="color: var(--text-muted);">
-↑ <span style="color: #30d158; font-weight: 600;">${uploadedCount}</span> uploaded
-</div>
-<div title="Records pulled from Firestore this session" style="color: var(--text-muted);">
-↓ <span style="color: #007aff; font-weight: 600;">${downloadedCount}</span> downloaded
-</div>
-</div>
-</div>
-</div>
-`;
-});
-html += `
-</div>
-<div class="u-mb-20" >
-<h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 0.9rem;"> Configuration Documents (${documents.length})</h4>
-`;
-documents.forEach(docInfo => {
-const exists = docInfo.doc.exists;
-const data = exists ? docInfo.doc.data() : null;
-const hasListener = true;
-html += `
-<div style="margin-bottom: 10px; padding: 12px; background: var(--input-bg); border-radius: 16px; border: 1px solid var(--glass-border);">
-<div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
-<div>
-<div style="font-weight: 600; font-size: 0.85rem; color: var(--text);">
-${docInfo.icon} ${docInfo.name}
-</div>
-<div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 2px;">
-${docInfo.description}
-</div>
-</div>
-<div style="text-align: right;">
-<div style="font-size: 0.75rem; font-weight: 600; color: ${exists ? 'var(--accent)' : '#ff453a'};">
-${exists ? ' Exists' : ' Missing'}
-</div>
-${hasListener ? '<div style="font-size: 0.65rem; color: #30d158;"> Live</div>' : ''}
-</div>
-</div>
-`;
-if (exists && data) {
-html += `<div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 6px;">`;
-html += `<div style="font-weight: 600; margin-bottom: 4px;">Fields:</div>`;
-docInfo.keys.forEach(key => {
-const hasKey = key in data;
-const value = data[key];
-let valueStr = '';
-if (typeof value === 'object' && value !== null) {
-if (Array.isArray(value)) {
-valueStr = `Array(${value.length})`;
-} else {
-valueStr = `Object(${Object.keys(value).length} keys)`;
-}
-} else if (typeof value === 'string') {
-valueStr = value.length > 30 ? value.substring(0, 30) + '...' : value;
-} else {
-valueStr = String(value);
-}
-html += `
-<div style="padding: 2px 0; display: flex; justify-content: space-between;">
-<span style="color: ${hasKey ? 'var(--text)' : '#ff453a'};">
-${hasKey ? '' : ''} ${key}
-</span>
-${hasKey ? `<span style="color: var(--text-muted); font-family: 'Geist Mono', 'Courier New', monospace; font-size: 0.65rem;">${valueStr}</span>` : ''}
-</div>
-`;
-});
-html += `</div>`;
-}
-html += `</div>`;
-});
-html += `
-</div>
-<div style="padding: 15px; background: var(--input-bg); border-radius: 16px; border: 2px solid var(--accent); margin-bottom: 15px;">
-<h4 style="margin: 0 0 10px 0; color: var(--accent); font-size: 0.85rem;">Firestore Usage Summary</h4>
-<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; font-size: 0.75rem;">
-<div>
-<div style="color: var(--text-muted); font-size: 0.65rem;">Total Documents</div>
-<div style="color: var(--text); font-weight: 600; font-size: 1rem;">${totalDocs}</div>
-</div>
-<div>
-<div style="color: var(--text-muted); font-size: 0.65rem;">Firestore Reads</div>
-<div style="color: #30d158; font-weight: 600; font-size: 1rem;">${actualReads}</div>
-</div>
-<div>
-<div style="color: var(--text-muted); font-size: 0.65rem;">Firestore Writes</div>
-<div style="color: #007aff; font-weight: 600; font-size: 1rem;">${actualWrites}</div>
-</div>
-</div>
-<div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--glass-border); font-size: 0.65rem; color: var(--text-muted);">
-<div class="u-row-between" >
-<span style="display:flex;align-items:center;gap:4px;">Tracking Period:</span>
-<span style="color: var(--text);">${(() => {
-const hours = Math.floor((Date.now() - firestoreStats.lastReset) / (1000 * 60 * 60));
-if (hours < 1) return 'Less than 1 hour';
-if (hours === 1) return '1 hour';
-if (hours < 24) return hours + ' hours';
-const days = Math.floor(hours / 24);
-return days + (days === 1 ? ' day' : ' days');
-})()}</span>
-</div>
-<div style="margin-top: 5px; font-size: 0.6rem; color: var(--text-muted);">
-ℹ Stats auto-reset every 24 hours • Reads & writes tracked from actual Firestore operations
-</div>
-</div>
-</div>
-<div style="padding: 12px; background: rgba(48, 209, 88, 0.1); border-radius: 16px; border: 1px solid rgba(48, 209, 88, 0.3); margin-bottom: 15px;">
-<div style="font-size: 0.75rem; color: #30d158; font-weight: 600; margin-bottom: 5px;">
-Active Realtime Listeners
-</div>
-<div style="font-size: 0.7rem; color: var(--text);">
-${collections.filter(c => c.name !== 'deletions').length} collection listeners + 4 document listeners active
-</div>
-<div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 5px;">
-Updates sync automatically in background when data changes in Firestore
-</div>
-</div>
+  // Fetch all Firestore collections in parallel
+  const [
+    productionSnap, salesSnap, calcHistorySnap, repSalesSnap, repCustomersSnap,
+    salesCustomersSnap, transactionsSnap, entitiesSnap, inventorySnap,
+    factoryHistorySnap, returnsSnap, expensesSnap, deletionsSnap,
+    settingsDoc, factorySettingsDoc, expenseCategoriesDoc, teamDoc,
+    deviceDoc, accountInfoDoc, yearCloseSignalDoc
+  ] = await Promise.all([
+    userRef.collection('production').get(),
+    userRef.collection('sales').get(),
+    userRef.collection('calculator_history').get(),
+    userRef.collection('rep_sales').get(),
+    userRef.collection('rep_customers').get(),
+    userRef.collection('sales_customers').get(),
+    userRef.collection('transactions').get(),
+    userRef.collection('entities').get(),
+    userRef.collection('inventory').get(),
+    userRef.collection('factory_history').get(),
+    userRef.collection('returns').get(),
+    userRef.collection('expenses').get(),
+    userRef.collection('deletions').get(),
+    userRef.collection('settings').doc('config').get(),
+    userRef.collection('factorySettings').doc('config').get(),
+    userRef.collection('expenseCategories').doc('categories').get(),
+    userRef.collection('settings').doc('team').get(),
+    userRef.collection('devices').doc(deviceId).get().catch(() => ({ exists: false, data: () => null })),
+    userRef.collection('account').doc('info').get().catch(() => ({ exists: false, data: () => null })),
+    userRef.collection('settings').doc('yearCloseSignal').get().catch(() => ({ exists: false, data: () => null })),
+  ]);
 
-</div>
+  const stats      = await DeltaSync.getSyncStats();
+  const uuidStats  = (typeof UUIDSyncRegistry !== 'undefined') ? UUIDSyncRegistry.stats() : {};
+  const myDeviceShard = uuidStats._myDeviceShard ? uuidStats._myDeviceShard.toUpperCase() : '—';
+  const firestoreStats = (typeof _firestoreStats !== 'undefined') ? _firestoreStats : { reads: 0, writes: 0, lastReset: Date.now() };
+
+  // SQLite live counts
+  const sqliteCounts = {};
+  const sqliteKeys = ['mfg_pro_pkr','customer_sales','noman_history','rep_sales','rep_customers',
+    'sales_customers','payment_transactions','payment_entities','factory_inventory_data',
+    'factory_production_history','stock_returns','expenses','deletion_records'];
+  await Promise.all(sqliteKeys.map(async k => {
+    const arr = await sqliteStore.get(k, []);
+    sqliteCounts[k] = Array.isArray(arr) ? arr.length : 0;
+  }));
+
+  const COLLECTIONS = [
+    { fsName:'production',         sqliteKey:'mfg_pro_pkr',               jsVar:'db',                       snap:productionSnap,      tabFn:'syncProductionTab',  lock:true,  desc:'Factory production batches' },
+    { fsName:'sales',              sqliteKey:'customer_sales',             jsVar:'customerSales',            snap:salesSnap,           tabFn:'syncSalesTab',       lock:true,  desc:'Direct customer sales' },
+    { fsName:'calculator_history', sqliteKey:'noman_history',              jsVar:'salesHistory',             snap:calcHistorySnap,     tabFn:'syncCalculatorTab',  lock:true,  desc:'Daily calculator / ledger entries' },
+    { fsName:'rep_sales',          sqliteKey:'rep_sales',                  jsVar:'repSales',                 snap:repSalesSnap,        tabFn:'syncRepTab',         lock:true,  desc:'Rep sales to customers' },
+    { fsName:'rep_customers',      sqliteKey:'rep_customers',              jsVar:'repCustomers',             snap:repCustomersSnap,    tabFn:'syncRepTab',         lock:false, desc:'Rep customer contact registry' },
+    { fsName:'sales_customers',    sqliteKey:'sales_customers',            jsVar:'salesCustomers',           snap:salesCustomersSnap,  tabFn:'renderCustomersTable',lock:false,desc:'Sales tab customer contacts' },
+    { fsName:'transactions',       sqliteKey:'payment_transactions',       jsVar:'paymentTransactions',      snap:transactionsSnap,    tabFn:'syncPaymentsTab',    lock:true,  desc:'Cash & entity payment transactions' },
+    { fsName:'entities',           sqliteKey:'payment_entities',           jsVar:'paymentEntities',          snap:entitiesSnap,        tabFn:'refreshPaymentTab',  lock:false, desc:'Payment entity accounts' },
+    { fsName:'inventory',          sqliteKey:'factory_inventory_data',     jsVar:'factoryInventoryData',     snap:inventorySnap,       tabFn:'syncFactoryTab',     lock:false, desc:'Raw material inventory' },
+    { fsName:'factory_history',    sqliteKey:'factory_production_history', jsVar:'factoryProductionHistory', snap:factoryHistorySnap,  tabFn:'syncFactoryTab',     lock:true,  desc:'Factory batch production history' },
+    { fsName:'returns',            sqliteKey:'stock_returns',              jsVar:'stockReturns',             snap:returnsSnap,         tabFn:'syncProductionTab',  lock:true,  desc:'Stock return records' },
+    { fsName:'expenses',           sqliteKey:'expenses',                   jsVar:'expenseRecords',           snap:expensesSnap,        tabFn:'refreshPaymentTab',  lock:true,  desc:'Expense entries' },
+    { fsName:'deletions',          sqliteKey:'deletion_records',           jsVar:'deletedRecordIds',         snap:deletionsSnap,       tabFn:null,                 lock:false, desc:'Tombstone records for soft-deleted IDs' },
+  ];
+
+  const CONFIG_DOCS = [
+    { path:'settings/config',              doc:settingsDoc,          desc:'App settings, FY counter, repProfile, sales_reps (init)',
+      sqlite:[['naswar_default_settings','naswar_default_settings'],['current_rep_profile','repProfile'],['sales_reps_list','sales_reps (init)']],
+      fsFields:['naswar_default_settings','naswar_default_settings_timestamp','repProfile','repProfile_timestamp','sales_reps','sales_reps_timestamp','last_synced'],
+      listener:'_handleSettingsSnapshot' },
+    { path:'settings/team',                doc:teamDoc,              desc:'Sales reps list & user roles',
+      sqlite:[['sales_reps_list','sales_reps'],['user_roles_list','user_roles']],
+      fsFields:['sales_reps','user_roles','updated_at'],
+      listener:'_handleTeamSnapshot' },
+    { path:'settings/yearCloseSignal',     doc:yearCloseSignalDoc,   desc:'Cross-device year-close / restore broadcast signal',
+      sqlite:[['_lastHandledYearCloseSignal','triggeredAt']],
+      fsFields:['type','triggeredAt','triggeredBy','fyCloseCount'],
+      listener:'_handleYearCloseSignal' },
+    { path:'factorySettings/config',       doc:factorySettingsDoc,   desc:'Factory formulas, costs, sale prices, unit tracking',
+      sqlite:[['factory_default_formulas','default_formulas'],['factory_additional_costs','additional_costs'],['factory_cost_adjustment_factor','cost_adjustment_factor'],['factory_sale_prices','sale_prices'],['factory_unit_tracking','unit_tracking']],
+      fsFields:['default_formulas','additional_costs','cost_adjustment_factor','sale_prices','unit_tracking','default_formulas_timestamp'],
+      listener:'_handleFactorySettingsSnapshot' },
+    { path:'expenseCategories/categories', doc:expenseCategoriesDoc, desc:'Expense category definitions',
+      sqlite:[['expense_categories','categories']],
+      fsFields:['categories','categories_timestamp'],
+      listener:'_handleExpenseCategoriesSnapshot' },
+    { path:`devices/${deviceId}`,          doc:deviceDoc,            desc:'This device: mode, fingerprint, heartbeat, remote commands',
+      sqlite:[['appMode','currentMode'],['appMode_timestamp','appMode_timestamp'],['device_id','deviceId']],
+      fsFields:['currentMode','appMode_timestamp','assignedRep','assignedManager','remoteAppliedMode','lastSeen','online','fingerprint'],
+      listener:'_handleDeviceSnapshot (live mode changes)' },
+    { path:'account/info',                 doc:accountInfoDoc,       desc:'Account email, displayName, lastActivity (updated on login)',
+      sqlite:[],
+      fsFields:['email','displayName','accountCreated','lastActivity'],
+      listener:'none — read once on login' },
+  ];
+
+  // ── helpers ─────────────────────────────────────────────────────────────────
+  const ago = ms => {
+    if (!ms) return 'never';
+    const s = Math.floor((Date.now() - ms) / 1000);
+    if (s < 60) return s + 's ago';
+    if (s < 3600) return Math.floor(s/60) + 'm ago';
+    if (s < 86400) return Math.floor(s/3600) + 'h ago';
+    return Math.floor(s/86400) + 'd ago';
+  };
+  const fmtVal = v => {
+    if (v === null || v === undefined) return '<span style="color:var(--text-muted)">null</span>';
+    if (typeof v === 'boolean') return `<span style="color:${v?'#30d158':'#ff453a'}">${v}</span>`;
+    if (typeof v === 'object') {
+      if (Array.isArray(v)) return `<span style="color:var(--accent-cyan)">Array(${v.length})</span>`;
+      if (v.seconds !== undefined) return `<span style="color:var(--text-muted)">${new Date(v.seconds*1000).toLocaleDateString()}</span>`;
+      return `<span style="color:var(--accent-cyan)">Object(${Object.keys(v).length})</span>`;
+    }
+    if (typeof v === 'string') {
+      const s = v.length > 28 ? v.slice(0,28)+'…' : v;
+      return `<span style="color:var(--text-muted)">"${s}"</span>`;
+    }
+    if (typeof v === 'number') return `<span style="color:var(--accent-gold)">${v > 1e10 ? ago(v) : v.toLocaleString()}</span>`;
+    return `<span style="color:var(--text)">${String(v).slice(0,30)}</span>`;
+  };
+  const badge = (txt, color, bg) =>
+    `<span style="font-size:0.6rem;font-weight:700;padding:2px 7px;border-radius:20px;background:${bg};color:${color};letter-spacing:0.03em">${txt}</span>`;
+  const pill = (txt, color) =>
+    `<span style="font-size:0.62rem;padding:2px 6px;border-radius:10px;background:rgba(128,128,128,0.12);color:${color};font-family:'Geist Mono','Courier New',monospace">${txt}</span>`;
+
+  let totalFsDocs = 0;
+  COLLECTIONS.forEach(c => { totalFsDocs += c.snap.size || 0; });
+
+  // ── header ───────────────────────────────────────────────────────────────────
+  let html = `
+<div id="dbv-root" style="background:var(--glass);border-radius:20px;max-width:760px;width:100%;max-height:88vh;display:flex;flex-direction:column;overflow:hidden;">
+
+  <!-- title bar -->
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 20px 0;flex-shrink:0">
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:1.3rem">🗄️</span>
+      <div>
+        <div style="font-weight:700;font-size:1rem;color:var(--text)">Database Structure</div>
+        <div style="font-size:0.67rem;color:var(--text-muted);font-family:'Geist Mono','Courier New',monospace;margin-top:1px">
+          users/${currentUser.uid.slice(0,14)}…/  &nbsp;·&nbsp; shard&nbsp;<span style="color:var(--accent);font-weight:700">${myDeviceShard}</span>
+        </div>
+      </div>
+    </div>
+    <button onclick="document.getElementById('delta-stats-modal').remove()"
+      style="background:rgba(255,255,255,0.07);border:none;border-radius:50%;width:32px;height:32px;font-size:1rem;cursor:pointer;color:var(--text-muted);display:flex;align-items:center;justify-content:center">✕</button>
+  </div>
+
+  <!-- tab bar -->
+  <div style="display:flex;gap:4px;padding:14px 20px 0;flex-shrink:0">
+    ${['Collections','Config Docs','Listeners','Summary'].map((t,i) =>
+      `<button id="dbv-tab-${i}" onclick="dbvShowTab(${i})"
+        style="padding:5px 12px;border-radius:12px;border:none;cursor:pointer;font-size:0.75rem;font-weight:600;
+        background:${i===0?'var(--accent)':'rgba(128,128,128,0.12)'};
+        color:${i===0?'#fff':'var(--text-muted)'}">${t}</button>`
+    ).join('')}
+  </div>
+
+  <!-- scrollable body -->
+  <div id="dbv-body" style="overflow-y:auto;padding:16px 20px 20px;flex:1;min-height:0">
 `;
-loadingModal.innerHTML = html;
-} catch (error) {
-console.error('An unexpected error occurred.', _safeErr(error));
-showToast('An unexpected error occurred.', 'error');
-loadingModal.innerHTML = `
-<div style="background: var(--glass); padding: 40px; border-radius: 20px; text-align: center; max-width: 400px;">
-<div class="u-mb-15" ></div>
-<div style="color: var(--text); font-size: 1rem; margin-bottom: 20px;">
-Error loading database structure
-</div>
-<button onclick="document.getElementById('delta-stats-modal').remove();"
-style="padding: 10px 20px; background: var(--accent); border: none; border-radius: 16px; color: white; cursor: pointer;">
-Close
-</button>
-</div>
-`;
+
+  // ── TAB 0 — Collections ──────────────────────────────────────────────────────
+  html += `<div id="dbv-pane-0">`;
+  html += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px">
+    <div style="background:rgba(128,128,128,0.08);border-radius:12px;padding:10px 12px;text-align:center">
+      <div style="font-size:1.3rem;font-weight:700;color:var(--accent)">${totalFsDocs}</div>
+      <div style="font-size:0.63rem;color:var(--text-muted)">Firestore Docs</div>
+    </div>
+    <div style="background:rgba(128,128,128,0.08);border-radius:12px;padding:10px 12px;text-align:center">
+      <div style="font-size:1.3rem;font-weight:700;color:#30d158">${firestoreStats.reads||0}</div>
+      <div style="font-size:0.63rem;color:var(--text-muted)">Reads (session)</div>
+    </div>
+    <div style="background:rgba(128,128,128,0.08);border-radius:12px;padding:10px 12px;text-align:center">
+      <div style="font-size:1.3rem;font-weight:700;color:#007aff">${firestoreStats.writes||0}</div>
+      <div style="font-size:0.63rem;color:var(--text-muted)">Writes (session)</div>
+    </div>
+  </div>`;
+
+  COLLECTIONS.forEach(col => {
+    const fsDocs   = col.snap.size || 0;
+    const sqDocs   = sqliteCounts[col.sqliteKey] || 0;
+    const colStats = stats[col.fsName] || {};
+    const uuidCol  = uuidStats[col.fsName] || {};
+    const isDirty  = DeltaSync.isDirty(col.fsName);
+    const lastSync = colStats.lastSync ? ago(colStats.lastSync) : 'never';
+    const hasLiveListener = col.fsName !== 'deletions'; // deletions uses its own handler
+    const mismatch = Math.abs(fsDocs - sqDocs) > 0;
+    const borderColor = mismatch ? 'rgba(255,69,58,0.4)' : 'var(--glass-border)';
+
+    html += `
+<div style="margin-bottom:9px;padding:11px 13px;background:var(--input-bg);border-radius:14px;border:1px solid ${borderColor}">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+    <div style="flex:1;min-width:0">
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px">
+        <span style="font-weight:700;font-size:0.82rem;color:var(--text);font-family:'Geist Mono','Courier New',monospace">${col.fsName}</span>
+        ${hasLiveListener ? badge('LIVE','#30d158','rgba(48,209,88,0.12)') : badge('SNAPSHOT','#f59e0b','rgba(245,158,11,0.12)')}
+        ${col.lock ? badge('LOCKED ON CLOSE','#888','rgba(128,128,128,0.1)') : ''}
+        ${isDirty ? badge('PENDING','#f59e0b','rgba(245,158,11,0.15)') : ''}
+      </div>
+      <div style="font-size:0.68rem;color:var(--text-muted);margin-bottom:4px">${col.desc}</div>
+      <div style="font-size:0.63rem;font-family:'Geist Mono','Courier New',monospace;display:flex;flex-wrap:wrap;gap:6px">
+        <span>SQLite: ${pill(col.sqliteKey,'var(--accent)')}</span>
+        <span>JS: ${pill(col.jsVar,'var(--accent-cyan)')}</span>
+        <span>Tab: ${pill(col.tabFn||'—','var(--text-muted)')}</span>
+      </div>
+    </div>
+    <div style="text-align:right;flex-shrink:0">
+      <div style="font-size:0.78rem;font-weight:700;color:var(--accent)">${fsDocs} FS</div>
+      <div style="font-size:0.72rem;color:${mismatch?'#ff453a':'var(--text-muted)'}">
+        ${sqDocs} local${mismatch?' ⚠':''}
+      </div>
+    </div>
+  </div>
+  <div style="border-top:1px solid var(--glass-border);margin-top:8px;padding-top:6px;display:flex;gap:14px;font-size:0.63rem;color:var(--text-muted);flex-wrap:wrap">
+    <span>↑ <b style="color:#30d158">${uuidCol.uploaded||0}</b> up</span>
+    <span>↓ <b style="color:#007aff">${uuidCol.downloaded||0}</b> down</span>
+    <span>Syncs: <b style="color:var(--text)">${colStats.syncCount||0}</b></span>
+    <span>Last: <b style="color:var(--text)">${lastSync}</b></span>
+  </div>
+</div>`;
+  });
+  html += `</div>`; // end pane-0
+
+  // ── TAB 1 — Config Documents ─────────────────────────────────────────────────
+  html += `<div id="dbv-pane-1" style="display:none">`;
+  CONFIG_DOCS.forEach(doc => {
+    const exists = doc.doc && doc.doc.exists;
+    const data   = exists ? doc.doc.data() : null;
+    html += `
+<div style="margin-bottom:10px;padding:12px;background:var(--input-bg);border-radius:14px;border:1px solid var(--glass-border)">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px">
+    <div style="flex:1;min-width:0">
+      <div style="font-weight:700;font-size:0.82rem;color:var(--text);font-family:'Geist Mono','Courier New',monospace;margin-bottom:2px">${doc.path}</div>
+      <div style="font-size:0.67rem;color:var(--text-muted);margin-bottom:4px">${doc.desc}</div>
+      <div style="font-size:0.62rem;color:var(--text-muted)">Listener: ${pill(doc.listener, '#30d158')}</div>
+    </div>
+    <div style="flex-shrink:0">
+      ${exists ? badge('EXISTS','#30d158','rgba(48,209,88,0.12)') : badge('MISSING','#ff453a','rgba(255,69,58,0.12)')}
+    </div>
+  </div>`;
+
+    // SQLite mapping
+    if (doc.sqlite.length) {
+      html += `<div style="margin-bottom:6px">
+        <div style="font-size:0.63rem;color:var(--text-muted);margin-bottom:3px;font-weight:600">SQLite ↔ Firestore field mapping:</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px">
+          ${doc.sqlite.map(([sk, fk]) =>
+            `<div style="font-size:0.61rem;font-family:'Geist Mono','Courier New',monospace;background:rgba(0,122,255,0.08);padding:2px 7px;border-radius:8px">
+              <span style="color:var(--accent)">${sk}</span><span style="color:var(--text-muted)"> → </span><span style="color:var(--accent-cyan)">${fk}</span>
+            </div>`
+          ).join('')}
+        </div>
+      </div>`;
+    }
+
+    // Firestore field values
+    if (exists && data) {
+      html += `<div style="border-top:1px solid var(--glass-border);padding-top:6px">
+        <div style="font-size:0.63rem;color:var(--text-muted);margin-bottom:4px;font-weight:600">Firestore fields:</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 12px">
+          ${doc.fsFields.map(k => {
+            const present = k in data;
+            return `<div style="font-size:0.62rem;display:flex;justify-content:space-between;gap:6px;padding:1px 0">
+              <span style="color:${present?'var(--text)':'#ff453a'};font-family:'Geist Mono','Courier New',monospace;flex-shrink:0">${present?'':'⚠ '}${k}</span>
+              <span>${present ? fmtVal(data[k]) : ''}</span>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+    }
+    html += `</div>`; // end doc card
+  });
+  html += `</div>`; // end pane-1
+
+  // ── TAB 2 — Listeners ────────────────────────────────────────────────────────
+  html += `<div id="dbv-pane-2" style="display:none">`;
+  const LISTENERS = [
+    { name:'users/{uid}',                      type:'doc',  path:'userRef.onSnapshot',                              purpose:'Force-logout, account suspension, lastWrite ping for pull trigger', fires:'Any write to the user root doc' },
+    { name:'settings/config',                  type:'doc',  path:'_handleSettingsSnapshot',                         purpose:'naswar_default_settings, repProfile, sales_reps (init copy)', fires:'Timestamp guard on naswar_default_settings_timestamp, repProfile_timestamp, sales_reps_timestamp' },
+    { name:'settings/team',                    type:'doc',  path:'_handleTeamSnapshot',                             purpose:'sales_reps_list, user_roles_list', fires:'updated_at timestamp change' },
+    { name:'settings/yearCloseSignal',         type:'doc',  path:'_handleYearCloseSignal',                          purpose:'Wipe SQLite + full cloud rebuild on other devices after year-close or restore', fires:'triggeredAt > _lastHandledYearCloseSignal AND triggeredBy ≠ this device' },
+    { name:'factorySettings/config',           type:'doc',  path:'_handleFactorySettingsSnapshot',                  purpose:'factory_default_formulas, additional_costs, cost_adjustment_factor, sale_prices, unit_tracking', fires:'Individual per-field timestamp guards' },
+    { name:'expenseCategories/categories',     type:'doc',  path:'_handleExpenseCategoriesSnapshot',                purpose:'expense_categories', fires:'categories_timestamp change or content diff' },
+    { name:'devices/{deviceId}',               type:'doc',  path:'_handleDeviceSnapshot',                           purpose:'Live remote mode changes (admin→rep etc.) without re-login', fires:'remoteAppliedMode flag + appMode_timestamp > local' },
+    { name:'deletions',                        type:'col',  path:'_handleDeletionsSnapshot',                        purpose:'Propagate soft deletes to all devices, filter from data arrays', fires:'Any add/modify/remove on the deletions collection' },
+    ...COLLECTIONS.filter(c => c.fsName !== 'deletions').map(c => ({
+      name: c.fsName,
+      type: 'col',
+      path: `_makeSnapshotHandler("${c.fsName}")`,
+      purpose: `Live updates to ${c.sqliteKey} → ${c.jsVar}`,
+      fires: 'Any doc change; lockOnClose=' + c.lock,
+    })),
+  ];
+
+  html += `<div style="margin-bottom:10px;padding:10px 12px;background:rgba(48,209,88,0.07);border-radius:12px;border:1px solid rgba(48,209,88,0.2)">
+    <div style="font-size:0.75rem;font-weight:700;color:#30d158;margin-bottom:2px">● ${LISTENERS.length} Active Realtime Listeners</div>
+    <div style="font-size:0.65rem;color:var(--text-muted)">All subscribed via <code>onSnapshot</code> in <code>subscribeToRealtime()</code>. Reconnect on network restore.</div>
+  </div>`;
+
+  LISTENERS.forEach(l => {
+    html += `
+<div style="margin-bottom:8px;padding:10px 12px;background:var(--input-bg);border-radius:13px;border:1px solid var(--glass-border)">
+  <div style="display:flex;align-items:center;gap:7px;margin-bottom:4px;flex-wrap:wrap">
+    ${badge(l.type==='col'?'COLLECTION':'DOC', l.type==='col'?'#007aff':'#bf5af2', l.type==='col'?'rgba(0,122,255,0.1)':'rgba(191,90,242,0.1)')}
+    <span style="font-weight:700;font-size:0.78rem;color:var(--text);font-family:'Geist Mono','Courier New',monospace">${l.name}</span>
+  </div>
+  <div style="font-size:0.67rem;color:var(--text-muted);margin-bottom:3px">${l.purpose}</div>
+  <div style="font-size:0.62rem;display:flex;flex-wrap:wrap;gap:6px">
+    <span>Handler: ${pill(l.path,'var(--accent-cyan)')}</span>
+  </div>
+  <div style="font-size:0.6rem;color:var(--text-muted);margin-top:3px">Fires when: ${l.fires}</div>
+</div>`;
+  });
+  html += `</div>`; // end pane-2
+
+  // ── TAB 3 — Summary ──────────────────────────────────────────────────────────
+  html += `<div id="dbv-pane-3" style="display:none">`;
+
+  // Mapping table
+  html += `<div style="margin-bottom:12px">
+    <div style="font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:8px">Firestore → SQLite → JS Variable Map</div>
+    <div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;font-size:0.63rem;font-family:'Geist Mono','Courier New',monospace">
+      <thead><tr style="border-bottom:1px solid var(--glass-border)">
+        <th style="text-align:left;padding:4px 6px;color:var(--text-muted);font-weight:600">Firestore</th>
+        <th style="text-align:left;padding:4px 6px;color:var(--text-muted);font-weight:600">SQLite Key</th>
+        <th style="text-align:left;padding:4px 6px;color:var(--text-muted);font-weight:600">JS Variable</th>
+        <th style="text-align:right;padding:4px 6px;color:var(--text-muted);font-weight:600">FS / Local</th>
+      </tr></thead>
+      <tbody>
+        ${COLLECTIONS.map(c => {
+          const fs = c.snap.size || 0;
+          const sq = sqliteCounts[c.sqliteKey] || 0;
+          const ok = Math.abs(fs - sq) === 0;
+          return `<tr style="border-bottom:1px solid rgba(128,128,128,0.07)">
+            <td style="padding:3px 6px;color:var(--accent)">${c.fsName}</td>
+            <td style="padding:3px 6px;color:var(--accent-cyan)">${c.sqliteKey}</td>
+            <td style="padding:3px 6px;color:var(--text-muted)">${c.jsVar}</td>
+            <td style="padding:3px 6px;text-align:right;color:${ok?'var(--text)':'#ff453a'}">${fs} / ${sq}${ok?'':' ⚠'}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+    </div>
+  </div>`;
+
+  // Schema overview
+  html += `<div style="margin-bottom:12px;padding:12px;background:var(--input-bg);border-radius:14px">
+    <div style="font-size:0.75rem;font-weight:700;color:var(--text);margin-bottom:8px">Firestore Schema (users/{uid}/…)</div>
+    <div style="font-size:0.63rem;font-family:'Geist Mono','Courier New',monospace;line-height:1.9;color:var(--text-muted)">
+      <div><span style="color:var(--accent-gold)">users/</span><span style="color:var(--accent)">{uid}</span></div>
+      <div style="padding-left:14px"><span style="color:#30d158">├─</span> <span style="color:var(--accent-cyan)">production/</span> <span style="color:var(--text-muted)">{docId}</span> — factory batches</div>
+      <div style="padding-left:14px"><span style="color:#30d158">├─</span> <span style="color:var(--accent-cyan)">sales/</span> <span style="color:var(--text-muted)">{docId}</span> — customer sales</div>
+      <div style="padding-left:14px"><span style="color:#30d158">├─</span> <span style="color:var(--accent-cyan)">calculator_history/</span> <span style="color:var(--text-muted)">{docId}</span> — ledger entries</div>
+      <div style="padding-left:14px"><span style="color:#30d158">├─</span> <span style="color:var(--accent-cyan)">rep_sales/</span> <span style="color:var(--text-muted)">{docId}</span> — rep sales</div>
+      <div style="padding-left:14px"><span style="color:#30d158">├─</span> <span style="color:var(--accent-cyan)">rep_customers/</span> <span style="color:var(--text-muted)">{docId}</span></div>
+      <div style="padding-left:14px"><span style="color:#30d158">├─</span> <span style="color:var(--accent-cyan)">sales_customers/</span> <span style="color:var(--text-muted)">{docId}</span></div>
+      <div style="padding-left:14px"><span style="color:#30d158">├─</span> <span style="color:var(--accent-cyan)">transactions/</span> <span style="color:var(--text-muted)">{docId}</span> — payments</div>
+      <div style="padding-left:14px"><span style="color:#30d158">├─</span> <span style="color:var(--accent-cyan)">entities/</span> <span style="color:var(--text-muted)">{docId}</span> — payment entities</div>
+      <div style="padding-left:14px"><span style="color:#30d158">├─</span> <span style="color:var(--accent-cyan)">inventory/</span> <span style="color:var(--text-muted)">{docId}</span> — raw materials</div>
+      <div style="padding-left:14px"><span style="color:#30d158">├─</span> <span style="color:var(--accent-cyan)">factory_history/</span> <span style="color:var(--text-muted)">{docId}</span></div>
+      <div style="padding-left:14px"><span style="color:#30d158">├─</span> <span style="color:var(--accent-cyan)">returns/</span> <span style="color:var(--text-muted)">{docId}</span></div>
+      <div style="padding-left:14px"><span style="color:#30d158">├─</span> <span style="color:var(--accent-cyan)">expenses/</span> <span style="color:var(--text-muted)">{docId}</span></div>
+      <div style="padding-left:14px"><span style="color:#30d158">├─</span> <span style="color:var(--accent-cyan)">deletions/</span> <span style="color:var(--text-muted)">{recordId}</span> — tombstones</div>
+      <div style="padding-left:14px"><span style="color:#30d158">├─</span> <span style="color:var(--accent-cyan)">activityLog/</span> <span style="color:var(--text-muted)">{auto}</span> — write-only audit</div>
+      <div style="padding-left:14px"><span style="color:#30d158">├─</span> <span style="color:var(--accent-cyan)">sync_updates/</span> <span style="color:var(--text-muted)">{auto}</span> — heartbeat log (cleaned hourly)</div>
+      <div style="padding-left:14px"><span style="color:#30d158">├─</span> <span style="color:var(--accent-cyan)">devices/</span> <span style="color:var(--text-muted)">{deviceId}</span> — fingerprint, mode, heartbeat</div>
+      <div style="padding-left:14px"><span style="color:#30d158">├─</span> <span style="color:var(--accent-cyan)">account/info</span> — email, displayName</div>
+      <div style="padding-left:14px"><span style="color:#30d158">├─</span> <span style="color:var(--accent-cyan)">settings/config</span> — naswar_default_settings, repProfile</div>
+      <div style="padding-left:14px"><span style="color:#30d158">├─</span> <span style="color:var(--accent-cyan)">settings/team</span> — sales_reps, user_roles</div>
+      <div style="padding-left:14px"><span style="color:#30d158">├─</span> <span style="color:var(--accent-cyan)">settings/yearCloseSignal</span> — cross-device broadcast</div>
+      <div style="padding-left:14px"><span style="color:#30d158">└─</span> <span style="color:var(--accent-cyan)">factorySettings/config</span> — formulas, costs, prices</div>
+    </div>
+  </div>
+
+  <!-- FY close status -->
+  ${(() => {
+    const fy = settingsDoc.exists ? (settingsDoc.data().naswar_default_settings || {}) : {};
+    const fyCount = fy.fyCloseCount || 0;
+    const fyDate  = fy.lastYearClosedDate ? new Date(fy.lastYearClosedDate).toLocaleDateString('en-PK',{day:'numeric',month:'short',year:'numeric'}) : '—';
+    const fySignal = yearCloseSignalDoc.exists ? yearCloseSignalDoc.data() : null;
+    return `<div style="padding:10px 12px;background:rgba(128,128,128,0.06);border-radius:12px;font-size:0.7rem">
+      <div style="font-weight:700;color:var(--text);margin-bottom:5px">Financial Year Status</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;color:var(--text-muted)">
+        <div>Close count: <b style="color:var(--accent)">${fyCount}</b></div>
+        <div>Last closed: <b style="color:var(--text)">${fyDate}</b></div>
+        <div>Signal type: <b style="color:var(--text-muted)">${fySignal ? fySignal.type || '—' : '—'}</b></div>
+        <div>Signal age: <b style="color:var(--text)">${fySignal && fySignal.triggeredAt ? ago(fySignal.triggeredAt) : '—'}</b></div>
+      </div>
+    </div>`;
+  })()}
+  `;
+
+  html += `</div>`; // end pane-3
+
+  html += `</div></div>`; // end #dbv-body + #dbv-root
+
+
+
+  modal.innerHTML = html;
+
+} catch (err) {
+  console.error('[showDeltaSyncDetails] error:', err);
+  modal.innerHTML = `<div style="background:var(--glass);padding:40px;border-radius:20px;text-align:center;max-width:400px">
+    <div style="font-size:2rem;margin-bottom:12px">⚠️</div>
+    <div style="color:var(--text);margin-bottom:20px">Failed to load database structure</div>
+    <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:20px">${err && err.message ? err.message : String(err)}</div>
+    <button onclick="document.getElementById('delta-stats-modal').remove()"
+      style="padding:10px 20px;background:var(--accent);border:none;border-radius:16px;color:#fff;cursor:pointer">Close</button>
+  </div>`;
 }
 }
+
 if (typeof closeYearInProgress === 'undefined') var closeYearInProgress = false;
 if (typeof closeYearAbortController === 'undefined') var closeYearAbortController = null;
 if (typeof _fyVerifiedPassword === 'undefined') var _fyVerifiedPassword = null;
 if (typeof pendingFirestoreYearClose === 'undefined') var pendingFirestoreYearClose = false;
+if (typeof pendingFirestoreRestore === 'undefined') var pendingFirestoreRestore = false;
 // Tracks whether any merge*Data Firestore commit failed during the current close run.
 // Reset at the start of executeCloseFinancialYear; set to true by _markRowSyncWarning.
 // Used to drive pendingFirestoreYearClose reliably without fragile DOM scanning.
@@ -1459,6 +1595,35 @@ liveUpdate('ret', `${snap.returns.after} merged record${snap.returns.after!==1?'
   if (!consistencyCheck.valid) {
     throw new Error(`Data consistency check failed: ${consistencyCheck.errors.join('; ')}`);
   }
+
+  // ── HARD DELETE: purge all soft-deleted tombstone records from SQLite and Firestore.
+  // At year-close we do a full compaction — there is no reason to carry tombstones into
+  // the new year. The backup snapshot already contains deleted_records for audit purposes.
+  updateCloseYearProgress('Purging deleted records...', 93);
+  try {
+    const _tombstoneIds = Array.from(
+      new Set(ensureArray(await sqliteStore.get('deleted_records')).map(String))
+    );
+    if (_tombstoneIds.length > 0 && firebaseDB && currentUser) {
+      const _delUserRef = firebaseDB.collection('users').doc(currentUser.uid);
+      const OPS_PER_BATCH = 400;
+      for (let _di = 0; _di < _tombstoneIds.length; _di += OPS_PER_BATCH) {
+        const _chunk = _tombstoneIds.slice(_di, _di + OPS_PER_BATCH);
+        const _delBatch = firebaseDB.batch();
+        _chunk.forEach(id => {
+          _delBatch.delete(_delUserRef.collection('deletions').doc(id));
+        });
+        await _delBatch.commit().catch(e => console.warn('[yearClose] tombstone Firestore purge batch failed:', _safeErr(e)));
+      }
+    }
+    // Wipe tombstones from SQLite completely.
+    await sqliteStore.set('deleted_records', []);
+    await sqliteStore.set('deletion_records', []);
+    console.log('[yearClose] Hard-deleted', _tombstoneIds.length, 'tombstone record(s) from SQLite + Firestore.');
+  } catch (_hardDelErr) {
+    console.warn('[yearClose] Hard-delete of tombstones failed (non-fatal):', _safeErr(_hardDelErr));
+  }
+
 try {
   // BUG FIX: was declared with 'const' inside this try block, making it invisible to the
   // completion UI code below (fyMeta2 typeof check always failed → showed Year #1 / no date).
@@ -1505,6 +1670,23 @@ try {
       }, { merge: true });
     if (typeof DeltaSync !== 'undefined') {
       await DeltaSync.setLastSyncTimestamp('settings');
+    }
+
+    // ── CROSS-DEVICE SIGNAL: tell all other connected devices to wipe their SQLite
+    // and rebuild from cloud. Written to settings/yearCloseSignal so the onSnapshot
+    // listener in subscribeToRealtime picks it up immediately on every other tab/device.
+    try {
+      const _sigDeviceId = (typeof getDeviceId === 'function') ? await getDeviceId().catch(() => 'unknown') : 'unknown';
+      await firebaseDB.collection('users').doc(currentUser.uid)
+        .collection('settings').doc('yearCloseSignal')
+        .set({
+          type:          'close',
+          triggeredAt:   _fyMetaTs,
+          triggeredBy:   _sigDeviceId,
+          fyCloseCount:  fyMeta.fyCloseCount,
+        });
+    } catch (_sigErr) {
+      console.warn('[yearClose] Failed to write cross-device signal (non-fatal):', _safeErr(_sigErr));
     }
   }
 } catch (metaErr) { console.warn('Could not save FY close metadata:', _safeErr(metaErr)); }
@@ -2764,6 +2946,19 @@ showToast(' No duplicates found! Data is clean.', 'success');
 }
 return results;
 }
+function dbvShowTab(i) {
+  [0,1,2,3].forEach(j => {
+    const p = document.getElementById('dbv-pane-'+j);
+    const t = document.getElementById('dbv-tab-'+j);
+    if (p) p.style.display = j===i ? '' : 'none';
+    if (t) {
+      t.style.background = j===i ? 'var(--accent)' : 'rgba(128,128,128,0.12)';
+      t.style.color = j===i ? '#fff' : 'var(--text-muted)';
+    }
+  });
+}
+window.dbvShowTab = dbvShowTab;
+
 window.showDeltaSyncDetails = showDeltaSyncDetails;
 window.verifyTimestampConsistency = verifyTimestampConsistency;
 window.deduplicateAllData = deduplicateAllData;
