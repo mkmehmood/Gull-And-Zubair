@@ -1013,14 +1013,22 @@ const contact = repContacts.find(c => c && c.name && c.name.toLowerCase() === na
   || repContacts.find(c => c && c.name && c.name.toLowerCase() === name.toLowerCase());
 const phone = contact?.phone || transactions.find(t => t && t.customerPhone)?.customerPhone || '';
 const address = contact?.address || '';
+const _repHeaderPhoto = await getPersonPhoto('rep-cust:' + (currentRepProfile || '') + ':' + name.toLowerCase());
+const _repAvatarHTML = renderPersonAvatarHTML(_repHeaderPhoto, 42);
+const _repSafeName = esc(name).split("'").join("\\'");
 const headerTitle = document.getElementById('repManageCustomerTitle');
 headerTitle.innerHTML = `
-<div style="display:flex; align-items:center; gap:8px;">
+<div style="display:flex;align-items:center;gap:10px;">
+${_repAvatarHTML}
+<div style="min-width:0;flex:1;">
+<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
 <span>${esc(name)}</span>
-<button class="sidebar-settings-btn" style="width:auto;padding:5px 10px;font-size:0.75rem;color:var(--accent);background:rgba(29,233,182,0.07);border-radius:8px;border:1px solid rgba(29,233,182,0.25);display:inline-flex;align-items:center;gap:5px;" onclick="openRepCustomerEditModal('${esc(name).split("'").join("\\'")}')" title="Edit Contact Info"><svg width="13" height="13" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="5" y="5" width="26" height="7" rx="2.5" fill="currentColor" opacity="0.15" stroke="currentColor" stroke-width="1.4"/><rect x="5" y="15" width="26" height="7" rx="2.5" fill="currentColor" opacity="0.1" stroke="currentColor" stroke-width="1.4"/><rect x="5" y="25" width="18" height="7" rx="2.5" fill="currentColor" opacity="0.08" stroke="currentColor" stroke-width="1.4"/><line x1="27" y1="26" x2="32" y2="21" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="26" cy="27" r="1" fill="currentColor"/></svg>Edit</button>
+<button class="sidebar-settings-btn" style="width:auto;padding:5px 10px;font-size:0.75rem;color:var(--accent);background:rgba(29,233,182,0.07);border-radius:8px;border:1px solid rgba(29,233,182,0.25);display:inline-flex;align-items:center;gap:5px;" onclick="openRepCustomerEditModal('${_repSafeName}')" title="Edit Contact Info"><svg width="13" height="13" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="5" y="5" width="26" height="7" rx="2.5" fill="currentColor" opacity="0.15" stroke="currentColor" stroke-width="1.4"/><rect x="5" y="15" width="26" height="7" rx="2.5" fill="currentColor" opacity="0.1" stroke="currentColor" stroke-width="1.4"/><rect x="5" y="25" width="18" height="7" rx="2.5" fill="currentColor" opacity="0.08" stroke="currentColor" stroke-width="1.4"/><line x1="27" y1="26" x2="32" y2="21" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="26" cy="27" r="1" fill="currentColor"/></svg>Edit</button>
 </div>
-<div style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal; margin-top:4px;">
+<div style="font-size:0.75rem;color:var(--text-muted);font-weight:normal;margin-top:2px;">
 ${phone ? phoneActionHTML(phone) : 'No Phone'} ${address ? `|  ${esc(address)}` : ''}
+</div>
+</div>
 </div>
 `;
 let currentDebt = 0;
@@ -1155,6 +1163,8 @@ const oldDebitValue = existingOldDebtTx ? (existingOldDebtTx.totalValue || 0) : 
 document.getElementById('rep-edit-cust-phone').value = contact?.phone || saleRecord?.customerPhone || '';
 document.getElementById('rep-edit-cust-address').value = contact?.address || '';
 document.getElementById('rep-edit-cust-old-debit').value = oldDebitValue;
+const _repPhotoKey = 'rep-cust:' + (currentRepProfile || '') + ':' + customerName.toLowerCase();
+await loadPersonPhotoIntoEditor('rep-cust', _repPhotoKey);
 if (typeof openStandaloneScreen === 'function') openStandaloneScreen('rep-customer-edit-screen');
 }
 
@@ -1263,6 +1273,30 @@ const message = nameChanged ? `Rep customer renamed to "${name}" and details upd
 : oldDebit > 0 ? `Rep customer updated with old debt of ₨${oldDebit.toLocaleString()}`
 : (oldDebit === 0 && previousOldDebit > 0) ? 'Rep customer updated and old debt cleared'
 : 'Rep customer details updated successfully';
+// Save photo: if name changed, migrate photo key
+const _repPhotoKeyOld = 'rep-cust:' + (currentRepProfile || '') + ':' + originalName.toLowerCase();
+const _repPhotoKeyNew = 'rep-cust:' + (currentRepProfile || '') + ':' + name.toLowerCase();
+if (nameChanged) {
+const _oldRepPhoto = await getPersonPhoto(_repPhotoKeyOld);
+if (_oldRepPhoto) {
+const _repPhotos = await sqliteStore.get('person_photos') || {};
+_repPhotos[_repPhotoKeyNew] = _oldRepPhoto;
+delete _repPhotos[_repPhotoKeyOld];
+await sqliteStore.set('person_photos', _repPhotos);
+// Mark both old (deleted) and new key as dirty for sync
+const _rdk = (await sqliteStore.get('person_photos_dirty_keys')) || [];
+if (!_rdk.includes(_repPhotoKeyNew)) _rdk.push(_repPhotoKeyNew);
+if (!_rdk.includes(_repPhotoKeyOld)) _rdk.push(_repPhotoKeyOld);
+await sqliteStore.set('person_photos_dirty_keys', _rdk);
+await sqliteStore.set('person_photos_timestamp', Date.now());
+const _repPreview = document.getElementById('rep-cust-photo-preview');
+if (_repPreview) _repPreview.dataset.pendingPhoto = undefined;
+} else {
+await savePersonPhoto('rep-cust', _repPhotoKeyNew);
+}
+} else {
+await savePersonPhoto('rep-cust', _repPhotoKeyNew);
+}
 showToast(message, 'success');
 closeRepCustomerEditModal();
 await new Promise(r => setTimeout(r, 350));
@@ -1455,6 +1489,12 @@ doc.setFontSize(12); doc.setFont(undefined, 'bold'); doc.setTextColor(50, 50, 50
 doc.text(`Rep Customer Account Statement · ${rangeName}`, pageW / 2, 30, { align: 'center' });
 doc.setFontSize(9); doc.setFont(undefined, 'normal'); doc.setTextColor(80, 80, 80);
 let yPos = 38;
+// Embed rep customer photo if available
+const _repPdfPhotoKey = 'rep-cust:' + (currentRepProfile || '') + ':' + customerName.toLowerCase();
+const _repPdfPhoto = await getPersonPhoto(_repPdfPhotoKey);
+if (_repPdfPhoto) {
+  try { doc.addImage(_repPdfPhoto, 'JPEG', pageW - 14 - 22, 25, 22, 22); } catch(e) {}
+}
 doc.setFont(undefined, 'bold'); doc.text('Customer:', 14, yPos);
 doc.setFont(undefined, 'normal'); doc.text(customerName, 36, yPos);
 doc.setFont(undefined, 'bold'); doc.text('Phone:', 14, yPos + 5);

@@ -368,13 +368,21 @@ const entity = (Array.isArray(salesCustomers) ? salesCustomers : []).find(e => e
 const phone = entity?.phone || transactions.find(t => t && t.customerPhone)?.customerPhone || '';
 const address = entity?.address || '';
 const headerTitle = document.getElementById('manageCustomerTitle');
+const _custHeaderPhoto = await getPersonPhoto('cust:' + name.toLowerCase());
+const _custAvatarHTML = renderPersonAvatarHTML(_custHeaderPhoto, 42);
+const _custSafeName = esc(name).split("'").join("\\'");
 headerTitle.innerHTML = `
-<div style="display:flex; align-items:center; gap:8px;">
+<div style="display:flex;align-items:center;gap:10px;">
+${_custAvatarHTML}
+<div style="min-width:0;flex:1;">
+<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
 <span>${esc(name)}</span>
-<button class="sidebar-settings-btn" style="width:auto;padding:5px 10px;font-size:0.75rem;color:var(--accent);background:rgba(29,233,182,0.07);border-radius:8px;border:1px solid rgba(29,233,182,0.25);display:inline-flex;align-items:center;gap:5px;" onclick="openCustomerEditModal('${esc(name).split("'").join("\\'")}')" title="Edit Contact Info"><svg width="13" height="13" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="5" y="5" width="26" height="7" rx="2.5" fill="currentColor" opacity="0.15" stroke="currentColor" stroke-width="1.4"/><rect x="5" y="15" width="26" height="7" rx="2.5" fill="currentColor" opacity="0.1" stroke="currentColor" stroke-width="1.4"/><rect x="5" y="25" width="18" height="7" rx="2.5" fill="currentColor" opacity="0.08" stroke="currentColor" stroke-width="1.4"/><line x1="27" y1="26" x2="32" y2="21" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="26" cy="27" r="1" fill="currentColor"/></svg>Edit</button>
+<button class="sidebar-settings-btn" style="width:auto;padding:5px 10px;font-size:0.75rem;color:var(--accent);background:rgba(29,233,182,0.07);border-radius:8px;border:1px solid rgba(29,233,182,0.25);display:inline-flex;align-items:center;gap:5px;" onclick="openCustomerEditModal('${_custSafeName}')" title="Edit Contact Info"><svg width="13" height="13" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="5" y="5" width="26" height="7" rx="2.5" fill="currentColor" opacity="0.15" stroke="currentColor" stroke-width="1.4"/><rect x="5" y="15" width="26" height="7" rx="2.5" fill="currentColor" opacity="0.1" stroke="currentColor" stroke-width="1.4"/><rect x="5" y="25" width="18" height="7" rx="2.5" fill="currentColor" opacity="0.08" stroke="currentColor" stroke-width="1.4"/><line x1="27" y1="26" x2="32" y2="21" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="26" cy="27" r="1" fill="currentColor"/></svg>Edit</button>
 </div>
-<div style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal; margin-top:4px;">
+<div style="font-size:0.75rem;color:var(--text-muted);font-weight:normal;margin-top:2px;">
 ${phone ? phoneActionHTML(phone) : 'No Phone'} ${address ? `|  ${esc(address)}` : ''}
+</div>
+</div>
 </div>
 `;
 let currentDebt = 0;
@@ -1101,6 +1109,7 @@ const editPriceInput = document.getElementById('edit-cust-custom-price');
 if (editPriceInput) {
 editPriceInput.value = (contact?.customSalePrice > 0) ? contact.customSalePrice : '';
 }
+await loadPersonPhotoIntoEditor('cust', 'cust:' + customerName.toLowerCase());
 if (typeof openStandaloneScreen === 'function') openStandaloneScreen('customer-edit-screen');
 }
 
@@ -1213,6 +1222,30 @@ const message = nameChanged ? `Customer renamed to "${name}" and details updated
 : oldDebit > 0 ? `Customer updated with old debt of ₨${oldDebit.toLocaleString()}`
 : (oldDebit === 0 && previousOldDebit > 0) ? 'Customer updated and old debt cleared'
 : 'Customer details updated successfully';
+// Save photo: if name changed, migrate photo key
+if (nameChanged) {
+const _oldPhoto = await getPersonPhoto('cust:' + originalName.toLowerCase());
+if (_oldPhoto) {
+const _photos = await sqliteStore.get('person_photos') || {};
+_photos['cust:' + name.toLowerCase()] = _oldPhoto;
+delete _photos['cust:' + originalName.toLowerCase()];
+await sqliteStore.set('person_photos', _photos);
+// Mark both old (deleted) and new key as dirty for sync
+const _dk = (await sqliteStore.get('person_photos_dirty_keys')) || [];
+const _newKey = 'cust:' + name.toLowerCase();
+const _oldKey = 'cust:' + originalName.toLowerCase();
+if (!_dk.includes(_newKey)) _dk.push(_newKey);
+if (!_dk.includes(_oldKey)) _dk.push(_oldKey);
+await sqliteStore.set('person_photos_dirty_keys', _dk);
+await sqliteStore.set('person_photos_timestamp', Date.now());
+const _preview = document.getElementById('cust-photo-preview');
+if (_preview) _preview.dataset.pendingPhoto = undefined;
+} else {
+await savePersonPhoto('cust', 'cust:' + name.toLowerCase());
+}
+} else {
+await savePersonPhoto('cust', 'cust:' + name.toLowerCase());
+}
 showToast(message, 'success');
 closeCustomerEditModal();
 await new Promise(r => setTimeout(r, 350));

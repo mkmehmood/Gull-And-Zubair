@@ -1140,6 +1140,30 @@ window._showLogoutConfirmDialog = async function() {
     <h2 class="screen-title" id="entityManagementModalTitle">Add Entity</h2>
   </div>
   <div class="screen-body">
+    <!-- Photo Upload -->
+    <div style="display:flex;flex-direction:column;align-items:center;margin-bottom:18px;">
+      <div style="position:relative;width:88px;height:88px;margin-bottom:10px;">
+        <div id="entity-photo-preview" style="width:88px;height:88px;border-radius:50%;background:var(--glass-bg,#1a2535);border:2.5px solid var(--accent);overflow:hidden;display:flex;align-items:center;justify-content:center;cursor:pointer;" onclick="previewPhotoClick('entity')">
+          <svg id="entity-photo-placeholder" width="38" height="38" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="opacity:0.35;"><circle cx="18" cy="13" r="6" fill="currentColor"/><path d="M6 30c0-6.627 5.373-10 12-10s12 3.373 12 10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>
+          <img id="entity-photo-img" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;">
+        </div>
+        <button onclick="document.getElementById('entity-photo-file').click()" style="position:absolute;bottom:0;right:0;width:26px;height:26px;border-radius:50%;background:var(--accent);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;" title="Upload photo">
+          <svg width="13" height="13" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M18 8v20M8 18h20" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-theme" style="font-size:0.72rem;padding:5px 12px;border:1px solid var(--accent);color:var(--accent);border-radius:8px;display:flex;align-items:center;gap:5px;" onclick="openPhotoCapture('entity')">
+          <svg width="13" height="13" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="9" width="30" height="22" rx="3" stroke="currentColor" stroke-width="1.6" fill="none"/><circle cx="18" cy="20" r="6" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M13 9l2-4h6l2 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>
+          Camera
+        </button>
+        <button class="btn-theme" style="font-size:0.72rem;padding:5px 12px;border:1px solid var(--accent);color:var(--accent);border-radius:8px;display:flex;align-items:center;gap:5px;" onclick="document.getElementById('entity-photo-file').click()">
+          <svg width="13" height="13" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="6" y="4" width="24" height="28" rx="3" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M12 12h12M12 18h12M12 24h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          Gallery
+        </button>
+        <button class="btn-theme" id="entity-photo-clear-btn" style="font-size:0.72rem;padding:5px 10px;border:1px solid var(--danger,#ef4444);color:var(--danger,#ef4444);border-radius:8px;display:none;" onclick="clearPersonPhoto('entity')" title="Remove photo">✕</button>
+      </div>
+      <input type="file" id="entity-photo-file" accept="image/*" style="display:none" onchange="handlePersonPhotoFile(event,'entity')">
+    </div>
     <div class="grid-inputs">
       <div class="field">
         <label>Entity Name</label>
@@ -1248,6 +1272,30 @@ window._showLogoutConfirmDialog = async function() {
     <h2 class="screen-title">Edit Customer</h2>
   </div>
   <div class="screen-body">
+    <!-- Photo Upload -->
+    <div style="display:flex;flex-direction:column;align-items:center;margin-bottom:18px;">
+      <div style="position:relative;width:88px;height:88px;margin-bottom:10px;">
+        <div id="cust-photo-preview" style="width:88px;height:88px;border-radius:50%;background:var(--glass-bg,#1a2535);border:2.5px solid var(--accent);overflow:hidden;display:flex;align-items:center;justify-content:center;cursor:pointer;" onclick="previewPhotoClick('cust')">
+          <svg id="cust-photo-placeholder" width="38" height="38" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="opacity:0.35;"><circle cx="18" cy="13" r="6" fill="currentColor"/><path d="M6 30c0-6.627 5.373-10 12-10s12 3.373 12 10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>
+          <img id="cust-photo-img" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;">
+        </div>
+        <button onclick="document.getElementById('cust-photo-file').click()" style="position:absolute;bottom:0;right:0;width:26px;height:26px;border-radius:50%;background:var(--accent);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;" title="Upload photo">
+          <svg width="13" height="13" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M18 8v20M8 18h20" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-theme" style="font-size:0.72rem;padding:5px 12px;border:1px solid var(--accent);color:var(--accent);border-radius:8px;display:flex;align-items:center;gap:5px;" onclick="openPhotoCapture('cust')">
+          <svg width="13" height="13" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="9" width="30" height="22" rx="3" stroke="currentColor" stroke-width="1.6" fill="none"/><circle cx="18" cy="20" r="6" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M13 9l2-4h6l2 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>
+          Camera
+        </button>
+        <button class="btn-theme" style="font-size:0.72rem;padding:5px 12px;border:1px solid var(--accent);color:var(--accent);border-radius:8px;display:flex;align-items:center;gap:5px;" onclick="document.getElementById('cust-photo-file').click()">
+          <svg width="13" height="13" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="6" y="4" width="24" height="28" rx="3" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M12 12h12M12 18h12M12 24h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          Gallery
+        </button>
+        <button class="btn-theme" id="cust-photo-clear-btn" style="font-size:0.72rem;padding:5px 10px;border:1px solid var(--danger,#ef4444);color:var(--danger,#ef4444);border-radius:8px;display:none;" onclick="clearPersonPhoto('cust')" title="Remove photo">✕</button>
+      </div>
+      <input type="file" id="cust-photo-file" accept="image/*" style="display:none" onchange="handlePersonPhotoFile(event,'cust')">
+    </div>
     <div class="grid-inputs u-mb-20">
       <div class="field">
         <label>Customer Name</label>
@@ -1327,6 +1375,30 @@ window._showLogoutConfirmDialog = async function() {
     <h2 class="screen-title">Edit Rep Customer</h2>
   </div>
   <div class="screen-body">
+    <!-- Photo Upload -->
+    <div style="display:flex;flex-direction:column;align-items:center;margin-bottom:18px;">
+      <div style="position:relative;width:88px;height:88px;margin-bottom:10px;">
+        <div id="rep-cust-photo-preview" style="width:88px;height:88px;border-radius:50%;background:var(--glass-bg,#1a2535);border:2.5px solid var(--accent);overflow:hidden;display:flex;align-items:center;justify-content:center;cursor:pointer;" onclick="previewPhotoClick('rep-cust')">
+          <svg id="rep-cust-photo-placeholder" width="38" height="38" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="opacity:0.35;"><circle cx="18" cy="13" r="6" fill="currentColor"/><path d="M6 30c0-6.627 5.373-10 12-10s12 3.373 12 10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>
+          <img id="rep-cust-photo-img" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;">
+        </div>
+        <button onclick="document.getElementById('rep-cust-photo-file').click()" style="position:absolute;bottom:0;right:0;width:26px;height:26px;border-radius:50%;background:var(--accent);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;" title="Upload photo">
+          <svg width="13" height="13" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M18 8v20M8 18h20" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-theme" style="font-size:0.72rem;padding:5px 12px;border:1px solid var(--accent);color:var(--accent);border-radius:8px;display:flex;align-items:center;gap:5px;" onclick="openPhotoCapture('rep-cust')">
+          <svg width="13" height="13" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="9" width="30" height="22" rx="3" stroke="currentColor" stroke-width="1.6" fill="none"/><circle cx="18" cy="20" r="6" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M13 9l2-4h6l2 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>
+          Camera
+        </button>
+        <button class="btn-theme" style="font-size:0.72rem;padding:5px 12px;border:1px solid var(--accent);color:var(--accent);border-radius:8px;display:flex;align-items:center;gap:5px;" onclick="document.getElementById('rep-cust-photo-file').click()">
+          <svg width="13" height="13" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="6" y="4" width="24" height="28" rx="3" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M12 12h12M12 18h12M12 24h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          Gallery
+        </button>
+        <button class="btn-theme" id="rep-cust-photo-clear-btn" style="font-size:0.72rem;padding:5px 10px;border:1px solid var(--danger,#ef4444);color:var(--danger,#ef4444);border-radius:8px;display:none;" onclick="clearPersonPhoto('rep-cust')" title="Remove photo">✕</button>
+      </div>
+      <input type="file" id="rep-cust-photo-file" accept="image/*" style="display:none" onchange="handlePersonPhotoFile(event,'rep-cust')">
+    </div>
     <div class="grid-inputs u-mb-20">
       <div class="field">
         <label>Customer Name</label>
@@ -1385,6 +1457,45 @@ window._showLogoutConfirmDialog = async function() {
 </button>
 <span id="system-name-display" style="position:absolute;left:50%;transform:translateX(-50%);font-weight:800;font-size:0.85rem;color:var(--accent);white-space:nowrap;pointer-events:none;" class="shimmer-text">MAHMOOD KHAN</span>
 </div>
+<!-- ── Photo Lightbox Modal ───────────────────────────────────────── -->
+<div id="photo-lightbox-modal" style="display:none;position:fixed;inset:0;z-index:10400;background:rgba(0,0,0,0.92);flex-direction:column;align-items:center;justify-content:center;" onclick="closePhotoLightbox()">
+  <div style="position:relative;max-width:min(88vw,480px);max-height:88vh;display:flex;flex-direction:column;align-items:center;" onclick="event.stopPropagation()">
+    <button onclick="closePhotoLightbox()" style="position:absolute;top:-14px;right:-14px;width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,0.12);border:1.5px solid rgba(255,255,255,0.22);color:#fff;font-size:1.1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:1;backdrop-filter:blur(6px);">✕</button>
+    <img id="photo-lightbox-img" src="" alt="" style="max-width:100%;max-height:80vh;border-radius:14px;object-fit:contain;box-shadow:0 8px 48px rgba(0,0,0,0.7);display:block;">
+  </div>
+</div>
+
+<!-- ── Photo Capture Modal ─────────────────────────────────────────── -->
+<div id="photo-capture-modal" style="display:none;position:fixed;inset:0;z-index:10401;background:rgba(0,0,0,0.85);flex-direction:column;align-items:center;justify-content:center;">
+  <div style="background:var(--card-bg,#111827);border-radius:16px;padding:16px;width:min(92vw,400px);display:flex;flex-direction:column;align-items:center;gap:12px;">
+    <div style="width:100%;display:flex;justify-content:space-between;align-items:center;">
+      <span style="font-weight:700;font-size:0.95rem;color:var(--text-main);">Take Photo</span>
+      <button onclick="closePhotoCapture()" style="background:none;border:none;color:var(--text-muted);font-size:1.3rem;cursor:pointer;line-height:1;">✕</button>
+    </div>
+    <video id="photo-capture-video" autoplay playsinline style="width:100%;border-radius:12px;background:#000;aspect-ratio:1/1;object-fit:cover;max-height:300px;"></video>
+    <canvas id="photo-capture-canvas" style="display:none;"></canvas>
+    <div style="display:flex;gap:10px;width:100%;">
+      <button class="btn btn-main" style="flex:1;" onclick="capturePhotoFromCamera()">
+        <svg width="16" height="16" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-right:5px;vertical-align:middle;"><rect x="3" y="9" width="30" height="22" rx="3" stroke="currentColor" stroke-width="1.8" fill="none"/><circle cx="18" cy="20" r="6" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M13 9l2-4h6l2 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>
+        Capture
+      </button>
+      <button class="btn btn-danger" style="flex:0.5;" onclick="closePhotoCapture()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<style>
+.person-avatar-ring {
+  width: 52px; height: 52px; border-radius: 50%;
+  background: var(--glass-bg, #1a2535);
+  border: 2.5px solid var(--accent);
+  overflow: hidden; display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.person-avatar-ring img { width:100%; height:100%; object-fit:cover; }
+.person-avatar-ring svg { opacity: 0.35; }
+</style>
+
 <input type="file" id="restoreInput" class="hidden" accept=".json,.gznd" onchange="(async () => { await unifiedRestore(event) })()">
 
 <div id="tab-rep" class="hidden">

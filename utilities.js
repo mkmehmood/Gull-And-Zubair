@@ -1746,7 +1746,10 @@ if (_manageET) {
 const phone = entity.phone || '';
 const wallet = entity.wallet || '';
 const _safeEntityId = String(entity.id).replace(/'/g, "\\'");
-_manageET.innerHTML = `<div style="display:flex;align-items:center;gap:8px;"><span class="u-fw-700">${esc(entity.name)}</span><button class="sidebar-settings-btn" style="width:auto;padding:5px 10px;font-size:0.75rem;color:var(--accent);background:rgba(29,233,182,0.07);border-radius:8px;border:1px solid rgba(29,233,182,0.25);display:inline-flex;align-items:center;gap:5px;" onclick="editEntityBasicInfo('${_safeEntityId}')" title="Edit Entity"><svg width="13" height="13" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="5" y="5" width="26" height="7" rx="2.5" fill="currentColor" opacity="0.15" stroke="currentColor" stroke-width="1.4"/><rect x="5" y="15" width="26" height="7" rx="2.5" fill="currentColor" opacity="0.1" stroke="currentColor" stroke-width="1.4"/><rect x="5" y="25" width="18" height="7" rx="2.5" fill="currentColor" opacity="0.08" stroke="currentColor" stroke-width="1.4"/><line x1="27" y1="26" x2="32" y2="21" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="26" cy="27" r="1" fill="currentColor"/></svg>Edit</button></div>${(phone || wallet) ? `<div style="font-size:0.75rem;color:var(--text-muted);font-weight:normal;margin-top:3px;">${phone ? phoneActionHTML(phone) : ''}${phone && wallet ? ' &middot; ' : ''}${esc(wallet)}</div>` : ''}`;
+const _entPhotoKey = 'entity:' + String(entity.id);
+const _entPhoto = await getPersonPhoto(_entPhotoKey);
+const _entAvatarHTML = renderPersonAvatarHTML(_entPhoto, 44);
+_manageET.innerHTML = `<div style="display:flex;align-items:center;gap:10px;">${_entAvatarHTML}<div style="min-width:0;flex:1;"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><span class="u-fw-700">${esc(entity.name)}</span><button class="sidebar-settings-btn" style="width:auto;padding:5px 10px;font-size:0.75rem;color:var(--accent);background:rgba(29,233,182,0.07);border-radius:8px;border:1px solid rgba(29,233,182,0.25);display:inline-flex;align-items:center;gap:5px;" onclick="editEntityBasicInfo('${_safeEntityId}')" title="Edit Entity"><svg width="13" height="13" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="5" y="5" width="26" height="7" rx="2.5" fill="currentColor" opacity="0.15" stroke="currentColor" stroke-width="1.4"/><rect x="5" y="15" width="26" height="7" rx="2.5" fill="currentColor" opacity="0.1" stroke="currentColor" stroke-width="1.4"/><rect x="5" y="25" width="18" height="7" rx="2.5" fill="currentColor" opacity="0.08" stroke="currentColor" stroke-width="1.4"/><line x1="27" y1="26" x2="32" y2="21" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="26" cy="27" r="1" fill="currentColor"/></svg>Edit</button></div>${(phone || wallet) ? `<div style="font-size:0.75rem;color:var(--text-muted);font-weight:normal;margin-top:3px;">${phone ? phoneActionHTML(phone) : ''}${phone && wallet ? ' &middot; ' : ''}${esc(wallet)}</div>` : ''}</div></div>`;
 }
 
 try {
@@ -2375,6 +2378,14 @@ doc.setFontSize(12); doc.setFont(undefined, 'bold'); doc.setTextColor(50, 50, 50
 doc.text(`Account Statement · ${rangeName}`, pageW / 2, 30, { align: 'center' });
 doc.setFontSize(9); doc.setFont(undefined, 'normal'); doc.setTextColor(80, 80, 80);
 let yPos = 38;
+// Embed entity photo if available
+const _entPdfPhoto = await getPersonPhoto('entity:' + String(entity.id));
+if (_entPdfPhoto) {
+  try {
+    const _pdfPhotoX = pageW - 14 - 22;
+    doc.addImage(_entPdfPhoto, 'JPEG', _pdfPhotoX, 25, 22, 22);
+  } catch(e) {}
+}
 doc.setFont(undefined, 'bold'); doc.text('Name:', 14, yPos);
 doc.setFont(undefined, 'normal'); doc.text(entity.name, 32, yPos);
 doc.setFont(undefined, 'bold'); doc.text('Phone:', 14, yPos + 5);
@@ -2809,6 +2820,11 @@ doc.setFontSize(12); doc.setFont(undefined, 'bold'); doc.setTextColor(50, 50, 50
 doc.text(`Customer Account Statement · ${rangeName}`, pageW / 2, 30, { align: 'center' });
 doc.setFontSize(9); doc.setFont(undefined, 'normal'); doc.setTextColor(80, 80, 80);
 let yPos = 38;
+// Embed customer photo if available
+const _custPdfPhoto = await getPersonPhoto('cust:' + customerName.toLowerCase());
+if (_custPdfPhoto) {
+  try { doc.addImage(_custPdfPhoto, 'JPEG', pageW - 14 - 22, 25, 22, 22); } catch(e) {}
+}
 doc.setFont(undefined, 'bold'); doc.text('Customer:', 14, yPos);
 doc.setFont(undefined, 'normal'); doc.text(customerName, 36, yPos);
 doc.setFont(undefined, 'bold'); doc.text('Phone:', 14, yPos + 5);
@@ -3075,6 +3091,205 @@ const SCRIPT_INTEGRITY = {
     'sha256-0ZQJSA5vPBL+6L5uyIjovZ/m7VBpAOUGc7BHOH/RBHE='
 };
 const _scriptLoadPromises = {};
+// ── Person Photo Management ────────────────────────────────────────────────
+// prefix: 'entity' | 'cust' | 'rep-cust'
+// Photos stored in sqliteStore as: person_photo:<type>:<key>
+// key = entity id (for entity) or lowercased customer name
+
+let _photoCaptureTarget = null;
+let _photoCaptureStream = null;
+
+function _photoIds(prefix) {
+  return {
+    preview: prefix + '-photo-preview',
+    placeholder: prefix + '-photo-placeholder',
+    img: prefix + '-photo-img',
+    clearBtn: prefix + '-photo-clear-btn',
+    fileInput: prefix + '-photo-file',
+  };
+}
+
+function handlePersonPhotoFile(event, prefix) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => applyPersonPhoto(prefix, e.target.result);
+  reader.readAsDataURL(file);
+  event.target.value = '';
+}
+
+function applyPersonPhoto(prefix, dataUrl) {
+  const ids = _photoIds(prefix);
+  const ph = document.getElementById(ids.placeholder);
+  const img = document.getElementById(ids.img);
+  const clearBtn = document.getElementById(ids.clearBtn);
+  if (ph) ph.style.display = 'none';
+  if (img) { img.src = dataUrl; img.style.display = 'block'; }
+  if (clearBtn) clearBtn.style.display = '';
+  // Store temporarily on the preview element for later save
+  const preview = document.getElementById(ids.preview);
+  if (preview) preview.dataset.pendingPhoto = dataUrl;
+}
+
+function clearPersonPhoto(prefix) {
+  const ids = _photoIds(prefix);
+  const ph = document.getElementById(ids.placeholder);
+  const img = document.getElementById(ids.img);
+  const clearBtn = document.getElementById(ids.clearBtn);
+  if (ph) ph.style.display = '';
+  if (img) { img.src = ''; img.style.display = 'none'; }
+  if (clearBtn) clearBtn.style.display = 'none';
+  const preview = document.getElementById(ids.preview);
+  if (preview) { preview.dataset.pendingPhoto = ''; preview.dataset.existingPhotoKey = ''; }
+}
+
+async function loadPersonPhotoIntoEditor(prefix, storageKey) {
+  const ids = _photoIds(prefix);
+  const preview = document.getElementById(ids.preview);
+  if (preview) { preview.dataset.pendingPhoto = ''; preview.dataset.existingPhotoKey = storageKey || ''; }
+  clearPersonPhoto(prefix);
+  if (!storageKey) return;
+  try {
+    const stored = await sqliteStore.get('person_photos');
+    const photos = stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+    const dataUrl = photos[storageKey];
+    if (dataUrl) applyPersonPhoto(prefix, dataUrl);
+  } catch(e) {}
+}
+
+async function savePersonPhoto(prefix, storageKey) {
+  if (!storageKey) return;
+  const ids = _photoIds(prefix);
+  const preview = document.getElementById(ids.preview);
+  if (!preview) return;
+  const pending = preview.dataset.pendingPhoto;
+  // undefined means no change; empty string means deleted; data URL means new photo
+  if (pending === undefined) return;
+  try {
+    const stored = await sqliteStore.get('person_photos');
+    const photos = stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+    if (pending) {
+      // Compress photo before storing to keep size reasonable
+      const compressed = await _compressPhoto(pending, 300, 0.75);
+      photos[storageKey] = compressed;
+    } else {
+      delete photos[storageKey];
+    }
+    await sqliteStore.set('person_photos', photos);
+    // Mark dirty key for Firestore sync
+    const _dirtyKeys = (await sqliteStore.get('person_photos_dirty_keys')) || [];
+    if (!_dirtyKeys.includes(storageKey)) _dirtyKeys.push(storageKey);
+    await sqliteStore.set('person_photos_dirty_keys', _dirtyKeys);
+    await sqliteStore.set('person_photos_timestamp', Date.now());
+    if (typeof triggerAutoSync === 'function') { try { triggerAutoSync(); } catch(_) {} }
+  } catch(e) { console.warn('Photo save failed', e); }
+}
+
+async function getPersonPhoto(storageKey) {
+  if (!storageKey) return null;
+  try {
+    const stored = await sqliteStore.get('person_photos');
+    const photos = stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+    return photos[storageKey] || null;
+  } catch(e) { return null; }
+}
+
+async function _compressPhoto(dataUrl, maxDim, quality) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let w = img.width, h = img.height;
+      if (w > maxDim || h > maxDim) {
+        if (w > h) { h = Math.round(h * maxDim / w); w = maxDim; }
+        else { w = Math.round(w * maxDim / h); h = maxDim; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+async function openPhotoCapture(prefix) {
+  _photoCaptureTarget = prefix;
+  const modal = document.getElementById('photo-capture-modal');
+  const video = document.getElementById('photo-capture-video');
+  if (!modal || !video) return;
+  modal.style.display = 'flex';
+  try {
+    _photoCaptureStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+    video.srcObject = _photoCaptureStream;
+  } catch(e) {
+    modal.style.display = 'none';
+    showToast('Camera not available. Please use Gallery instead.', 'warning');
+  }
+}
+
+function closePhotoCapture() {
+  const modal = document.getElementById('photo-capture-modal');
+  const video = document.getElementById('photo-capture-video');
+  if (modal) modal.style.display = 'none';
+  if (_photoCaptureStream) {
+    _photoCaptureStream.getTracks().forEach(t => t.stop());
+    _photoCaptureStream = null;
+  }
+  if (video) video.srcObject = null;
+  _photoCaptureTarget = null;
+}
+
+function capturePhotoFromCamera() {
+  const video = document.getElementById('photo-capture-video');
+  const canvas = document.getElementById('photo-capture-canvas');
+  if (!video || !canvas || !_photoCaptureTarget) return;
+  const w = video.videoWidth || 320;
+  const h = video.videoHeight || 320;
+  canvas.width = w; canvas.height = h;
+  canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+  const target = _photoCaptureTarget;
+  closePhotoCapture();
+  applyPersonPhoto(target, dataUrl);
+}
+
+function renderPersonAvatarHTML(photoDataUrl, size) {
+  const sz = size || 44;
+  if (photoDataUrl) {
+    const safe = photoDataUrl.replace(/'/g, '&#39;');
+    return `<div class="person-avatar-ring" style="width:${sz}px;height:${sz}px;cursor:pointer;position:relative;" onclick="openPhotoLightbox('${safe}')" title="View photo"><img src="${photoDataUrl}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;"><div style="position:absolute;inset:0;border-radius:50%;background:rgba(0,0,0,0);transition:background 0.15s;" onmouseover="this.style.background='rgba(0,0,0,0.18)'" onmouseout="this.style.background='rgba(0,0,0,0)'"></div></div>`;
+  }
+  return `<div class="person-avatar-ring" style="width:${sz}px;height:${sz}px;"><svg width="${Math.round(sz*0.5)}" height="${Math.round(sz*0.5)}" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="18" cy="13" r="6" fill="currentColor"/><path d="M6 30c0-6.627 5.373-10 12-10s12 3.373 12 10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg></div>`;
+}
+
+function openPhotoLightbox(src) {
+  const modal = document.getElementById('photo-lightbox-modal');
+  const img = document.getElementById('photo-lightbox-img');
+  if (!modal || !img) return;
+  img.src = src;
+  modal.style.display = 'flex';
+  // Prevent body scroll
+  document.body.style.overflow = 'hidden';
+}
+
+function closePhotoLightbox() {
+  const modal = document.getElementById('photo-lightbox-modal');
+  if (modal) modal.style.display = 'none';
+  document.body.style.overflow = '';
+}
+
+// On edit screen: tap photo to view it; tap placeholder to open file picker
+function previewPhotoClick(prefix) {
+  const img = document.getElementById(prefix + '-photo-img');
+  if (img && img.style.display !== 'none' && img.src && img.src !== window.location.href) {
+    openPhotoLightbox(img.src);
+  } else {
+    document.getElementById(prefix + '-photo-file').click();
+  }
+}
+// ── End Person Photo Management ───────────────────────────────────────────
+
 function loadScript(url, integrity) {
   const existing = document.querySelector('script[src="' + url + '"]');
   if (existing && !existing.dataset.failed) {
@@ -7260,6 +7475,17 @@ showToast('Not logged in to cloud. Data restored locally only.', 'warning');
 }
 const statsMessage = `Added: ${totalAdded}, Updated: ${totalUpdated}, Skipped: ${totalSkipped}`;
 const syncMessage = cloudSyncSuccess ? ' and new/updated records uploaded to cloud' : '';
+// Restore person_photos: merge backup photos into local (local wins if both exist for same key)
+if (data.person_photos && typeof data.person_photos === 'object' && !Array.isArray(data.person_photos)) {
+  try {
+    const existingPhotos = (await sqliteStore.get('person_photos')) || {};
+    const backupPhotos = data.person_photos;
+    const mergedPhotos = Object.assign({}, backupPhotos, existingPhotos); // local wins
+    await sqliteStore.set('person_photos', mergedPhotos);
+    const photoCount = Object.keys(backupPhotos).length;
+    if (photoCount > 0) showToast(`Restored ${photoCount} photo(s) from backup.`, 'info', 3000);
+  } catch(e) { console.warn('[restore] person_photos merge failed', e); }
+}
 showToast(`Restore complete${syncMessage}! ${statsMessage}`, 'success', 5000);
 }
 
@@ -7592,6 +7818,21 @@ let factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {}
   try { syncFactoryProductionStats(); } catch(e) {}
   try { await invalidateAllCaches(); } catch(e) {}
   try { await refreshAllDisplays(); } catch(e) {}
+  // Restore photos from year-close backup (backup photos fill gaps; local wins)
+  if (data.person_photos && typeof data.person_photos === 'object' && !Array.isArray(data.person_photos)) {
+    try {
+      const _ycExisting = (await sqliteStore.get('person_photos')) || {};
+      const _ycBackup   = data.person_photos;
+      const _ycMerged   = Object.assign({}, _ycBackup, _ycExisting);
+      await sqliteStore.set('person_photos', _ycMerged);
+      // Mark all restored photo keys dirty so they sync to cloud
+      const _ycDirty = Object.keys(_ycBackup);
+      if (_ycDirty.length > 0) {
+        await sqliteStore.set('person_photos_dirty_keys', _ycDirty);
+        await sqliteStore.set('person_photos_timestamp', Date.now());
+      }
+    } catch(_ycPhErr) { console.warn('[ycRestore] person_photos restore error', _ycPhErr); }
+  }
   const totalRecords = Object.values(replaceData).reduce((s, a) => s + a.length, 0);
   showToast(` Financial year close reversed! ${totalRecords} pre-close records restored.`, 'success', 6000);
 }
@@ -10438,6 +10679,7 @@ const _ep = document.getElementById('entityPhone'); if (_ep) _ep.value = '';
 const _ew = document.getElementById('entityWallet'); if (_ew) _ew.value = '';
 const _entMT1 = document.getElementById('entityManagementModalTitle'); if (_entMT1) _entMT1.innerText = 'Add New Entity';
 const _delBtn = document.getElementById('deleteEntityBtn'); if (_delBtn) { _delBtn.classList.add('u-hidden'); _delBtn.style.display = 'none'; }
+clearPersonPhoto('entity');
 if (typeof openStandaloneScreen === 'function') openStandaloneScreen('add-entity-screen');
 }
 
@@ -10510,6 +10752,7 @@ const savedEntity = editingEntityId
 ? paymentEntities.find(e => e.id === editingEntityId)
 : paymentEntities[paymentEntities.length - 1];
 await unifiedSave('payment_entities', paymentEntities, savedEntity);
+if (savedEntity) await savePersonPhoto('entity', 'entity:' + String(savedEntity.id));
 emitSyncUpdate({ payment_entities: null});
 notifyDataChange('entities');
 if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
@@ -10530,6 +10773,7 @@ document.getElementById('entityName').value = entity.name;
 document.getElementById('entityPhone').value = entity.phone || '';
 document.getElementById('entityWallet').value = entity.wallet || '';
 const _entMT2 = document.getElementById('entityManagementModalTitle'); if (_entMT2) _entMT2.innerText = 'Edit Entity Info';
+await loadPersonPhotoIntoEditor('entity', 'entity:' + String(id));
 if (typeof openStandaloneScreen === 'function') openStandaloneScreen('add-entity-screen');
 }
 }
@@ -13507,6 +13751,7 @@ expenses: await sqliteStore.get('expenses', []),
 stockReturns: stockReturns,
 settings: await sqliteStore.get('naswar_default_settings', defaultSettings),
 deleted_records: Array.from(deletedRecordIds),
+person_photos: (await sqliteStore.get('person_photos')) || {},
 _meta: { encryptedFor: currentUser.email, encryptedUid: currentUser.uid, createdAt: Date.now(), version: 4 },
 backupMetadata: {
 version: '3.0',

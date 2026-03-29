@@ -2521,6 +2521,16 @@ async function _downloadDeltas(userRef, userType, forceDownload = false) {
   });
   trackFirestoreRead(realCollectionReads);
 
+  // Download personPhotos — only docs updated after last sync
+  let personPhotosSnap = null;
+  try {
+    const lastPhotoSync = await DeltaSync.getLastSyncFirestoreTimestamp('personPhotos');
+    personPhotosSnap = lastPhotoSync && !forceDownload
+      ? await userRef.collection('personPhotos').where('updatedAt', '>', lastPhotoSync).get()
+      : await userRef.collection('personPhotos').get();
+    if (personPhotosSnap && !personPhotosSnap.empty) trackFirestoreRead(personPhotosSnap.docs.length);
+  } catch(_phe) { console.warn('[downloadDeltas] personPhotos fetch error', _phe); }
+
   const extract = (snap) => snap
     ? snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(d => !d._placeholder)
     : [];
@@ -2529,6 +2539,7 @@ async function _downloadDeltas(userRef, userType, forceDownload = false) {
     settings: settingsSnap,
     factorySettings: factorySettingsSnap,
     expenseCategories: expenseCategoriesSnap,
+    personPhotosSnap,
     data: {
       mfg_pro_pkr:              extract(productionSnap),
       customer_sales:           extract(salesSnap),
@@ -2742,7 +2753,7 @@ async function _mergeAndPersist(cloudData) {
 }
 
 async function _syncSettings(cloudData) {
-  const { settings: settingsSnap, factorySettings: factorySettingsSnap, expenseCategories: expCatSnap } = cloudData;
+  const { settings: settingsSnap, factorySettings: factorySettingsSnap, expenseCategories: expCatSnap, personPhotosSnap } = cloudData;
 
   if (settingsSnap && settingsSnap.exists) {
     const sd = settingsSnap.data();
@@ -2860,6 +2871,33 @@ async function _syncSettings(cloudData) {
     if (ecd && Array.isArray(ecd.categories)) {
       await sqliteStore.set('expense_categories', ecd.categories);
     }
+  }
+
+  // ── Sync person_photos from cloud personPhotos subcollection ──
+  // Each doc: { key: "entity:uuid" | "cust:name" | "rep-cust:rep:name", data: base64|null, deleted: bool }
+  // Local wins on conflict — only fill gaps (missing keys) or apply deletions
+  if (personPhotosSnap && !personPhotosSnap.empty) {
+    try {
+      const localPhotos = (await sqliteStore.get('person_photos')) || {};
+      const localDirtyKeys = new Set((await sqliteStore.get('person_photos_dirty_keys')) || []);
+      let photosChanged = false;
+      for (const doc of personPhotosSnap.docs) {
+        const docData = doc.data();
+        const photoKey = docData.key;
+        if (!photoKey) continue;
+        // Skip keys we have locally dirty (our version is newer — will upload on next sync)
+        if (localDirtyKeys.has(photoKey)) continue;
+        if (docData.deleted) {
+          if (localPhotos[photoKey]) { delete localPhotos[photoKey]; photosChanged = true; }
+        } else if (docData.data && !localPhotos[photoKey]) {
+          // Only fill in missing — never overwrite existing local photo
+          localPhotos[photoKey] = docData.data;
+          photosChanged = true;
+        }
+      }
+      if (photosChanged) await sqliteStore.set('person_photos', localPhotos);
+      await DeltaSync.setLastSyncTimestamp('personPhotos');
+    } catch(_phe) { console.warn('[syncSettings] personPhotos merge error', _phe); }
   }
 }
 
@@ -2995,6 +3033,32 @@ async function _uploadChanges(userRef) {
     operationCount++;
     collectionsUploaded.add('expenseCategories');
   }
+
+  // ── Upload person_photos: each dirty key becomes its own Firestore doc ──
+  // Doc IDs use base64-encoded key to safely handle colons/slashes in names.
+  try {
+    const _dirtyPhotoKeys = (await sqliteStore.get('person_photos_dirty_keys')) || [];
+    if (_dirtyPhotoKeys.length > 0) {
+      const _allPhotos = (await sqliteStore.get('person_photos')) || {};
+      const _photosRef = userRef.collection('personPhotos');
+      for (const _photoKey of _dirtyPhotoKeys) {
+        const _safeDocId = btoa(unescape(encodeURIComponent(_photoKey))).replace(/[+/=]/g, c => ({'+':'-','/':'_','=':''})[c] || '');
+        const _photoVal = _allPhotos[_photoKey];
+        const _photoBatch = getOrNewBatch();
+        if (_photoVal) {
+          _photoBatch.set(_photosRef.doc(_safeDocId), { key: _photoKey, data: _photoVal, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: false });
+        } else {
+          // Photo was deleted — write a tombstone so other devices remove it
+          _photoBatch.set(_photosRef.doc(_safeDocId), { key: _photoKey, data: null, deleted: true, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: false });
+        }
+        operationCount++;
+        totalItemsToWrite++;
+        trackFirestoreWrite(1);
+      }
+      await sqliteStore.set('person_photos_dirty_keys', []);
+      collectionsUploaded.add('personPhotos');
+    }
+  } catch(_photoUploadErr) { console.warn('[uploadChanges] person_photos upload error', _photoUploadErr); }
 
   if (operationCount > 0) batches.push(currentBatch);
   for (const batch of batches) {
