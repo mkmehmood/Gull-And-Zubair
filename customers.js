@@ -1083,9 +1083,32 @@ renderCustomersTable();
 
 async function openCustomerEditModal(customerName) {
 customerName = customerName || '';
+const isAddMode = !customerName;
+const titleEl = document.getElementById('cust-edit-screen-title');
+const saveBtn = document.getElementById('cust-edit-save-btn');
+const nameInput = document.getElementById('edit-cust-name');
+const nameHint = document.getElementById('cust-name-hint');
+const nameLabel = document.getElementById('cust-name-label');
+if (titleEl) titleEl.textContent = isAddMode ? 'Add Customer' : 'Edit Customer';
+if (saveBtn) saveBtn.textContent = isAddMode ? 'Add Customer' : 'Update Details';
+// Single input — wire search in add mode, plain edit in edit mode
+if (isAddMode) {
+nameInput.placeholder = 'Type name to search or add...';
+nameInput.oninput = function() {
+handleUniversalSearch('edit-cust-name', 'cust-add-search-results', 'customers');
+};
+if (nameLabel) nameLabel.textContent = 'Customer Name';
+if (nameHint) nameHint.textContent = 'Search existing customers or type a new name to add.';
+const searchResults = document.getElementById('cust-add-search-results');
+if (searchResults) searchResults.classList.add('hidden');
+} else {
+nameInput.placeholder = 'Customer name';
+nameInput.oninput = null;
+if (nameLabel) nameLabel.textContent = 'Customer Name';
+if (nameHint) nameHint.textContent = 'Editing the name will update all records for this customer';
+}
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
 const salesCustomers = ensureArray(await sqliteStore.get('sales_customers'));
-const nameInput = document.getElementById('edit-cust-name');
 nameInput.value = customerName;
 nameInput.dataset.originalName = customerName;
 if (!customerName) {
@@ -1373,3 +1396,4 @@ gpsOptions
 setTimeout(() => { if (!settled && best) finish(best); }, GPS_MAX_WAIT_MS);
 });
 }
+

@@ -15003,6 +15003,14 @@ if (_phoneContainer) _phoneContainer.classList.add('hidden');
 if (typeof calculateRepCustomerStatsForDisplay === 'function') {
 calculateRepCustomerStatsForDisplay(value);
 }
+} else if (type === 'name' && inputId === 'cust-add-search') {
+if (typeof openCustomerEditModal === 'function') openCustomerEditModal(value);
+} else if (type === 'repName' && inputId === 'rep-cust-add-search') {
+if (typeof openRepCustomerEditModal === 'function') openRepCustomerEditModal(value);
+} else if (type === 'name' && inputId === 'edit-cust-name') {
+if (typeof openCustomerEditModal === 'function') openCustomerEditModal(value);
+} else if (type === 'repName' && inputId === 'rep-edit-cust-name') {
+if (typeof openRepCustomerEditModal === 'function') openRepCustomerEditModal(value);
 }
 }
 document.addEventListener('click', function(e) {

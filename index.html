@@ -1254,7 +1254,7 @@ window._showLogoutConfirmDialog = async function() {
 
 <div id="customer-edit-screen" class="standalone-screen" style="display:none">
   <div class="screen-topbar">
-    <h2 class="screen-title">Edit Customer</h2>
+    <h2 class="screen-title" id="cust-edit-screen-title">Edit Customer</h2>
   </div>
   <div class="screen-body">
 
@@ -1278,10 +1278,11 @@ window._showLogoutConfirmDialog = async function() {
       <input type="file" id="cust-photo-file" accept="image/*" style="display:none" onchange="handlePersonPhotoFile(event,'cust')">
     </div>
     <div class="grid-inputs u-mb-20">
-      <div class="field">
-        <label>Customer Name</label>
-        <input type="text" id="edit-cust-name" placeholder="Customer name" style="font-weight:700;">
-        <div style="font-size:0.65rem;color:var(--text-muted);margin-top:4px;">Editing the name will update all records for this customer</div>
+      <div class="field u-pos-relative">
+        <label id="cust-name-label">Customer Name</label>
+        <input type="text" id="edit-cust-name" placeholder="Customer name" style="font-weight:700;" autocomplete="off">
+        <div id="cust-add-search-results" class="hidden u-search-dropdown"></div>
+        <div id="cust-name-hint" style="font-size:0.65rem;color:var(--text-muted);margin-top:4px;">Editing the name will update all records for this customer</div>
       </div>
       <div class="field">
         <label>Phone Number</label>
@@ -1308,7 +1309,7 @@ window._showLogoutConfirmDialog = async function() {
         <div style="font-size:0.65rem;color:var(--text-muted);margin-top:4px;">Override the default sale price for this customer. Leave blank to use the standard rate.</div>
       </div>
     </div>
-    <button class="btn btn-main u-h-42 u-fs-md2 u-fw-700" style="width:100%;" onclick="(async()=>{await saveCustomerDetails()})()">Update Details</button>
+    <button class="btn btn-main u-h-42 u-fs-md2 u-fw-700" style="width:100%;" id="cust-edit-save-btn" onclick="(async()=>{await saveCustomerDetails()})()">Update Details</button>
   </div>
 </div>
 
@@ -1353,7 +1354,7 @@ window._showLogoutConfirmDialog = async function() {
 
 <div id="rep-customer-edit-screen" class="standalone-screen" style="display:none">
   <div class="screen-topbar">
-    <h2 class="screen-title">Edit Rep Customer</h2>
+    <h2 class="screen-title" id="rep-cust-edit-screen-title">Edit Rep Customer</h2>
   </div>
   <div class="screen-body">
 
@@ -1377,10 +1378,11 @@ window._showLogoutConfirmDialog = async function() {
       <input type="file" id="rep-cust-photo-file" accept="image/*" style="display:none" onchange="handlePersonPhotoFile(event,'rep-cust')">
     </div>
     <div class="grid-inputs u-mb-20">
-      <div class="field">
-        <label>Customer Name</label>
-        <input type="text" id="rep-edit-cust-name" placeholder="Customer name" style="font-weight:700;">
-        <div style="font-size:0.65rem;color:var(--text-muted);margin-top:4px;">Editing the name will update all records for this customer</div>
+      <div class="field u-pos-relative">
+        <label id="rep-cust-name-label">Customer Name</label>
+        <input type="text" id="rep-edit-cust-name" placeholder="Customer name" style="font-weight:700;" autocomplete="off">
+        <div id="rep-cust-add-search-results" class="hidden u-search-dropdown"></div>
+        <div id="rep-cust-name-hint" style="font-size:0.65rem;color:var(--text-muted);margin-top:4px;">Editing the name will update all records for this customer</div>
       </div>
       <div class="field">
         <label>Phone Number</label>
@@ -1402,7 +1404,7 @@ window._showLogoutConfirmDialog = async function() {
         <div id="rep-location-status" style="font-size:0.65rem;color:var(--text-muted);margin-top:4px;font-style:italic;"></div>
       </div>
     </div>
-    <button class="btn btn-main u-h-42 u-fs-md2 u-fw-700" style="width:100%;" onclick="(async()=>{await saveRepCustomerDetails()})()">Update Details</button>
+    <button class="btn btn-main u-h-42 u-fs-md2 u-fw-700" style="width:100%;" id="rep-cust-edit-save-btn" onclick="(async()=>{await saveRepCustomerDetails()})()">Update Details</button>
   </div>
 </div>
 <div id="splash-screen">
