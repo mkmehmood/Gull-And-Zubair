@@ -985,7 +985,7 @@ _toastQueue.push({ message, type, duration });
 _playNextToast();
 }
 window.showToast = showToast;
-/* SVG icon library — sidebar-style (24×24, stroke, no fill) */
+ 
 const _gcIcons = {
   delete:   '<svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 11 L10 31 A2 2 0 0 0 12 33 H24 A2 2 0 0 0 26 31 L28 11 Z" fill="var(--danger)" fill-opacity="0.12" stroke="var(--danger)" stroke-width="1.5" stroke-linejoin="round"/><line x1="6" y1="11" x2="30" y2="11" stroke="var(--danger)" stroke-width="1.6" stroke-linecap="round"/><path d="M14 8 H22 M14 8 A1 1 0 0 1 15 7 H21 A1 1 0 0 1 22 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" opacity="0.65"/><line x1="14" y1="17" x2="14" y2="27" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" opacity="0.6"/><line x1="22" y1="17" x2="22" y2="27" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" opacity="0.6"/></svg>',
   remove:   '<svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="18" cy="18" r="13" fill="var(--danger)" fill-opacity="0.12" stroke="var(--danger)" stroke-width="1.5"/><line x1="13" y1="13" x2="23" y2="23" stroke="var(--danger)" stroke-width="2" stroke-linecap="round"/><line x1="23" y1="13" x2="13" y2="23" stroke="var(--danger)" stroke-width="2" stroke-linecap="round"/></svg>',
@@ -1091,7 +1091,6 @@ const nameHint = document.getElementById('cust-name-hint');
 const nameLabel = document.getElementById('cust-name-label');
 if (titleEl) titleEl.textContent = isAddMode ? 'Add Customer' : 'Edit Customer';
 if (saveBtn) saveBtn.textContent = isAddMode ? 'Add Customer' : 'Update Details';
-// Single input — wire search in add mode, plain edit in edit mode
 if (isAddMode) {
 nameInput.placeholder = 'Type name to search or add...';
 nameInput.oninput = function() {
@@ -1251,7 +1250,6 @@ const message = nameChanged ? `Customer renamed to "${name}" and details updated
 : oldDebit > 0 ? `Customer updated with old debt of ₨${oldDebit.toLocaleString()}`
 : (oldDebit === 0 && previousOldDebit > 0) ? 'Customer updated and old debt cleared'
 : 'Customer details updated successfully';
-// Save photo: if name changed, migrate photo key
 if (nameChanged) {
 const _oldPhoto = await getPersonPhoto('cust:' + originalName.toLowerCase());
 if (_oldPhoto) {
@@ -1259,7 +1257,6 @@ const _photos = await sqliteStore.get('person_photos') || {};
 _photos['cust:' + name.toLowerCase()] = _oldPhoto;
 delete _photos['cust:' + originalName.toLowerCase()];
 await sqliteStore.set('person_photos', _photos);
-// Mark both old (deleted) and new key as dirty for sync
 const _dk = (await sqliteStore.get('person_photos_dirty_keys')) || [];
 const _newKey = 'cust:' + name.toLowerCase();
 const _oldKey = 'cust:' + originalName.toLowerCase();
@@ -1396,4 +1393,3 @@ gpsOptions
 setTimeout(() => { if (!settled && best) finish(best); }, GPS_MAX_WAIT_MS);
 });
 }
-

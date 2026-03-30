@@ -850,7 +850,7 @@ _cyBody.innerHTML = `
   box-shadow: 0 1px 0 rgba(255,255,255,0.20) inset, 0 7px 22px rgba(105,240,174,0.32);
 }
 #cy-continue-btn:active { transform: translateY(0); }
-/*  Standalone-screen flatten overrides  */
+ 
 #cy-panel {
   background: transparent !important;
   border: none !important;
@@ -1475,8 +1475,6 @@ try {
     expenses: expenseRecords,
     settings: _settingsSnapshot,
     deleted_records: Array.from(deletedRecordIds),
-    // Include all photos (person, expense, payment) so year-close backup is self-contained.
-    // person_photos_timestamps is included so timestamp-based conflict resolution works on restore.
     person_photos: (await sqliteStore.get('person_photos')) || {},
     person_photos_timestamps: (await sqliteStore.get('person_photos_timestamps')) || {},
     _meta: {
@@ -2592,8 +2590,6 @@ const postCloseExpenses = expenseRecords.filter(e => e.isMerged !== true && _rec
 const mergedExpenses = [...existingMerged, ...mergedRecords, ...postCloseExpenses];
 await sqliteStore.set('expenses', mergedExpenses);
 
-// Collect all old expense IDs that were merged away (not kept as post-close or already-merged).
-// Their photos must be deleted from local store and Firestore so they don't orphan.
 try {
   const _keptIds = new Set(mergedExpenses.map(e => e.id));
   const _mergedAwayIds = expenseRecords
@@ -2609,8 +2605,6 @@ try {
       if (_fyPh[_mergedPhKey] !== undefined) {
         delete _fyPh[_mergedPhKey];
         delete _fyPhTs[_mergedPhKey];
-        // Mark dirty → sync will push deleted:true tombstone to Firestore,
-        // removing the photo from all connected devices on next pull.
         if (!_fyDk.includes(_mergedPhKey)) _fyDk.push(_mergedPhKey);
         _fyPhChanged = true;
       }

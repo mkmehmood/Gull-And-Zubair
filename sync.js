@@ -1183,10 +1183,18 @@ trackFirestoreRead(changes.length);
 if (changes.length === 0) return;
 const addedOrModified = [];
 const removedIds = [];
+const _existingArr = await _getColData(col.sqliteKey);
+const _existingIdSet = new Set(_existingArr.map(r => r && r.id ? String(r.id) : null).filter(Boolean));
 for (const change of changes) {
 try {
 const docData = { id: change.doc.id, ...change.doc.data() };
 if (change.type === 'added' || change.type === 'modified') {
+const _sid = String(change.doc.id);
+if (change.type === 'added' && _existingIdSet.has(_sid)) {
+  if (typeof UUIDSyncRegistry !== 'undefined') UUIDSyncRegistry.markDownloaded(col.firestoreId, _sid);
+  else DeltaSync.markDownloaded(col.firestoreId, _sid);
+  continue; // already in SQLite — no need to redownload
+}
 if (typeof UUIDSyncRegistry !== 'undefined') {
 UUIDSyncRegistry.markDownloaded(col.firestoreId, change.doc.id);
 } else {
@@ -1215,7 +1223,7 @@ addedOrModified.forEach(d => deletedSet.delete(d.id));
 removedIds.forEach(id => deletedSet.add(id));
 await sqliteStore.set('deleted_records', Array.from(deletedSet));
 }
-let arr = await _getColData(col.sqliteKey);
+let arr = _existingArr;
 for (const docData of addedOrModified) {
 arr = _updateArray(arr, docData, col.firestoreId);
 }
@@ -2427,14 +2435,26 @@ function mergeArrays(localArray, cloudArray, collectionName) {
   let downloadedCount = 0, fixedCount = 0, skippedCount = 0;
   const useUUIDGate = typeof UUIDSyncRegistry !== 'undefined' && !!collectionName;
 
+  if (collectionName) {
+    for (const sid of localIds) {
+      if (useUUIDGate) UUIDSyncRegistry.markDownloaded(collectionName, sid);
+      else DeltaSync.markDownloaded(collectionName, sid);
+    }
+  }
+
   for (let cloudItem of cloudArray) {
     if (!cloudItem.id || cloudItem.id === '_placeholder_' || cloudItem._placeholder) continue;
     if (!validateUUID(cloudItem.id)) { cloudItem = ensureRecordIntegrity(cloudItem, false, true); fixedCount++; }
     const sid = String(cloudItem.id);
 
     if (!localIds.has(sid)) {
-
       if (useUUIDGate && UUIDSyncRegistry.skipDownload(collectionName, sid)) {
+        skippedCount++;
+        continue;
+      }
+      if (!useUUIDGate && collectionName
+          && DeltaSync.wasDownloaded(collectionName, sid)
+          && !DeltaSync.isDirtyId(collectionName, sid)) {
         skippedCount++;
         continue;
       }
@@ -2473,8 +2493,13 @@ function mergeArrays(localArray, cloudArray, collectionName) {
         else if (collectionName) DeltaSync.markDownloaded(collectionName, sid);
       }
       else if (collectionName) {
-        if (useUUIDGate) UUIDSyncRegistry.markDownloaded(collectionName, sid);
-        else DeltaSync.markDownloaded(collectionName, sid);
+        if (useUUIDGate) {
+          UUIDSyncRegistry.markDownloaded(collectionName, sid);
+          UUIDSyncRegistry.markUploaded(collectionName, sid);
+        } else {
+          DeltaSync.markDownloaded(collectionName, sid);
+          DeltaSync.markUploaded(collectionName, sid);
+        }
       }
     }
   }
@@ -2894,8 +2919,6 @@ async function _syncSettings(cloudData) {
   if (personPhotosSnap && !personPhotosSnap.empty) {
     try {
       const localPhotos = (await sqliteStore.get('person_photos')) || {};
-      // person_photos_timestamps stores { [photoKey]: epochMs } so we can compare
-      // remote updatedAt against the local copy's age and overwrite stale photos.
       const localPhotoTimestamps = (await sqliteStore.get('person_photos_timestamps')) || {};
       const localDirtyKeys = new Set((await sqliteStore.get('person_photos_dirty_keys')) || []);
       let photosChanged = false;
@@ -2905,11 +2928,9 @@ async function _syncSettings(cloudData) {
         const photoKey = docData.key;
         if (!photoKey) continue;
 
-        // Skip keys the local device has modified but not yet pushed — local wins.
         if (localDirtyKeys.has(photoKey)) continue;
 
         if (docData.deleted) {
-          // Remote deletion: remove from local store on all connected devices.
           if (localPhotos[photoKey] !== undefined) {
             delete localPhotos[photoKey];
             delete localPhotoTimestamps[photoKey];
@@ -2917,15 +2938,6 @@ async function _syncSettings(cloudData) {
             timestampsChanged = true;
           }
         } else if (docData.data) {
-          // FIX: The previous condition was "!localPhotos[photoKey]" which only pulled
-          // photos that didn't exist locally at all. This meant that when a photo was
-          // *updated* or *replaced* on one device, every other device that already had
-          // the old photo stored locally would silently ignore the newer version from
-          // Firestore — the old photo would persist indefinitely on those devices.
-          //
-          // Fix: compare the remote Firestore updatedAt timestamp against the locally
-          // recorded timestamp for that photo key. Overwrite whenever the remote copy
-          // is newer (or when no local copy exists).
           const remoteUpdatedAt = docData.updatedAt?.toMillis ? docData.updatedAt.toMillis() : 0;
           const localUpdatedAt = localPhotoTimestamps[photoKey] || 0;
           if (!localPhotos[photoKey] || remoteUpdatedAt > localUpdatedAt) {
@@ -2982,16 +2994,26 @@ async function _uploadChanges(userRef) {
 
   let totalItemsToWrite = 0;
   const collectionsUploaded = new Set();
+  const _pendingUploadMarks = []; // [{ collectionName, id }]
+
   for (const [collectionName, dataArray] of Object.entries(collections)) {
     if (!Array.isArray(dataArray) || dataArray.length === 0) continue;
+    const _isUploaded = (col, id) => {
+      if (typeof UUIDSyncRegistry !== 'undefined') return UUIDSyncRegistry.skipUpload(col, id);
+      return DeltaSync.wasUploaded(col, id);
+    };
     const changedItems = await DeltaSync.getChangedItems(collectionName, dataArray);
     if (changedItems.length === 0) continue;
     for (const item of changedItems) {
       if (!item || !item.id) continue;
 
-      if (typeof UUIDSyncRegistry !== 'undefined'
-            ? UUIDSyncRegistry.skipUpload(collectionName, item.id)
-            : DeltaSync.wasUploaded(collectionName, item.id)) continue;
+      if (_isUploaded(collectionName, item.id)) continue; // Fix 8: unified gate
+
+      if (DeltaSync.wasDownloaded(collectionName, item.id)
+          && !DeltaSync.isDirtyId(collectionName, item.id)) {
+        _pendingUploadMarks.push({ collectionName, id: item.id }); // Fix 7: deferred
+        continue;
+      }
       if (!validateUUID(String(item.id))) {
         console.warn('[uploadChanges] Skipping upload: invalid UUID', item.id);
         continue;
@@ -3007,11 +3029,7 @@ async function _uploadChanges(userRef) {
       totalItemsToWrite++;
       trackFirestoreWrite(1);
 
-      if (typeof UUIDSyncRegistry !== 'undefined') {
-        UUIDSyncRegistry.markUploaded(collectionName, item.id);
-      } else {
-        DeltaSync.markUploaded(collectionName, item.id);
-      }
+      _pendingUploadMarks.push({ collectionName, id: item.id });
       collectionsUploaded.add(collectionName);
     }
   }
@@ -3078,8 +3096,6 @@ async function _uploadChanges(userRef) {
     collectionsUploaded.add('expenseCategories');
   }
 
-  // Track which photo keys were queued for upload so we can update local state
-  // only after the Firestore batch.commit() succeeds (prevents data loss on failure).
   let _uploadedPhotoKeys = [];
   try {
     const _dirtyPhotoKeys = (await sqliteStore.get('person_photos_dirty_keys')) || [];
@@ -3093,7 +3109,6 @@ async function _uploadChanges(userRef) {
         if (_photoVal) {
           _photoBatch.set(_photosRef.doc(_safeDocId), { key: _photoKey, data: _photoVal, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: false });
         } else {
-          // Deleted locally — push tombstone so all connected devices remove it too.
           _photoBatch.set(_photosRef.doc(_safeDocId), { key: _photoKey, data: null, deleted: true, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: false });
         }
         operationCount++;
@@ -3102,7 +3117,6 @@ async function _uploadChanges(userRef) {
         _uploadedPhotoKeys.push(_photoKey);
       }
       collectionsUploaded.add('personPhotos');
-      // NOTE: dirty keys intentionally NOT cleared here — cleared below after commit succeeds.
     }
   } catch(_photoUploadErr) { console.warn('[uploadChanges] person_photos upload error', _photoUploadErr); }
 
@@ -3111,9 +3125,14 @@ async function _uploadChanges(userRef) {
     await batch.commit();
   }
 
-  // Post-commit: clear dirty photo keys and stamp local timestamps now that Firestore
-  // has accepted the writes. This prevents re-uploading on the next sync cycle and
-  // ensures the pull logic won't overwrite the just-uploaded photos with stale data.
+  for (const { collectionName, id } of _pendingUploadMarks) {
+    if (typeof UUIDSyncRegistry !== 'undefined') {
+      UUIDSyncRegistry.markUploaded(collectionName, id);
+    } else {
+      DeltaSync.markUploaded(collectionName, id);
+    }
+  }
+
   if (_uploadedPhotoKeys.length > 0) {
     try {
       const _remainingDirty = (await sqliteStore.get('person_photos_dirty_keys')) || [];
@@ -3174,6 +3193,9 @@ async function _doOneClickSync(silent = false) {
   try {
     if (typeof initDeviceShard === 'function') {
       await initDeviceShard().catch(() => {});
+    }
+    if (typeof UUIDSyncRegistry !== 'undefined') {
+      await UUIDSyncRegistry.loadAll().catch(() => {});
     }
     const userRef = firebaseDB.collection('users').doc(currentUser.uid);
 

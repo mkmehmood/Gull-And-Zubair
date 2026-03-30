@@ -976,6 +976,20 @@ for (const tx of repTxsToDelete) {
 prunedRepSales = prunedRepSales.filter(s => s.id !== tx.id);
 await unifiedDelete('rep_sales', prunedRepSales, tx.id, { strict: true }, tx);
 }
+try {
+const _rcPhKey = 'rep-cust:' + (currentRepProfile || '') + ':' + name.toLowerCase();
+const _rcPh = (await sqliteStore.get('person_photos')) || {};
+if (_rcPh[_rcPhKey] !== undefined) {
+delete _rcPh[_rcPhKey];
+await sqliteStore.set('person_photos', _rcPh);
+const _rcPhTs = (await sqliteStore.get('person_photos_timestamps')) || {};
+delete _rcPhTs[_rcPhKey];
+await sqliteStore.set('person_photos_timestamps', _rcPhTs);
+const _rcDk = (await sqliteStore.get('person_photos_dirty_keys')) || [];
+if (!_rcDk.includes(_rcPhKey)) _rcDk.push(_rcPhKey);
+await sqliteStore.set('person_photos_dirty_keys', _rcDk);
+}
+} catch(_rcPhErr) { console.warn('[deleteCurrentRepCustomer] photo cleanup failed', _rcPhErr); }
 notifyDataChange('rep');
 triggerAutoSync();
 closeRepCustomerManagement();
@@ -1167,7 +1181,6 @@ const nameHint = document.getElementById('rep-cust-name-hint');
 const nameLabel = document.getElementById('rep-cust-name-label');
 if (titleEl) titleEl.textContent = isAddMode ? 'Add Customer' : 'Edit Rep Customer';
 if (saveBtn) saveBtn.textContent = isAddMode ? 'Add Customer' : 'Update Details';
-// Single input — wire search in add mode, plain edit in edit mode
 if (isAddMode) {
 nameInput.placeholder = 'Type name to search or add...';
 nameInput.oninput = function() {
@@ -1318,7 +1331,6 @@ const message = nameChanged ? `Rep customer renamed to "${name}" and details upd
 : oldDebit > 0 ? `Rep customer updated with old debt of ₨${oldDebit.toLocaleString()}`
 : (oldDebit === 0 && previousOldDebit > 0) ? 'Rep customer updated and old debt cleared'
 : 'Rep customer details updated successfully';
-// Save photo: if name changed, migrate photo key
 const _repPhotoKeyOld = 'rep-cust:' + (currentRepProfile || '') + ':' + originalName.toLowerCase();
 const _repPhotoKeyNew = 'rep-cust:' + (currentRepProfile || '') + ':' + name.toLowerCase();
 if (nameChanged) {
@@ -1328,7 +1340,6 @@ const _repPhotos = await sqliteStore.get('person_photos') || {};
 _repPhotos[_repPhotoKeyNew] = _oldRepPhoto;
 delete _repPhotos[_repPhotoKeyOld];
 await sqliteStore.set('person_photos', _repPhotos);
-// Mark both old (deleted) and new key as dirty for sync
 const _rdk = (await sqliteStore.get('person_photos_dirty_keys')) || [];
 if (!_rdk.includes(_repPhotoKeyNew)) _rdk.push(_repPhotoKeyNew);
 if (!_rdk.includes(_repPhotoKeyOld)) _rdk.push(_repPhotoKeyOld);
@@ -1880,4 +1891,3 @@ setTimeout(updateRepLiveMap, 200);
 }
 }
 }
-

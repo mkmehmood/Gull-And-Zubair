@@ -362,7 +362,7 @@ const _OPFSStore = (() => {
         const root = await navigator.storage.getDirectory();
         const fh   = await root.getFileHandle(filename);
         return JSON.parse(await (await fh.getFile()).text());
-      } catch { /* fall through to localStorage */ }
+      } catch {   }
     }
     try { const r = localStorage.getItem(lsKey); return r ? JSON.parse(r) : {}; } catch { return {}; }
   }
@@ -1075,9 +1075,6 @@ const sqliteStore = (() => {
     });
   }
 
-  // Load the JS driver — always try the bundled local file first (served instantly
-  // from SW cache), fall back to CDN only if the local inject actually fails.
-  // No HEAD pre-flight: the failed fetch/inject IS the signal to fall back.
   async function _tryLoadWasm() {
     if (typeof window.initSqlJs !== 'function') {
       try {
@@ -1092,7 +1089,6 @@ const sqliteStore = (() => {
       throw new Error('[SQLite] initSqlJs not available after script load');
     }
 
-    // Fetch the WASM binary — local first, CDN fallback on any failure.
     let buffer;
     try {
       const resp = await fetch(SQLITE_WASM_LOCAL);
@@ -1112,7 +1108,6 @@ const sqliteStore = (() => {
     delete window.initSqlJs;
     delete window.SQL;
 
-    // Same local-first pattern — no HEAD pre-flight.
     try {
       await _injectScript(SQLITE_ASMJS_LOCAL);
     } catch (_e1) {
@@ -1620,7 +1615,7 @@ const sqliteStore = (() => {
               );
               updated++;
             }
-          } catch { /* skip individual row failures */ }
+          } catch {   }
         }
         if (updated > 0) {
           _schedulePersist(PERSIST_NORMAL_MS);
@@ -1778,9 +1773,6 @@ const sqliteStore = (() => {
   };
 })();
 
-// Pre-warm: kick off SQLite init (WASM load + DB open) as soon as business.js
-// is parsed — well before DOMContentLoaded triggers the full bootstrap.
-// By the time the app needs data the DB is already open.
 (function() {
   try { sqliteStore.init().catch(function() {}); } catch (_) {}
 })();
@@ -1930,11 +1922,6 @@ try { return sessionStorage.getItem(key) || null; } catch (e) { return null; }
 function _writeSession(key, value) {
 try { sessionStorage.setItem(key, value); } catch (e) {  }
 }
-/**
- * Extracts the first-login timestamp embedded in a composite device ID.
- * Composite format: "<prefix>-<uuid>_<epochMs>"  e.g. "dev-abc123..._1711234567890"
- * Returns a Date if the suffix is present, otherwise null.
- */
 function _extractDeviceFirstLoginTime(deviceId) {
   if (!deviceId || typeof deviceId !== 'string') return null;
   const match = deviceId.match(/_(\d{13})$/);
@@ -1953,12 +1940,6 @@ try { await sqliteStore.set('device_id', deviceId); } catch (e) {  }
 await _writeCacheAnchor(deviceId);
 }
 
-/**
- * Wipes every storage location that holds the device ID and install token so
- * a brand-new composite ID (uuid + first-login timestamp) is generated on the
- * next login. Does NOT touch appMode, repProfile, or any other device-global
- * key — those are intentionally preserved across logouts.
- */
 async function _clearDeviceIdStorage() {
   try {
     document.cookie = `${DEVICE_ID_COOKIE}=; max-age=0; path=/; SameSite=Strict`;
@@ -2318,8 +2299,6 @@ displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'Use
 lastActivity: firebase.firestore.FieldValue.serverTimestamp(),
 accountCreated: firebase.firestore.FieldValue.serverTimestamp()
 }, { merge: true });
-// NOTE: account/preferences removed — theme, currency, timezone, defaultRepProfile
-// live in naswar_default_settings (settings/config) and are never read from this path.
 startDeviceHeartbeat(deviceRef);
 
 setTimeout(() => {
@@ -2408,7 +2387,6 @@ listenForTeamChanges();
 console.error('Device command listener failed.', _safeErr(error));
 showToast('Device command listener failed.', 'error');
 }
-// Fix: cleanupOldDeletions is a Firestore network call — must not block app boot
 setTimeout(() => {
   cleanupOldDeletions().catch(e => console.warn('[initializeDeviceListeners] cleanup failed:', _safeErr(e)));
 }, 5000);

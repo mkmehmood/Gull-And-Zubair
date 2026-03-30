@@ -1386,8 +1386,6 @@ displayDetail: _snapshot.displayDetail || null,
 displayAmount: _snapshot.displayAmount || null,
 snapshot: _snapshot.record || null,
 };
-// Embed the photo data URL in the deletion record so recoverRecord() can restore it
-// under the new ID without needing a separate Firestore lookup.
 if (collectionName === 'expenses' || collectionName === 'transactions') {
   try {
     const _regPhKey = 'expense:' + id;
@@ -1942,6 +1940,7 @@ const badgeColor = isOut ? 'var(--danger)' : 'var(--accent-emerald)';
 const label = isOut ? 'PAYMENT OUT' : 'PAYMENT IN';
 const safeId = String(t.id).replace(/'/g, "\\'");
 const safeExpenseId = t.expenseId ? String(t.expenseId).replace(/'/g, "\\'") : '';
+const photoBadgeId = 'ph-badge-' + (t.expenseId || t.id).replace(/[^a-z0-9]/gi, '');
 const item = document.createElement('div');
 item.className = `cust-history-item${t.isSettled ? ' is-settled-record' : ''}`;
 item.style.flexDirection = 'column';
@@ -1958,11 +1957,29 @@ item.innerHTML = `
       <span style="background:${badgeBg};color:${badgeColor};padding:2px 6px;border-radius:4px;font-size:0.65rem;font-weight:700;">${label}</span>
       <div class="${colorClass}" style="font-size:0.9rem;margin-top:2px;">${fmtAmt(t.amount)}</div>
     </div>
-    <button class="txn-kebab-btn" title="View photo" onclick="_toggleEntityTxnPanel(this,'','${safeId}','${safeExpenseId}')">⋮</button>
+    <button id="${photoBadgeId}" title="View photo" onclick="_toggleEntityTxnPanel(this,'','${safeId}','${safeExpenseId}')"
+      style="display:none;align-items:center;gap:3px;padding:3px 7px;border:none;border-radius:6px;cursor:pointer;font-size:0.62rem;font-weight:700;background:rgba(99,102,241,0.15);color:#818cf8;white-space:nowrap;">
+      <svg width="11" height="11" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;">
+        <rect x="3" y="7" width="30" height="22" rx="3" stroke="currentColor" stroke-width="1.8" fill="none"/>
+        <circle cx="18" cy="18" r="6" stroke="currentColor" stroke-width="1.6" fill="none"/>
+        <circle cx="18" cy="18" r="2.5" fill="currentColor"/>
+        <rect x="22" y="4" width="8" height="5" rx="1.5" stroke="currentColor" stroke-width="1.4" fill="none"/>
+      </svg>
+      Photo
+    </button>
     <button class="btn btn-sm btn-danger u-p-4-8" onclick="deleteEntityTransaction('${esc(t.id)}')">⌫</button>
   </div>
 </div>`;
 _entityFrag.appendChild(item);
+if (t.expenseId) {
+  const _phKey = 'expense:' + t.expenseId;
+  sqliteStore.get('person_photos').then(ph => {
+    if (ph && ph[_phKey]) {
+      const badge = document.getElementById(photoBadgeId);
+      if (badge) badge.style.display = 'inline-flex';
+    }
+  }).catch(() => {});
+}
 });
 list.replaceChildren(_entityFrag);
 }
@@ -2218,6 +2235,23 @@ try {
 await _restorePayableFromDeletedTransaction(_dt, paymentTransactions, factoryInventoryData);
 const _ptFiltered1 = paymentTransactions.filter(t => t.id !== id);
 await unifiedDelete('payment_transactions', _ptFiltered1, id, { strict: true }, _dt);
+if (_dt.expenseId) {
+try {
+const _etPhKey = 'expense:' + _dt.expenseId;
+const _etPh = (await sqliteStore.get('person_photos')) || {};
+if (_etPh[_etPhKey] !== undefined) {
+delete _etPh[_etPhKey];
+await sqliteStore.set('person_photos', _etPh);
+const _etPhTs = (await sqliteStore.get('person_photos_timestamps')) || {};
+delete _etPhTs[_etPhKey];
+await sqliteStore.set('person_photos_timestamps', _etPhTs);
+const _etDk = (await sqliteStore.get('person_photos_dirty_keys')) || [];
+if (!_etDk.includes(_etPhKey)) _etDk.push(_etPhKey);
+await sqliteStore.set('person_photos_dirty_keys', _etDk);
+if (typeof triggerAutoSync === 'function') { try { triggerAutoSync(); } catch(_) {} }
+}
+} catch(_etPhErr) { console.warn('[deleteEntityTransaction] photo cleanup failed', _etPhErr); }
+}
 const _dtEntityRefreshed = paymentEntities.find(e => String(e.id) === String(_dt.entityId));
 if (_dtEntityRefreshed) renderEntityOverlayContent(_dtEntityRefreshed);
 if (typeof calculateNetCash === 'function') calculateNetCash();
@@ -2282,6 +2316,30 @@ await unifiedDelete('payment_transactions', filteredTx, tx.id, { strict: true },
 }
 const filteredEntities = paymentEntities.filter(e => String(e.id) !== String(currentEntityId));
 await unifiedDelete('payment_entities', filteredEntities, _entityToDel.id, { strict: true }, _entityToDel);
+try {
+const _delEntPh = (await sqliteStore.get('person_photos')) || {};
+const _delEntPhTs = (await sqliteStore.get('person_photos_timestamps')) || {};
+const _delEntDk = (await sqliteStore.get('person_photos_dirty_keys')) || [];
+let _delEntPhChanged = false;
+const _entityPhotoKeys = [
+'entity:' + String(currentEntityId),
+...txsToDelete.filter(tx => tx.expenseId).map(tx => 'expense:' + tx.expenseId)
+];
+for (const _epk of _entityPhotoKeys) {
+if (_delEntPh[_epk] !== undefined) {
+delete _delEntPh[_epk];
+delete _delEntPhTs[_epk];
+if (!_delEntDk.includes(_epk)) _delEntDk.push(_epk);
+_delEntPhChanged = true;
+}
+}
+if (_delEntPhChanged) {
+await sqliteStore.set('person_photos', _delEntPh);
+await sqliteStore.set('person_photos_timestamps', _delEntPhTs);
+await sqliteStore.set('person_photos_dirty_keys', _delEntDk);
+if (typeof triggerAutoSync === 'function') { try { triggerAutoSync(); } catch(_) {} }
+}
+} catch(_delEntPhErr) { console.warn('[deleteCurrentEntity] photo cleanup failed', _delEntPhErr); }
 notifyDataChange('entities');
 if (typeof calculateNetCash === 'function') calculateNetCash();
 if (typeof calculateCashTracker === 'function') calculateCashTracker();
@@ -2501,7 +2559,6 @@ doc.setFontSize(12); doc.setFont(undefined, 'bold'); doc.setTextColor(50, 50, 50
 doc.text(`Account Statement · ${rangeName}`, pageW / 2, 30, { align: 'center' });
 doc.setFontSize(9); doc.setFont(undefined, 'normal'); doc.setTextColor(80, 80, 80);
 let yPos = 38;
-// Embed entity photo if available
 const _entPdfPhoto = await getPersonPhoto('entity:' + String(entity.id));
 if (_entPdfPhoto) {
   try {
@@ -2943,7 +3000,6 @@ doc.setFontSize(12); doc.setFont(undefined, 'bold'); doc.setTextColor(50, 50, 50
 doc.text(`Customer Account Statement · ${rangeName}`, pageW / 2, 30, { align: 'center' });
 doc.setFontSize(9); doc.setFont(undefined, 'normal'); doc.setTextColor(80, 80, 80);
 let yPos = 38;
-// Embed customer photo if available
 const _custPdfPhoto = await getPersonPhoto('cust:' + customerName.toLowerCase());
 if (_custPdfPhoto) {
   try { doc.addImage(_custPdfPhoto, 'JPEG', pageW - 14 - 22, 25, 22, 22); } catch(e) {}
@@ -3214,10 +3270,6 @@ const SCRIPT_INTEGRITY = {
     'sha256-0ZQJSA5vPBL+6L5uyIjovZ/m7VBpAOUGc7BHOH/RBHE='
 };
 const _scriptLoadPromises = {};
-// ── Person Photo Management ────────────────────────────────────────────────
-// prefix: 'entity' | 'cust' | 'rep-cust'
-// Photos stored in sqliteStore as: person_photo:<type>:<key>
-// key = entity id (for entity) or lowercased customer name
 
 let _photoCaptureTarget = null;
 let _photoCaptureStream = null;
@@ -3249,7 +3301,6 @@ function applyPersonPhoto(prefix, dataUrl) {
   if (ph) ph.style.display = 'none';
   if (img) { img.src = dataUrl; img.style.display = 'block'; }
   if (clearBtn) clearBtn.style.display = '';
-  // Store temporarily on the preview element for later save
   const preview = document.getElementById(ids.preview);
   if (preview) preview.dataset.pendingPhoto = dataUrl;
 }
@@ -3286,17 +3337,14 @@ async function savePersonPhoto(prefix, storageKey) {
   const preview = document.getElementById(ids.preview);
   if (!preview) return;
   const pending = preview.dataset.pendingPhoto;
-  // undefined means no change; empty string means deleted; data URL means new photo
   if (pending === undefined) return;
   try {
     const stored = await sqliteStore.get('person_photos');
     const photos = stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
-    // person_photos_timestamps tracks per-key epoch ms so sync can tell which copy is newer.
     const timestamps = (await sqliteStore.get('person_photos_timestamps')) || {};
     const now = Date.now();
     if (pending) {
-      // Compress photo before storing to keep size reasonable
-      const compressed = await _compressPhoto(pending, 300, 0.75);
+      const compressed = await _compressPhoto(pending, 1600, 0.88);
       photos[storageKey] = compressed;
       timestamps[storageKey] = now; // record local write time for future conflict resolution
     } else {
@@ -3305,7 +3353,6 @@ async function savePersonPhoto(prefix, storageKey) {
     }
     await sqliteStore.set('person_photos', photos);
     await sqliteStore.set('person_photos_timestamps', timestamps);
-    // Mark dirty key for Firestore sync
     const _dirtyKeys = (await sqliteStore.get('person_photos_dirty_keys')) || [];
     if (!_dirtyKeys.includes(storageKey)) _dirtyKeys.push(storageKey);
     await sqliteStore.set('person_photos_dirty_keys', _dirtyKeys);
@@ -3352,7 +3399,14 @@ async function openPhotoCapture(prefix) {
   if (torchBtn) { torchBtn.style.color = 'var(--text-muted)'; torchBtn.style.background = 'none'; }
   window._torchOn = false;
   try {
-    _photoCaptureStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+    _photoCaptureStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: 'environment' },
+        width:  { ideal: 4096 },
+        height: { ideal: 4096 }
+      },
+      audio: false
+    });
     video.srcObject = _photoCaptureStream;
     const track = _photoCaptureStream.getVideoTracks()[0];
     const caps = track && track.getCapabilities ? track.getCapabilities() : {};
@@ -3403,11 +3457,14 @@ function capturePhotoFromCamera() {
   const video = document.getElementById('photo-capture-video');
   const canvas = document.getElementById('photo-capture-canvas');
   if (!video || !canvas || !_photoCaptureTarget) return;
-  const w = video.videoWidth || 320;
-  const h = video.videoHeight || 320;
+  const w = video.videoWidth  || 1920;
+  const h = video.videoHeight || 1080;
   canvas.width = w; canvas.height = h;
-  canvas.getContext('2d').drawImage(video, 0, 0, w, h);
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(video, 0, 0, w, h);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
   const target = _photoCaptureTarget;
   closePhotoCapture();
   if (target === 'expense') {
@@ -3452,21 +3509,199 @@ function renderPersonAvatarHTML(photoDataUrl, size) {
   return `<div class="person-avatar-ring" style="width:${sz}px;height:${sz}px;"><svg width="${Math.round(sz*0.5)}" height="${Math.round(sz*0.5)}" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="18" cy="13" r="6" fill="currentColor"/><path d="M6 30c0-6.627 5.373-10 12-10s12 3.373 12 10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg></div>`;
 }
 
-function openPhotoLightbox(src) {
-  const modal = document.getElementById('photo-lightbox-modal');
-  const img = document.getElementById('photo-lightbox-img');
-  if (!modal || !img) return;
-  img.src = src;
-  modal.style.display = 'flex';
+(function() {
+  let _lbScale = 1, _lbMinScale = 1, _lbMaxScale = 6;
+  let _lbTransX = 0, _lbTransY = 0;
+  let _lbDragging = false, _lbLastX = 0, _lbLastY = 0;
+  let _lbPinchDist = 0, _lbPinchMidX = 0, _lbPinchMidY = 0;
+  let _lbLastTap = 0;
 
-  document.body.style.overflow = 'hidden';
-}
+  function _lbApply(animated) {
+    const img = document.getElementById('photo-lightbox-img');
+    if (!img) return;
+    img.style.transition = animated ? 'transform 0.22s cubic-bezier(0.25,0.46,0.45,0.94)' : 'none';
+    img.style.transform = `translate(${_lbTransX}px, ${_lbTransY}px) scale(${_lbScale})`;
+    img.style.cursor = _lbScale > 1 ? 'grab' : 'default';
+    const lbl = document.getElementById('photo-lb-zoom-label');
+    if (lbl) lbl.textContent = _lbScale.toFixed(1).replace('.0','') + '×';
+  }
 
-function closePhotoLightbox() {
-  const modal = document.getElementById('photo-lightbox-modal');
-  if (modal) modal.style.display = 'none';
-  document.body.style.overflow = '';
-}
+  function _lbClamp() {
+    const img = document.getElementById('photo-lightbox-img');
+    if (!img) return;
+    const iw = img.offsetWidth * _lbScale, ih = img.offsetHeight * _lbScale;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const maxX = Math.max(0, (iw - vw) / 2);
+    const maxY = Math.max(0, (ih - vh) / 2);
+    _lbTransX = Math.max(-maxX, Math.min(maxX, _lbTransX));
+    _lbTransY = Math.max(-maxY, Math.min(maxY, _lbTransY));
+  }
+
+  window._lbZoom = function(dir) {
+    const step = 0.5;
+    _lbScale = Math.max(_lbMinScale, Math.min(_lbMaxScale, _lbScale + dir * step));
+    if (_lbScale === _lbMinScale) { _lbTransX = 0; _lbTransY = 0; }
+    _lbClamp();
+    _lbApply(true);
+  };
+
+  window._lbResetZoom = function() {
+    _lbScale = 1; _lbTransX = 0; _lbTransY = 0;
+    _lbApply(true);
+  };
+
+  window.openPhotoLightbox = function(src) {
+    const modal = document.getElementById('photo-lightbox-modal');
+    const img   = document.getElementById('photo-lightbox-img');
+    if (!modal || !img) return;
+    _lbScale = 1; _lbTransX = 0; _lbTransY = 0;
+    img.src = src;
+    img.style.transform = 'translate(0,0) scale(1)';
+    img.style.transition = 'none';
+    modal.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+    const lbl = document.getElementById('photo-lb-zoom-label');
+    if (lbl) lbl.textContent = '1×';
+    _lbBindEvents(modal, img);
+  };
+
+  window.closePhotoLightbox = function() {
+    const modal = document.getElementById('photo-lightbox-modal');
+    if (modal) {
+      modal.style.display = 'none';
+      _lbUnbindEvents(modal);
+    }
+    document.body.style.overflow = '';
+    _lbScale = 1; _lbTransX = 0; _lbTransY = 0;
+  };
+
+  function _onWheel(e) {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.15 : 0.87;
+    _lbScale = Math.max(_lbMinScale, Math.min(_lbMaxScale, _lbScale * factor));
+    if (_lbScale === _lbMinScale) { _lbTransX = 0; _lbTransY = 0; }
+    _lbClamp();
+    _lbApply(false);
+  }
+
+  function _onMouseDown(e) {
+    if (_lbScale <= 1) return;
+    _lbDragging = true;
+    _lbLastX = e.clientX; _lbLastY = e.clientY;
+    const img = document.getElementById('photo-lightbox-img');
+    if (img) img.style.cursor = 'grabbing';
+  }
+  function _onMouseMove(e) {
+    if (!_lbDragging) return;
+    _lbTransX += e.clientX - _lbLastX;
+    _lbTransY += e.clientY - _lbLastY;
+    _lbLastX = e.clientX; _lbLastY = e.clientY;
+    _lbClamp();
+    _lbApply(false);
+  }
+  function _onMouseUp() {
+    _lbDragging = false;
+    const img = document.getElementById('photo-lightbox-img');
+    if (img) img.style.cursor = _lbScale > 1 ? 'grab' : 'default';
+  }
+
+  function _pinchDist(t) {
+    return Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  }
+  function _pinchMid(t) {
+    return { x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 };
+  }
+
+  function _onTouchStart(e) {
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      _lbPinchDist = _pinchDist(e.touches);
+      const m = _pinchMid(e.touches);
+      _lbPinchMidX = m.x; _lbPinchMidY = m.y;
+    } else if (e.touches.length === 1) {
+      const now = Date.now();
+      if (now - _lbLastTap < 280) {
+        _lbScale === 1 ? (_lbScale = 2.5) : (_lbScale = 1, _lbTransX = 0, _lbTransY = 0);
+        _lbClamp();
+        _lbApply(true);
+        _lbLastTap = 0;
+      } else {
+        _lbLastTap = now;
+        if (_lbScale > 1) {
+          _lbDragging = true;
+          _lbLastX = e.touches[0].clientX;
+          _lbLastY = e.touches[0].clientY;
+        }
+      }
+    }
+  }
+
+  function _onTouchMove(e) {
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      const newDist = _pinchDist(e.touches);
+      const delta = newDist / _lbPinchDist;
+      _lbPinchDist = newDist;
+      _lbScale = Math.max(_lbMinScale, Math.min(_lbMaxScale, _lbScale * delta));
+      if (_lbScale === _lbMinScale) { _lbTransX = 0; _lbTransY = 0; }
+      _lbClamp();
+      _lbApply(false);
+    } else if (e.touches.length === 1 && _lbDragging) {
+      e.preventDefault();
+      _lbTransX += e.touches[0].clientX - _lbLastX;
+      _lbTransY += e.touches[0].clientY - _lbLastY;
+      _lbLastX = e.touches[0].clientX;
+      _lbLastY = e.touches[0].clientY;
+      _lbClamp();
+      _lbApply(false);
+    }
+  }
+
+  function _onTouchEnd(e) {
+    if (e.touches.length < 2) _lbPinchDist = 0;
+    if (e.touches.length === 0) _lbDragging = false;
+  }
+
+  function _onBackdropClick(e) {
+    if (e.target === document.getElementById('photo-lightbox-modal') ||
+        e.target === document.getElementById('photo-lightbox-inner')) {
+      closePhotoLightbox();
+    }
+  }
+
+  function _lbBindEvents(modal, img) {
+    modal.addEventListener('wheel',      _onWheel,      { passive: false });
+    modal.addEventListener('mousedown',  _onMouseDown);
+    modal.addEventListener('mousemove',  _onMouseMove);
+    modal.addEventListener('mouseup',    _onMouseUp);
+    modal.addEventListener('touchstart', _onTouchStart, { passive: false });
+    modal.addEventListener('touchmove',  _onTouchMove,  { passive: false });
+    modal.addEventListener('touchend',   _onTouchEnd);
+    modal.addEventListener('click',      _onBackdropClick);
+    window._lbKeyHandler = (e) => {
+      if (e.key === 'Escape') closePhotoLightbox();
+      if (e.key === '+' || e.key === '=') _lbZoom(1);
+      if (e.key === '-') _lbZoom(-1);
+      if (e.key === '0') _lbResetZoom();
+    };
+    document.addEventListener('keydown', window._lbKeyHandler);
+  }
+
+  function _lbUnbindEvents(modal) {
+    modal.removeEventListener('wheel',      _onWheel);
+    modal.removeEventListener('mousedown',  _onMouseDown);
+    modal.removeEventListener('mousemove',  _onMouseMove);
+    modal.removeEventListener('mouseup',    _onMouseUp);
+    modal.removeEventListener('touchstart', _onTouchStart);
+    modal.removeEventListener('touchmove',  _onTouchMove);
+    modal.removeEventListener('touchend',   _onTouchEnd);
+    modal.removeEventListener('click',      _onBackdropClick);
+    if (window._lbKeyHandler) {
+      document.removeEventListener('keydown', window._lbKeyHandler);
+      window._lbKeyHandler = null;
+    }
+  }
+})();
 
 function previewPhotoClick(prefix) {
   const img = document.getElementById(prefix + '-photo-img');
@@ -4184,6 +4419,23 @@ return;
 await _restorePayableFromDeletedTransaction(transaction, paymentTransactions, factoryInventoryData);
 const _ptFiltered2 = paymentTransactions.filter(t => t.id !== id);
 await unifiedDelete('payment_transactions', _ptFiltered2, id, { strict: true }, transaction);
+if (transaction.expenseId) {
+try {
+const _dpPhKey = 'expense:' + transaction.expenseId;
+const _dpPh = (await sqliteStore.get('person_photos')) || {};
+if (_dpPh[_dpPhKey] !== undefined) {
+delete _dpPh[_dpPhKey];
+await sqliteStore.set('person_photos', _dpPh);
+const _dpPhTs = (await sqliteStore.get('person_photos_timestamps')) || {};
+delete _dpPhTs[_dpPhKey];
+await sqliteStore.set('person_photos_timestamps', _dpPhTs);
+const _dpDk = (await sqliteStore.get('person_photos_dirty_keys')) || [];
+if (!_dpDk.includes(_dpPhKey)) _dpDk.push(_dpPhKey);
+await sqliteStore.set('person_photos_dirty_keys', _dpDk);
+if (typeof triggerAutoSync === 'function') { try { triggerAutoSync(); } catch(_) {} }
+}
+} catch(_dpPhErr) { console.warn('[deletePaymentTransaction] photo cleanup failed', _dpPhErr); }
+}
 notifyDataChange('payments');
 if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
 if (typeof calculateNetCash === 'function') calculateNetCash();
@@ -5641,6 +5893,7 @@ async clearAllTimestamps() {
     await sqliteStore.remove(lsKey);
     await sqliteStore.remove(lmKey);
     await sqliteStore.remove(`uploadedIds_${col}`);
+    await sqliteStore.remove(`downloadedIds_${col}`); // Fix 3: was orphaned on reset
     await sqliteStore.remove(`pendingSync_${col}`);
   }
 },
@@ -5787,10 +6040,25 @@ const UUIDSyncRegistry = (() => {
     return DeltaSync.wasUploaded(col, sid);
   }
 
+  const _downloadPersistTimers = new Map();
+  function _persistDownloadedIds(col) {
+    if (_downloadPersistTimers.has(col)) clearTimeout(_downloadPersistTimers.get(col));
+    _downloadPersistTimers.set(col, setTimeout(async () => {
+      _downloadPersistTimers.delete(col);
+      try {
+        const ids = Array.from(_downloaded.get(col) || []);
+        if (ids.length === 0) return;
+        const trimmed = ids.length > MAX_IDS_PER_COL ? ids.slice(-MAX_IDS_PER_COL) : ids;
+        await sqliteStore.set(`downloadedIds_${col}`, trimmed).catch(() => {});
+      } catch (_) {}
+    }, 800));
+  }
+
   function markDownloaded(col, id) {
     const sid = String(id);
     _set(_downloaded, col).add(sid);
     DeltaSync.markDownloaded(col, sid);
+    _persistDownloadedIds(col); // Fix 2: persist so it survives page reload
   }
 
   function skipDownload(col, id) {
@@ -5828,9 +6096,16 @@ const UUIDSyncRegistry = (() => {
 
   async function loadCollection(col) {
     try {
-      const arr = await sqliteStore.get(`uploadedIds_${col}`, []);
-      if (Array.isArray(arr) && arr.length > 0) {
+      const uploadedArr = await sqliteStore.get(`uploadedIds_${col}`, []);
+      if (Array.isArray(uploadedArr) && uploadedArr.length > 0) {
+        const s = _set(_uploaded, col);
+        uploadedArr.forEach(id => s.add(String(id)));
         DeltaSync.loadUploadedIds(col).catch(() => {});
+      }
+      const downloadedArr = await sqliteStore.get(`downloadedIds_${col}`, []);
+      if (Array.isArray(downloadedArr) && downloadedArr.length > 0) {
+        const s = _set(_downloaded, col);
+        downloadedArr.forEach(id => s.add(String(id)));
       }
     } catch (_) {}
   }
@@ -5844,6 +6119,7 @@ const UUIDSyncRegistry = (() => {
     _downloaded.clear();
     await Promise.all(ALL_COLLECTIONS.flatMap(c => [
       sqliteStore.remove(`uploadedIds_${c}`).catch(() => {}),
+      sqliteStore.remove(`downloadedIds_${c}`).catch(() => {}),
     ]));
   }
 
@@ -7667,14 +7943,9 @@ if (data.person_photos && typeof data.person_photos === 'object' && !Array.isArr
   try {
     const existingPhotos = (await sqliteStore.get('person_photos')) || {};
     const backupPhotos = data.person_photos;
-    // Backup wins over stale local copies — existing fills any gaps the backup doesn't cover.
-    // Previously this was reversed (existingPhotos won), meaning a restore couldn't overwrite
-    // an outdated local photo with the correct backup version.
     const mergedPhotos = Object.assign({}, existingPhotos, backupPhotos);
     await sqliteStore.set('person_photos', mergedPhotos);
 
-    // Restore timestamps: use backup timestamps if provided, otherwise stamp now for every
-    // backup photo key so the pull logic knows these are fresh and won't overwrite them.
     const existingTs = (await sqliteStore.get('person_photos_timestamps')) || {};
     const backupTs   = (data.person_photos_timestamps && typeof data.person_photos_timestamps === 'object')
       ? data.person_photos_timestamps : {};
@@ -7685,8 +7956,6 @@ if (data.person_photos && typeof data.person_photos === 'object' && !Array.isArr
     }
     await sqliteStore.set('person_photos_timestamps', mergedTs);
 
-    // Mark every restored photo key dirty so the sync engine pushes them to Firestore,
-    // ensuring all connected devices on the same account receive the restored photos.
     const restoredKeys = Object.keys(backupPhotos);
     if (restoredKeys.length > 0) {
       const dirtyKeys = (await sqliteStore.get('person_photos_dirty_keys')) || [];
@@ -8018,13 +8287,9 @@ let factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {}
     try {
       const _ycExisting = (await sqliteStore.get('person_photos')) || {};
       const _ycBackup   = data.person_photos;
-      // Backup wins — this is a full year-close reversal so the backup state is authoritative.
-      // Previously existing photos won, meaning the restored backup couldn't overwrite stale locals.
       const _ycMerged = Object.assign({}, _ycExisting, _ycBackup);
       await sqliteStore.set('person_photos', _ycMerged);
 
-      // Restore timestamps from backup if present, otherwise stamp now so conflict resolution
-      // treats all restored photos as the latest version and won't revert them on next pull.
       const _ycExistingTs = (await sqliteStore.get('person_photos_timestamps')) || {};
       const _ycBackupTs   = (data.person_photos_timestamps && typeof data.person_photos_timestamps === 'object')
         ? data.person_photos_timestamps : {};
@@ -8035,8 +8300,6 @@ let factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {}
       }
       await sqliteStore.set('person_photos_timestamps', _ycMergedTs);
 
-      // Mark ALL restored keys dirty so sync pushes them to Firestore — every connected
-      // device on the same account will receive the full restored photo set on next pull.
       const _ycDirty = Object.keys(_ycBackup);
       if (_ycDirty.length > 0) {
         const _ycExistingDirty = (await sqliteStore.get('person_photos_dirty_keys')) || [];
@@ -11600,7 +11863,7 @@ if (window._expensePendingPhoto) {
   try {
     const _photoKey = 'expense:' + expense.id;
     const _storedPh = (await sqliteStore.get('person_photos')) || {};
-    _storedPh[_photoKey] = await _compressPhoto(window._expensePendingPhoto, 400, 0.8);
+    _storedPh[_photoKey] = await _compressPhoto(window._expensePendingPhoto, 1600, 0.88);
     await sqliteStore.set('person_photos', _storedPh);
     const _expPhTs = (await sqliteStore.get('person_photos_timestamps')) || {};
     _expPhTs[_photoKey] = Date.now();
@@ -11637,7 +11900,7 @@ if (window._expensePendingPhoto) {
   try {
     const _payPhotoKey = 'expense:' + payExpenseRecord.id;
     const _payStoredPh = (await sqliteStore.get('person_photos')) || {};
-    _payStoredPh[_payPhotoKey] = await _compressPhoto(window._expensePendingPhoto, 400, 0.8);
+    _payStoredPh[_payPhotoKey] = await _compressPhoto(window._expensePendingPhoto, 1600, 0.88);
     await sqliteStore.set('person_photos', _payStoredPh);
     const _payPhTs = (await sqliteStore.get('person_photos_timestamps')) || {};
     _payPhTs[_payPhotoKey] = Date.now();
@@ -12813,18 +13076,38 @@ const _expFrag = document.createDocumentFragment();
 relatedExpenses.forEach(exp => {
 const item = document.createElement('div');
 item.className = 'cust-history-item';
+const _expPhotoBadgeId = 'ph-badge-exp-' + String(exp.id).replace(/[^a-z0-9]/gi, '');
 item.innerHTML = `
 <div class="cust-history-info">
 <div class="u-mono-bold" >${formatDisplayDate(exp.date)}${exp.isMerged ? _mergedBadgeHtml(exp, {inline:true}) : ''}</div>
 <div class="u-fs-sm2 u-text-muted" >${esc(exp.description || 'No description')}</div>
 </div>
-<div style="text-align:right; margin-right:10px;">
+<div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+<div style="text-align:right; margin-right:4px;">
 <span style="background:rgba(255,184,48,0.15); color:var(--warning); padding:2px 6px; border-radius:4px; font-size:0.65rem; font-weight:700;">EXPENSE</span>
 <div class="cost-val" style="font-size:0.9rem; margin-top:2px;">${fmtAmt(parseFloat(exp.amount) || 0)}</div>
 </div>
+<button id="${_expPhotoBadgeId}" title="View photo" onclick="(async()=>{const ph=(await sqliteStore.get('person_photos'))||{};const d=ph['expense:${esc(exp.id)}'];if(d)openPhotoLightbox(d);else showToast('No photo','warning',1500);})()"
+  style="display:none;align-items:center;gap:3px;padding:3px 7px;border:none;border-radius:6px;cursor:pointer;font-size:0.62rem;font-weight:700;background:rgba(99,102,241,0.15);color:#818cf8;white-space:nowrap;">
+  <svg width="11" height="11" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;">
+    <rect x="3" y="7" width="30" height="22" rx="3" stroke="currentColor" stroke-width="1.8" fill="none"/>
+    <circle cx="18" cy="18" r="6" stroke="currentColor" stroke-width="1.6" fill="none"/>
+    <circle cx="18" cy="18" r="2.5" fill="currentColor"/>
+    <rect x="22" y="4" width="8" height="5" rx="1.5" stroke="currentColor" stroke-width="1.4" fill="none"/>
+  </svg>
+  Photo
+</button>
 ${exp.isMerged ? '' : `<button class="btn btn-sm btn-danger u-p-4-8" onclick="deleteExpenseFromOverlay('${esc(exp.id)}')">⌫</button>`}
+</div>
 `;
 _expFrag.appendChild(item);
+const _expPhKey = 'expense:' + exp.id;
+sqliteStore.get('person_photos').then(ph => {
+  if (ph && ph[_expPhKey]) {
+    const badge = document.getElementById(_expPhotoBadgeId);
+    if (badge) badge.style.display = 'inline-flex';
+  }
+}).catch(() => {});
 });
 list.replaceChildren(_expFrag);
 }
@@ -12924,7 +13207,6 @@ if (_daeTxCount > 0) _daeMsg += `\n\n↩ ${_daeTxCount} linked payment transacti
 _daeMsg += `\n\nThis cannot be undone.`;
 if (!(await showGlassConfirm(_daeMsg, { title: `Delete All "${expenseName}" Records`, confirmText: "Delete All", danger: true }))) return;
 try {
-// Collect photos to delete across all expenses in one batch for efficiency
 const _bulkPhotoKeysToDelete = [];
 for (const exp of toDelete) {
 const _expFiltered = expenseRecords.filter(e => e.id !== exp.id);
@@ -12941,7 +13223,6 @@ paymentTransactions.length = 0; paymentTransactions.push(..._ptFilteredExp);
 }
 _bulkPhotoKeysToDelete.push('expense:' + exp.id);
 }
-// Delete all collected photo keys in a single read-modify-write cycle
 try {
   const _bulkPh = (await sqliteStore.get('person_photos')) || {};
   const _bulkPhTs = (await sqliteStore.get('person_photos_timestamps')) || {};
@@ -13260,8 +13541,6 @@ await unifiedDelete('payment_transactions', paymentTransactions, trans.id, { str
 const _expRecFiltered = expenseRecords.filter(e => e.id !== expenseId);
 await unifiedDelete('expenses', _expRecFiltered, expenseId, { strict: true }, expense);
 
-// Delete the photo attached to this expense/payment (if any) from local store
-// and push a tombstone to Firestore so all connected devices remove it too.
 try {
   const _delPhotoKey = 'expense:' + expenseId;
   const _delPhotos = (await sqliteStore.get('person_photos')) || {};
@@ -13271,8 +13550,6 @@ try {
     const _delPhTs = (await sqliteStore.get('person_photos_timestamps')) || {};
     delete _delPhTs[_delPhotoKey];
     await sqliteStore.set('person_photos_timestamps', _delPhTs);
-    // Mark dirty so the sync engine pushes a deleted:true tombstone to Firestore,
-    // which causes all other devices to remove this photo on their next pull.
     const _delDk = (await sqliteStore.get('person_photos_dirty_keys')) || [];
     if (!_delDk.includes(_delPhotoKey)) _delDk.push(_delPhotoKey);
     await sqliteStore.set('person_photos_dirty_keys', _delDk);
@@ -13510,33 +13787,23 @@ const salesHistory = ensureArray(await sqliteStore.get('noman_history'));
     if (typeof invalidateAllCaches === 'function') {
       await invalidateAllCaches();
     }
-    // Fix 5: Restore the expense/payment photo under the new record ID.
-    // On delete, the photo was stored as 'expense:<oldId>'. Recovery assigns a new UUID,
-    // so we must migrate the photo to 'expense:<newId>' and push it to Firestore.
-    // Source priority: (1) _photoDataUrl embedded in the deletion snapshot,
-    //                  (2) local person_photos store (photo may still be there).
     if (collectionName === 'expenses' || collectionName === 'transactions') {
       try {
         const _recOldPhKey = 'expense:' + oldId;
         const _recNewPhKey = 'expense:' + newId;
         const _recPh = (await sqliteStore.get('person_photos')) || {};
         const _recPhTs = (await sqliteStore.get('person_photos_timestamps')) || {};
-        // Try snapshot-embedded photo first, fall back to whatever is still in local store
         const _tombstone = (Array.isArray(localDeletionRecords) ? localDeletionRecords : deletionRecords).find(r => r.id === deletedId || r.recordId === deletedId);
         const _recPhotoData = (_tombstone && _tombstone._photoDataUrl)
           ? _tombstone._photoDataUrl
           : (_recPh[_recOldPhKey] || null);
         if (_recPhotoData) {
-          // Write photo under new key
           _recPh[_recNewPhKey] = _recPhotoData;
           _recPhTs[_recNewPhKey] = Date.now();
-          // Remove old key (it belongs to the deleted record)
           delete _recPh[_recOldPhKey];
           delete _recPhTs[_recOldPhKey];
           await sqliteStore.set('person_photos', _recPh);
           await sqliteStore.set('person_photos_timestamps', _recPhTs);
-          // Mark new key dirty so sync pushes it to Firestore; mark old key dirty
-          // so sync pushes a tombstone removing it from Firestore and other devices.
           const _recDk = (await sqliteStore.get('person_photos_dirty_keys')) || [];
           if (!_recDk.includes(_recNewPhKey)) _recDk.push(_recNewPhKey);
           if (!_recDk.includes(_recOldPhKey)) _recDk.push(_recOldPhKey);
@@ -13984,8 +14251,6 @@ async function hardDeleteRecord(id, collectionName) {
           const batch = firebaseDB.batch();
           batch.delete(userRef.collection('deletions').doc(sid));
           batch.delete(userRef.collection(collectionName).doc(sid));
-          // Also hard-delete the photo document from Firestore personPhotos
-          // so all connected devices stop seeing it.
           if (collectionName === 'expenses' || collectionName === 'transactions') {
             const _hdPhotoKey = 'expense:' + sid;
             const _hdSafeDocId = btoa(unescape(encodeURIComponent(_hdPhotoKey))).replace(/[+/=]/g, c => ({'+':'-','/':'_','=':''})[c] || '');
@@ -14006,8 +14271,17 @@ async function hardDeleteRecord(id, collectionName) {
           }
         }
       })();
+    } else if (typeof OfflineQueue !== 'undefined') {
+      try {
+        await OfflineQueue.add({ action: 'delete', collection: 'deletions',    docId: sid, data: null });
+        await OfflineQueue.add({ action: 'delete', collection: collectionName, docId: sid, data: null });
+        if (collectionName === 'expenses' || collectionName === 'transactions') {
+          const _hdOffPhKey = 'expense:' + sid;
+          const _hdOffSafeDocId = btoa(unescape(encodeURIComponent(_hdOffPhKey))).replace(/[+/=]/g, c => ({'+':'-','/':'_','=':''})[c] || '');
+          await OfflineQueue.add({ action: 'delete', collection: 'personPhotos', docId: _hdOffSafeDocId, data: null });
+        }
+      } catch(_hdOffErr) { console.warn('[hardDeleteRecord] offline queue failed', _hdOffErr); }
     }
-    // Hard-delete photo from local store (no dirty key needed — Firestore doc deleted above)
     if (collectionName === 'expenses' || collectionName === 'transactions') {
       try {
         const _hdLocalPhKey = 'expense:' + sid;
@@ -14018,7 +14292,6 @@ async function hardDeleteRecord(id, collectionName) {
           const _hdLocalTs = (await sqliteStore.get('person_photos_timestamps')) || {};
           delete _hdLocalTs[_hdLocalPhKey];
           await sqliteStore.set('person_photos_timestamps', _hdLocalTs);
-          // Remove from dirty keys too — no need to sync a tombstone since we deleted the doc directly
           const _hdDk = (await sqliteStore.get('person_photos_dirty_keys')) || [];
           const _hdDkFiltered = _hdDk.filter(k => k !== _hdLocalPhKey);
           if (_hdDkFiltered.length !== _hdDk.length) await sqliteStore.set('person_photos_dirty_keys', _hdDkFiltered);
@@ -14104,8 +14377,6 @@ stockReturns: stockReturns,
 settings: await sqliteStore.get('naswar_default_settings', defaultSettings),
 deleted_records: Array.from(deletedRecordIds),
 person_photos: (await sqliteStore.get('person_photos')) || {},
-// Include timestamps so restore can correctly mark photos as authoritative versions
-// and the sync engine won't overwrite them with older copies from Firestore.
 person_photos_timestamps: (await sqliteStore.get('person_photos_timestamps')) || {},
 _meta: { encryptedFor: currentUser.email, encryptedUid: currentUser.uid, createdAt: Date.now(), version: 4 },
 backupMetadata: {
