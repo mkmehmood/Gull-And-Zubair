@@ -385,7 +385,7 @@ const _OPFSStore = (() => {
         const root = await navigator.storage.getDirectory();
         const fh   = await root.getFileHandle(filename);
         return JSON.parse(await (await fh.getFile()).text());
-      } catch { /* fall through to localStorage */ }
+      } catch {  }
     }
     try { const r = localStorage.getItem(lsKey); return r ? JSON.parse(r) : {}; } catch { return {}; }
   }
@@ -1638,7 +1638,7 @@ const sqliteStore = (() => {
               );
               updated++;
             }
-          } catch { /* skip individual row failures */ }
+          } catch {  }
         }
         if (updated > 0) {
           _schedulePersist(PERSIST_NORMAL_MS);
@@ -1941,11 +1941,7 @@ try { return sessionStorage.getItem(key) || null; } catch (e) { return null; }
 function _writeSession(key, value) {
 try { sessionStorage.setItem(key, value); } catch (e) {  }
 }
-/**
- * Extracts the first-login timestamp embedded in a composite device ID.
- * Composite format: "<prefix>-<uuid>_<epochMs>"  e.g. "dev-abc123..._1711234567890"
- * Returns a Date if the suffix is present, otherwise null.
- */
+
 function _extractDeviceFirstLoginTime(deviceId) {
   if (!deviceId || typeof deviceId !== 'string') return null;
   const match = deviceId.match(/_(\d{13})$/);
@@ -1964,12 +1960,6 @@ try { await sqliteStore.set('device_id', deviceId); } catch (e) {  }
 await _writeCacheAnchor(deviceId);
 }
 
-/**
- * Wipes every storage location that holds the device ID and install token so
- * a brand-new composite ID (uuid + first-login timestamp) is generated on the
- * next login. Does NOT touch appMode, repProfile, or any other device-global
- * key — those are intentionally preserved across logouts.
- */
 async function _clearDeviceIdStorage() {
   try {
     document.cookie = `${DEVICE_ID_COOKIE}=; max-age=0; path=/; SameSite=Strict`;
@@ -2424,7 +2414,7 @@ listenForTeamChanges();
 console.error('Device command listener failed.', _safeErr(error));
 showToast('Device command listener failed.', 'error');
 }
-// Fix: cleanupOldDeletions is a Firestore network call — must not block app boot
+
 setTimeout(() => {
   cleanupOldDeletions().catch(e => console.warn('[initializeDeviceListeners] cleanup failed:', _safeErr(e)));
 }, 5000);
@@ -2712,9 +2702,9 @@ return true;
 function _mergedBadgeHtml(record, opts = {}) {
 if (!record || !record.isMerged) return '';
 if (opts.inline) {
-  return ` <span style="background:rgba(175, 82, 222, 0.15); color:#af52de; padding:2px 6px; border-radius:4px; font-size:0.65rem; margin-left:6px; font-weight:600;">MERGED</span>`;
+  return ` <span class="merged-badge merged-badge--inline">MERGED</span>`;
 }
-return `<span style="font-size:0.6rem; background:rgba(175, 82, 222, 0.15); color:#af52de; padding:1px 5px; border-radius:3px; border:1px solid rgba(175, 82, 222, 0.3); display:inline-block; margin-top:3px;">MERGED</span>`;
+return `<span class="merged-badge">MERGED</span>`;
 }
 
 function _creatorBadgeHtml(record) {
@@ -3641,7 +3631,7 @@ _cyBody.innerHTML = `
   box-shadow: 0 1px 0 rgba(255,255,255,0.20) inset, 0 7px 22px rgba(105,240,174,0.32);
 }
 #cy-continue-btn:active { transform: translateY(0); }
-/*  Standalone-screen flatten overrides  */
+
 #cy-panel {
   background: transparent !important;
   border: none !important;
@@ -3821,9 +3811,7 @@ if (percent >= 100) {
 }
 if (phaseBadge) {
   phaseBadge.textContent = 'PROCESSING';
-  phaseBadge.style.background = 'rgba(255,179,0,0.15)';
-  phaseBadge.style.color = 'var(--warning)';
-  phaseBadge.style.borderColor = 'rgba(255,179,0,0.3)';
+  phaseBadge.className = 'cy-phase-badge cy-phase-badge--processing';
 }
 const procSubtitle = document.getElementById('cy-panel-subtitle');
 if (procSubtitle && procSubtitle.textContent.includes('will be compacted')) {
@@ -4392,9 +4380,7 @@ try {
 } catch (metaErr) { console.warn('Could not save FY close metadata:', _safeErr(metaErr)); }
 if (phaseBadge) {
   phaseBadge.textContent = 'DONE';
-  phaseBadge.style.background = 'rgba(52,217,116,0.15)';
-  phaseBadge.style.color = 'var(--accent-emerald)';
-  phaseBadge.style.borderColor = 'rgba(52,217,116,0.3)';
+  phaseBadge.className = 'cy-phase-badge cy-phase-badge--done';
 }
 const panelSubtitle = document.getElementById('cy-panel-subtitle');
 if (panelSubtitle) {
@@ -11639,12 +11625,8 @@ balanceHtml = `<span class="u-text-accent u-fw-800" >Balance Settled</span>`;
 statsEl.innerHTML = `
 ${balanceHtml}
 <span style="display:inline-flex; gap:8px; margin-left:12px; flex-wrap:wrap;">
-<span style="background:rgba(52,217,116,0.15); color:var(--accent-emerald); padding:2px 8px; border-radius:10px; font-size:0.7rem; font-weight:700;">
-IN: ${fmtAmt(totalIn)}
-</span>
-<span style="background:rgba(255,77,109,0.15); color:var(--danger); padding:2px 8px; border-radius:10px; font-size:0.7rem; font-weight:700;">
-OUT: ${fmtAmt(totalOut)}
-</span>
+<span class="txn-stat-badge txn-in">IN: ${fmtAmt(totalIn)}</span>
+<span class="txn-stat-badge txn-out">OUT: ${fmtAmt(totalOut)}</span>
 </span>`;
 const list = document.getElementById('entityManagementHistoryList');
 if (!list) {
@@ -16196,7 +16178,7 @@ ${returnBadge}
 ${item.isMerged ? '' : paymentBadge}
 <div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-bottom:4px;">
 <h4 style="margin:0;">${dateDisplay} @ ${esc(item.time || '')}${mergedBadge}</h4>
-${item.managedBy ? `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 9px;font-size:0.65rem;font-weight:700;letter-spacing:0.04em;color:var(--warning);background:rgba(255,179,0,0.10);border:1px solid rgba(255,179,0,0.28);border-radius:999px;">${esc(item.managedBy)}</span>` : ''}
+${item.managedBy ? `<span class="managed-by-badge">${esc(item.managedBy)}</span>` : ''}
 ${item.createdBy && typeof _creatorBadgeHtml === 'function' ? _creatorBadgeHtml(item) : ''}
 </div>
 ${item.isReturn ? `<p style="color:var(--accent-emerald); font-size:0.75rem; font-style:italic;">${item.isMerged ? 'Merged returns by' : 'Returned by'} ${esc(item.returnedBy || 'Representative')}</p>` : ''}
@@ -18727,7 +18709,7 @@ const supplyTagText = item.supplyStore === 'STORE_A' ? 'ZUBAIR' :
 item.supplyStore === 'STORE_B' ? 'MAHMOOD' : 'ASAAN';
 let repBadge = '';
 if (item.salesRep && item.salesRep !== 'NONE' && item.salesRep !== 'ADMIN') {
-repBadge = `<span style="font-size:0.65rem; background:#e0e7ff; color:#3730a3; padding:2px 6px; border-radius:4px; margin-left:5px;"> ${esc(item.salesRep.split(' ')[0])}</span>`;
+repBadge = `<span class="sales-rep-badge"> ${esc(item.salesRep.split(' ')[0])}</span>`;
 }
 let mergedBadge = '';
 if (item.isMerged) {
@@ -18754,7 +18736,7 @@ if (isOldDebtItem) {
 card.innerHTML = `
 <div class="payment-badge credit">CREDIT</div>
 <div class="customer-name" style="margin-top: 12px;">${esc(item.customerName)}
-<span style="background:rgba(255,159,10,0.15);color:var(--warning);padding:2px 6px;border-radius:4px;font-size:0.65rem;margin-left:6px;font-weight:600;">OLD DEBT</span>${item.isMerged ? _mergedBadgeHtml(item, {inline:true}) : ''}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(item) : ''}
+<span class="old-debt-badge">OLD DEBT</span>${item.isMerged ? _mergedBadgeHtml(item, {inline:true}) : ''}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(item) : ''}
 </div>
 <h4 style="margin-top: 5px; font-size: 0.85rem; color: var(--text-muted);">${dateDisplay}</h4>
 <hr>
@@ -21870,12 +21852,8 @@ if (statsEl) {
 statsEl.innerHTML = `
 <span style="color:var(--warning); font-weight:800;">Total: ${fmtAmt(filteredTotal)}</span>
 <span style="display:inline-flex; gap:8px; margin-left:12px; flex-wrap:wrap;">
-<span style="background:rgba(255,184,48,0.15); color:var(--warning); padding:2px 8px; border-radius:10px; font-size:0.7rem; font-weight:700;">
-${count} record${count !== 1 ? 's' : ''}
-</span>
-<span style="background:rgba(255,77,109,0.15); color:var(--danger); padding:2px 8px; border-radius:10px; font-size:0.7rem; font-weight:700;">
-All-Time: ${fmtAmt(allTimeTotal)}
-</span>
+<span class="txn-stat-badge txn-warning">${count} record${count !== 1 ? 's' : ''}</span>
+<span class="txn-stat-badge txn-out">All-Time: ${fmtAmt(allTimeTotal)}</span>
 </span>`;
 }
 const list = document.getElementById('expenseManagementHistoryList');
@@ -21894,7 +21872,7 @@ item.innerHTML = `
 <div class="u-fs-sm2 u-text-muted" >${esc(exp.description || 'No description')}</div>
 </div>
 <div style="text-align:right; margin-right:10px;">
-<span style="background:rgba(255,184,48,0.15); color:var(--warning); padding:2px 6px; border-radius:4px; font-size:0.65rem; font-weight:700;">EXPENSE</span>
+<span class="txn-label-badge txn-warning">EXPENSE</span>
 <div class="cost-val" style="font-size:0.9rem; margin-top:2px;">${fmtAmt(parseFloat(exp.amount) || 0)}</div>
 </div>
 ${exp.isMerged ? '' : `<button class="btn btn-sm btn-danger u-p-4-8" onclick="deleteExpenseFromOverlay('${esc(exp.id)}')">⌫</button>`}
@@ -22836,13 +22814,13 @@ async function renderRecycleBin(filterCollection = 'all') {
       const _rbManagedBy = _snap.managedBy || rec.managedBy || null;
       const _rbSalesRep  = _snap.salesRep  || rec.salesRep  || null;
       const _rbCreatorBadge = _rbCreatedBy
-        ? `<span style="display:inline-flex;align-items:center;padding:2px 7px;font-size:0.62rem;font-weight:700;letter-spacing:0.04em;color:#06b6d4;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.30);border-radius:999px;white-space:nowrap;">${esc(_rbCreatedBy)}</span>`
+        ? `<span class="creator-badge">${esc(_rbCreatedBy)}</span>`
         : '';
       const _rbManagedBadge = _rbManagedBy
-        ? `<span style="display:inline-flex;align-items:center;padding:2px 7px;font-size:0.62rem;font-weight:700;letter-spacing:0.04em;color:var(--warning);background:rgba(255,179,0,0.10);border:1px solid rgba(255,179,0,0.28);border-radius:999px;white-space:nowrap;">${esc(_rbManagedBy)}</span>`
+        ? `<span class="managed-by-badge">${esc(_rbManagedBy)}</span>`
         : '';
       const _rbRepBadge = (_rbSalesRep && !_rbCreatedBy)
-        ? `<span style="display:inline-flex;align-items:center;padding:2px 7px;font-size:0.62rem;font-weight:700;letter-spacing:0.04em;color:var(--accent);background:rgba(37,99,235,0.10);border:1px solid rgba(37,99,235,0.25);border-radius:999px;white-space:nowrap;">${esc(_rbSalesRep.split(' ')[0])}</span>`
+        ? `<span class="sales-rep-badge">${esc(_rbSalesRep.split(' ')[0])}</span>`
         : '';
       const _rbBadgesHtml = [_rbManagedBadge, _rbCreatorBadge, _rbRepBadge].filter(Boolean).join('');
 
@@ -22861,14 +22839,14 @@ async function renderRecycleBin(filterCollection = 'all') {
         ? `<span style="font-size:0.78rem;font-weight:700;color:var(--accent);">${esc(displayAmount)}</span>`
         : '';
       const syncBadge = rec.syncedToCloud
-        ? `<span style="font-size:0.62rem;background:rgba(16,185,129,0.15);color:#10b981;padding:2px 6px;border-radius:999px;white-space:nowrap;"> synced</span>`
-        : `<span style="font-size:0.62rem;background:rgba(239,68,68,0.12);color:#ef4444;padding:2px 6px;border-radius:999px;white-space:nowrap;"> local</span>`;
+        ? `<span class="sync-status-badge sync-ok"> synced</span>`
+        : `<span class="sync-status-badge sync-local"> local</span>`;
       const colDot = {
         'sales':'#10b981','transactions':'#3b82f6','rep_sales':'#8b5cf6',
         'expenses':'#f59e0b','production':'#ec4899','factory_history':'#14b8a6',
         'returns':'#f97316','unknown':'#9ca3af'
       }[col] || '#9ca3af';
-      const typeTag = `<span style="font-size:0.62rem;background:rgba(255,255,255,0.06);color:var(--text-muted);padding:2px 7px;border-radius:999px;border:1px solid var(--glass-border);white-space:nowrap;">${esc(typeLabel)}</span>`;
+      const typeTag = `<span class="type-tag-badge">${esc(typeLabel)}</span>`;
       return `<div style="background:var(--input-bg);border:1px solid var(--glass-border);border-radius:12px;padding:12px 14px;margin-bottom:9px;display:flex;align-items:center;gap:11px;">
         <div style="width:9px;height:9px;min-width:9px;border-radius:50%;background:${colDot};flex-shrink:0;"></div>
         <div style="flex:1;min-width:0;overflow:hidden;">
@@ -26164,11 +26142,11 @@ statusClass = 'partial';
 }
 toggleBtnHtml = `<button class="status-toggle-btn ${statusClass}" onclick="toggleSingleTransactionStatus('${t.id}')">${btnText}</button>`;
 } else if (isPartialPayment) {
-toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(255, 159, 10, 0.1); color:var(--warning);">PARTIAL PAYMENT</span>`;
+toggleBtnHtml = `<span class="status-toggle-btn txn-warning">PARTIAL PAYMENT</span>`;
 } else if (isCollection) {
-toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(48, 209, 88, 0.1); color:var(--accent-emerald);">COLLECTION</span>`;
+toggleBtnHtml = `<span class="status-toggle-btn txn-collect">COLLECTION</span>`;
 } else {
-toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(37, 99, 235, 0.1); color:var(--accent);">CASH SALE</span>`;
+toggleBtnHtml = `<span class="status-toggle-btn txn-cash">CASH SALE</span>`;
 }
 const deleteBtnHtml = t.isMerged ? '' : `<button class="btn btn-sm btn-danger u-p-4-8" onclick="deleteTransactionFromOverlay('${esc(t.id)}')">⌫</button>`;
 let itemContent = '';
@@ -26193,7 +26171,7 @@ itemContent = `
 <div class="cust-history-info">
 <div class="u-mono-bold" >
 ${formatDisplayDate(t.date)}
-<span style="background:rgba(255, 159, 10, 0.15); color:var(--warning); padding:2px 6px; border-radius:4px; font-size:0.65rem; margin-left:6px; font-weight:600;">OLD DEBT</span>${_mergedBadgeHtml(t, {inline:true})}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(t) : ''}
+<span class="old-debt-badge">OLD DEBT</span>${_mergedBadgeHtml(t, {inline:true})}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(t) : ''}
 </div>
 <div style="font-size:0.75rem; color:var(--warning);">
 Previous Balance: ${await formatCurrency(t.totalValue)}
@@ -26710,7 +26688,7 @@ _toastQueue.push({ message, type, duration });
 _playNextToast();
 }
 window.showToast = showToast;
-/* SVG icon library — sidebar-style (24×24, stroke, no fill) */
+
 const _gcIcons = {
   delete:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>',
   remove:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
