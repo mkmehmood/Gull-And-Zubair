@@ -2681,9 +2681,10 @@ Save Transaction
 </div>
 </div>
 </div>
-<div id="payments-unified-section" style="margin-top: 20px; padding-top: 15px; border-top: 2px solid var(--glass-border);">
-<div style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px; flex-wrap: nowrap;">
-<h4 style="margin: 0; font-size: 1rem; color: var(--text-main); font-weight: 700; white-space: nowrap; flex-shrink: 0;">Unified Records</h4>
+<div id="payments-unified-section" style="margin-top: 20px;">
+<div class="section liquid-card">
+<div class="section-header" style="flex-wrap: nowrap; gap: 10px; align-items: center; margin-bottom: 15px;">
+<h3 class="u-heading-main" style="white-space: nowrap; flex-shrink: 0;">Unified Records</h3>
 <input type="text" id="unified-search" class="search-bar u-flex-1 u-min-w-0 u-fs-sm2 u-m-0" placeholder="Search..."
 oninput="renderUnifiedTable()">
 <button class="btn-theme" onclick="exportUnifiedData()" title="Download PDF"
@@ -2724,7 +2725,6 @@ No records found
 <span id="unified-table-footer-label">Total:</span>
 </td>
 <td id="unified-table-total" style="padding: 10px 2px; font-weight: 700; text-align: right; font-size: 0.85rem;">0.00</td>
-<td></td>
 </tr>
 </tfoot>
 </table>
@@ -2748,6 +2748,7 @@ No records found
 <span id="unified-entity-payables" style="color:var(--accent-purple); font-weight:700;">0.00</span>
 </div>
 <span class="u-hidden" id="unified-payables" >0.00</span>
+</div>
 </div>
 </div>
 </div>
