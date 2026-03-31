@@ -177,10 +177,10 @@ try {
     if (typeof v === 'number') return `<span style="color:var(--accent-gold)">${v > 1e10 ? ago(v) : v.toLocaleString()}</span>`;
     return `<span style="color:var(--text)">${String(v).slice(0,30)}</span>`;
   };
-  const badge = (txt, color, bg) =>
-    `<span style="font-size:0.6rem;font-weight:700;padding:2px 7px;border-radius:20px;background:${bg};color:${color};letter-spacing:0.03em">${txt}</span>`;
+  const badge = (txt, color) =>
+    `<span style="font-size:0.6rem;font-weight:700;padding:2px 7px;color:${color};letter-spacing:0.03em">${txt}</span>`;
   const pill = (txt, color) =>
-    `<span style="font-size:0.62rem;padding:2px 6px;border-radius:10px;background:rgba(128,128,128,0.12);color:${color};font-family:'Geist Mono','Courier New',monospace">${txt}</span>`;
+    `<span style="font-size:0.62rem;padding:2px 6px;color:${color};font-family:'Geist Mono','Courier New',monospace">${txt}</span>`;
 
   let totalFsDocs = 0;
   COLLECTIONS.forEach(c => { totalFsDocs += c.snap.size || 0; });
@@ -850,7 +850,7 @@ _cyBody.innerHTML = `
   box-shadow: 0 1px 0 rgba(255,255,255,0.20) inset, 0 7px 22px rgba(105,240,174,0.32);
 }
 #cy-continue-btn:active { transform: translateY(0); }
- 
+
 #cy-panel {
   background: transparent !important;
   border: none !important;
@@ -1030,9 +1030,7 @@ if (percent >= 100) {
 }
 if (phaseBadge) {
   phaseBadge.textContent = 'PROCESSING';
-  phaseBadge.style.background = 'rgba(255,179,0,0.15)';
-  phaseBadge.style.color = 'var(--warning)';
-  phaseBadge.style.borderColor = 'rgba(255,179,0,0.3)';
+  phaseBadge.className = 'cy-phase-badge cy-phase-badge--processing';
 }
 const procSubtitle = document.getElementById('cy-panel-subtitle');
 if (procSubtitle && procSubtitle.textContent.includes('will be compacted')) {
@@ -1684,9 +1682,7 @@ try {
 } catch (metaErr) { console.warn('Could not save FY close metadata:', _safeErr(metaErr)); }
 if (phaseBadge) {
   phaseBadge.textContent = 'DONE';
-  phaseBadge.style.background = 'rgba(52,217,116,0.15)';
-  phaseBadge.style.color = 'var(--accent-emerald)';
-  phaseBadge.style.borderColor = 'rgba(52,217,116,0.3)';
+  phaseBadge.className = 'cy-phase-badge cy-phase-badge--done';
 }
 const panelSubtitle = document.getElementById('cy-panel-subtitle');
 if (panelSubtitle) {

@@ -1193,7 +1193,7 @@ const _sid = String(change.doc.id);
 if (change.type === 'added' && _existingIdSet.has(_sid)) {
   if (typeof UUIDSyncRegistry !== 'undefined') UUIDSyncRegistry.markDownloaded(col.firestoreId, _sid);
   else DeltaSync.markDownloaded(col.firestoreId, _sid);
-  continue; // already in SQLite — no need to redownload
+  continue; 
 }
 if (typeof UUIDSyncRegistry !== 'undefined') {
 UUIDSyncRegistry.markDownloaded(col.firestoreId, change.doc.id);
@@ -1912,6 +1912,42 @@ async function subscribeToRealtime() {
     });
     realtimeRefs.push(expenseCategoriesUnsub);
 
+    const _handleAppStoresSnapshot = async (doc) => {
+      try {
+        if (!doc.exists || doc.metadata.hasPendingWrites) return;
+        if (doc.metadata.fromCache) return;
+        trackFirestoreRead(1);
+        const cloud = doc.data();
+        if (!cloud || !Array.isArray(cloud.stores)) return;
+        const cloudTs = cloud.stores_timestamp || 0;
+        const localTs = (await sqliteStore.get('app_stores_timestamp')) || 0;
+        if (cloudTs && localTs && cloudTs <= localTs) { recordSuccessfulConnection(); return; }
+        const local = await sqliteStore.get('app_stores') || [];
+        const cloudSorted = [...cloud.stores].sort((a, b) => (a.key || '').localeCompare(b.key || ''));
+        const localSorted = [...local].sort((a, b) => (a.key || '').localeCompare(b.key || ''));
+        if (JSON.stringify(cloudSorted) !== JSON.stringify(localSorted)) {
+          await sqliteStore.set('app_stores', cloud.stores);
+          if (cloudTs) await sqliteStore.set('app_stores_timestamp', cloudTs);
+          if (typeof _invalidateStoresCache === 'function') _invalidateStoresCache();
+          emitSyncUpdate({ appStores: null });
+          flashLivePulse();
+        }
+        recordSuccessfulConnection();
+      } catch (error) {
+        console.warn('[sync] local save error in appStores snapshot handler:', _safeErr(error));
+      }
+    };
+    const appStoresUnsub = userRef.collection('appStores').doc('stores').onSnapshot(async (doc) => {
+      if (isSyncing) { _enqueueSyncLocked(_handleAppStoresSnapshot, doc); return; }
+      await _handleAppStoresSnapshot(doc);
+    }, _e => {
+      const _ec = _e && _e.code;
+      console.warn('[sync] appStores listener error:', _ec, _safeErr(_e));
+      if (_ec === 'permission-denied' || _ec === 'failed-precondition') { updateSignalUI('offline'); }
+      else { updateSignalUI('error'); scheduleListenerReconnect(); }
+    });
+    realtimeRefs.push(appStoresUnsub);
+
     function _dedupDeletionRecords(arr) {
       if (!Array.isArray(arr)) return [];
       const seen = new Map();
@@ -2558,7 +2594,7 @@ async function _downloadDeltas(userRef, userType, forceDownload = false) {
   };
 
   const [
-    settingsSnap, factorySettingsSnap, expenseCategoriesSnap,
+    settingsSnap, factorySettingsSnap, expenseCategoriesSnap, appStoresSnap,
     productionSnap, salesSnap, calcHistorySnap,
     repSalesSnap, repCustomersSnap, salesCustomersSnap,
     transactionsSnap, entitiesSnap,
@@ -2568,6 +2604,7 @@ async function _downloadDeltas(userRef, userType, forceDownload = false) {
     userRef.collection('settings').doc('config').get(),
     userRef.collection('factorySettings').doc('config').get(),
     userRef.collection('expenseCategories').doc('categories').get(),
+    userRef.collection('appStores').doc('stores').get(),
     buildQuery(userRef.collection('production'), 'production'),
     buildQuery(userRef.collection('sales'), 'sales'),
     buildQuery(userRef.collection('calculator_history'), 'calculator_history'),
@@ -2581,7 +2618,7 @@ async function _downloadDeltas(userRef, userType, forceDownload = false) {
     buildQuery(userRef.collection('expenses'), 'expenses'),
     buildQuery(userRef.collection('returns'), 'returns'),
   ]);
-  trackFirestoreRead(3);
+  trackFirestoreRead(4);
   let realCollectionReads = 0;
   [productionSnap, salesSnap, calcHistorySnap, repSalesSnap, repCustomersSnap,
    salesCustomersSnap, transactionsSnap, entitiesSnap, inventorySnap,
@@ -2607,6 +2644,7 @@ async function _downloadDeltas(userRef, userType, forceDownload = false) {
     settings: settingsSnap,
     factorySettings: factorySettingsSnap,
     expenseCategories: expenseCategoriesSnap,
+    appStores: appStoresSnap,
     personPhotosSnap,
     data: {
       mfg_pro_pkr:              extract(productionSnap),
@@ -2804,7 +2842,7 @@ async function _mergeAndPersist(cloudData) {
 }
 
 async function _syncSettings(cloudData) {
-  const { settings: settingsSnap, factorySettings: factorySettingsSnap, expenseCategories: expCatSnap, personPhotosSnap } = cloudData;
+  const { settings: settingsSnap, factorySettings: factorySettingsSnap, expenseCategories: expCatSnap, appStores: appStoresSnap, personPhotosSnap } = cloudData;
 
   if (settingsSnap && settingsSnap.exists) {
     const sd = settingsSnap.data();
@@ -2916,6 +2954,19 @@ async function _syncSettings(cloudData) {
     }
   }
 
+  if (appStoresSnap && appStoresSnap.exists) {
+    const asd = appStoresSnap.data();
+    if (asd && Array.isArray(asd.stores)) {
+      const cloudStoresTs = asd.stores_timestamp || 0;
+      const localStoresTs = (await sqliteStore.get('app_stores_timestamp')) || 0;
+      if (cloudStoresTs >= localStoresTs) {
+        await sqliteStore.set('app_stores', asd.stores);
+        if (cloudStoresTs) await sqliteStore.set('app_stores_timestamp', cloudStoresTs);
+        if (typeof _invalidateStoresCache === 'function') _invalidateStoresCache();
+      }
+    }
+  }
+
   if (personPhotosSnap && !personPhotosSnap.empty) {
     try {
       const localPhotos = (await sqliteStore.get('person_photos')) || {};
@@ -2994,7 +3045,7 @@ async function _uploadChanges(userRef) {
 
   let totalItemsToWrite = 0;
   const collectionsUploaded = new Set();
-  const _pendingUploadMarks = []; // [{ collectionName, id }]
+  const _pendingUploadMarks = []; 
 
   for (const [collectionName, dataArray] of Object.entries(collections)) {
     if (!Array.isArray(dataArray) || dataArray.length === 0) continue;
@@ -3007,11 +3058,11 @@ async function _uploadChanges(userRef) {
     for (const item of changedItems) {
       if (!item || !item.id) continue;
 
-      if (_isUploaded(collectionName, item.id)) continue; // Fix 8: unified gate
+      if (_isUploaded(collectionName, item.id)) continue; 
 
       if (DeltaSync.wasDownloaded(collectionName, item.id)
           && !DeltaSync.isDirtyId(collectionName, item.id)) {
-        _pendingUploadMarks.push({ collectionName, id: item.id }); // Fix 7: deferred
+        _pendingUploadMarks.push({ collectionName, id: item.id }); 
         continue;
       }
       if (!validateUUID(String(item.id))) {
@@ -3096,6 +3147,19 @@ async function _uploadChanges(userRef) {
     collectionsUploaded.add('expenseCategories');
   }
 
+  const localStoresTs = await sqliteStore.get('app_stores_timestamp');
+  const lastStoresSync = await DeltaSync.getLastSyncTimestamp('appStores');
+  if (localStoresTs && (!lastStoresSync || localStoresTs > lastStoresSync)) {
+    const _as = await sqliteStore.get('app_stores');
+    configBatch.set(
+      userRef.collection('appStores').doc('stores'),
+      sanitizeForFirestore({ stores: _as || [] }),
+      { merge: true }
+    );
+    operationCount++;
+    collectionsUploaded.add('appStores');
+  }
+
   let _uploadedPhotoKeys = [];
   try {
     const _dirtyPhotoKeys = (await sqliteStore.get('person_photos_dirty_keys')) || [];
@@ -3157,7 +3221,8 @@ async function _uploadChanges(userRef) {
 
   const configItemCount = (collectionsUploaded.has('factorySettings') ? 1 : 0)
     + (collectionsUploaded.has('settings') ? 1 : 0)
-    + (collectionsUploaded.has('expenseCategories') ? 1 : 0);
+    + (collectionsUploaded.has('expenseCategories') ? 1 : 0)
+    + (collectionsUploaded.has('appStores') ? 1 : 0);
   const totalUploaded = totalItemsToWrite + configItemCount;
   if (totalUploaded > 0 && typeof emitSyncUpdate === 'function') {
     const uploadedCollections = Array.from(collectionsUploaded).reduce((acc, col) => { acc[col] = null; return acc; }, {});

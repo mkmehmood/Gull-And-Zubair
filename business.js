@@ -870,6 +870,7 @@ const sqliteStore = (() => {
     'expense_categories', 'sales_reps_list', 'user_roles_list',
     'offline_operation_queue', 'offline_dead_letter_queue',
     'ui_state', 'app_theme', 'firestore_stats', 'session_start',
+    'app_stores',
   ]);
 
   function _rowType(key) {
@@ -2673,9 +2674,9 @@ return true;
 function _mergedBadgeHtml(record, opts = {}) {
 if (!record || !record.isMerged) return '';
 if (opts.inline) {
-  return ` <span style="background:rgba(175, 82, 222, 0.15); color:#af52de; padding:2px 6px; border-radius:4px; font-size:0.65rem; margin-left:6px; font-weight:600;">MERGED</span>`;
+  return ` <span class="merged-badge merged-badge--inline">MERGED</span>`;
 }
-return `<span style="font-size:0.6rem; background:rgba(175, 82, 222, 0.15); color:#af52de; padding:1px 5px; border-radius:3px; border:1px solid rgba(175, 82, 222, 0.3); display:inline-block; margin-top:3px;">MERGED</span>`;
+return `<span class="merged-badge">MERGED</span>`;
 }
 
 function _creatorBadgeHtml(record) {

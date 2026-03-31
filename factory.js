@@ -849,7 +849,7 @@ if (item.supplierName) {
 const remainingPayable = item.totalPayable || 0;
 const isFullyPaid = item.paymentStatus === 'paid' || remainingPayable <= 0;
 const payableDisplay = isFullyPaid ? `<span class="u-text-emerald">0.00</span>` : `<span style="font-weight:600;color:var(--accent);">${safeNumber(remainingPayable, 0).toFixed(2)}</span>`;
-supplierHtml = `<div style="font-size:0.65rem;color:var(--text-muted);margin-top:4px;"><div style="background:rgba(0,122,255,0.1);color:var(--accent);padding:3px 8px;border-radius:4px;display:inline-block;margin-bottom:3px;font-weight:600;">${String(item.supplierName).replace(/'/g, "&#39;").replace(/"/g, "&quot;")}</div><div style="margin-top:3px;font-size:0.7rem;">${payableDisplay}</div></div>`;
+supplierHtml = `<div style="font-size:0.65rem;color:var(--text-muted);margin-top:4px;"><div class="supplier-name-badge">${String(item.supplierName).replace(/'/g, "&#39;").replace(/"/g, "&quot;")}</div><div style="margin-top:3px;font-size:0.7rem;">${payableDisplay}</div></div>`;
 } else {
 supplierHtml = `<div style="font-size:0.65rem;color:var(--text-muted);margin-top:4px;font-style:italic;opacity:0.6;">No supplier linked</div>`;
 }
@@ -1012,9 +1012,18 @@ await sqliteStore.set('payment_transactions', payableTransactions);
 }
 }
 
+function selectFactoryFormula(formulaType, el) {
+const container = document.getElementById('factory-formula-selector');
+if (container) container.querySelectorAll('.factory-store-opt').forEach(o => o.classList.remove('active'));
+if (el) el.classList.add('active');
+const representativeStore = (formulaType === 'asaan') ? 'STORE_C' : 'STORE_A';
+currentFactoryEntryStore = representativeStore;
+calculateFactoryProduction();
+}
 function selectFactoryEntryStore(store, el) {
 currentFactoryEntryStore = store;
-document.querySelectorAll('.factory-store-selector .factory-store-opt').forEach(o => o.classList.remove('active'));
+const container = document.getElementById('factory-store-selector') || document.querySelector('.factory-store-selector');
+if (container) container.querySelectorAll('.factory-store-opt').forEach(o => o.classList.remove('active'));
 if (el) el.classList.add('active');
 calculateFactoryProduction();
 }
@@ -1022,8 +1031,8 @@ calculateFactoryProduction();
 async function getSalePriceForStore(store) {
 const factorySalePrices = (await sqliteStore.get('factory_sale_prices')) || {};
 if (!store) return 0;
-if (store === 'STORE_C') return factorySalePrices.asaan || 0;
-return factorySalePrices.standard || 0;
+const formulaType = typeof getStoreFormulaType === 'function' ? await getStoreFormulaType(store) : (store === 'STORE_C' ? 'asaan' : 'standard');
+return factorySalePrices[formulaType] || 0;
 }
 
 async function getEffectiveSalePriceForCustomer(customerName, store) {
@@ -1054,7 +1063,8 @@ const factoryDefaultFormulas = (await sqliteStore.get('factory_default_formulas'
 const factoryAdditionalCosts = (await sqliteStore.get('factory_additional_costs')) || {};
 const factoryCostAdjustmentFactor = (await sqliteStore.get('factory_cost_adjustment_factor')) || {};
 if (!store) return 0;
-return await calculateSalesCostPerKg(store === 'STORE_C' ? 'asaan' : 'standard');
+const formulaType = typeof getStoreFormulaType === 'function' ? await getStoreFormulaType(store) : (store === 'STORE_C' ? 'asaan' : 'standard');
+return await calculateSalesCostPerKg(formulaType);
 }
 
 async function getStorePricing(store) {
@@ -1069,17 +1079,19 @@ async function calculateFactoryProduction() {
 const factoryDefaultFormulas = (await sqliteStore.get('factory_default_formulas')) || {};
 const factoryAdditionalCosts = (await sqliteStore.get('factory_additional_costs')) || {};
 const units = parseInt(document.getElementById('factoryProductionUnits').value) || 1;
-const settings = factoryDefaultFormulas[currentFactoryEntryStore];
-const additionalCost = factoryAdditionalCosts[currentFactoryEntryStore] || 0;
+const _cfesType = typeof getStoreFormulaType === 'function' ? await getStoreFormulaType(currentFactoryEntryStore) : (currentFactoryEntryStore === 'STORE_C' ? 'asaan' : 'standard');
+const _cfesLabel = _cfesType === 'asaan' ? 'Asaan' : 'Standard';
+const settings = factoryDefaultFormulas[_cfesType] || factoryDefaultFormulas[currentFactoryEntryStore];
+const additionalCost = factoryAdditionalCosts[_cfesType] || factoryAdditionalCosts[currentFactoryEntryStore] || 0;
 let baseCost = 0;
 let rawMaterialsUsed = 0;
-let html = `<h4 style="margin:0 0 5px 0;font-size:0.9rem;">${currentFactoryEntryStore.toUpperCase()} Formula (${units} Units)</h4>`;
+let html = `<h4 style="margin:0 0 5px 0;font-size:0.9rem;">${_cfesLabel} Formula (${units} Units)</h4>`;
 if (settings && settings.length > 0) {
 for (const i of settings) {
 const lineTotal = i.cost * i.quantity * units;
 baseCost += lineTotal;
 rawMaterialsUsed += i.quantity * units;
-html += `<div style="display:flex;justify-content:space-between;font-size:0.8rem;margin-bottom:2px;"><span>${i.name} (${i.quantity * units} kg)</span><span>${await formatCurrency(lineTotal)}</span></div>`;
+html += `<div style="display:flex;justify-content:space-between;font-size:0.8rem;margin-bottom:2px;"><span>${i.name} (${(i.quantity * units).toFixed(2)} kg)</span><span>${await formatCurrency(lineTotal)}</span></div>`;
 }
 const totalAdditionalCost = additionalCost * units;
 if (totalAdditionalCost > 0) {
@@ -1122,12 +1134,13 @@ if (units <= 0) return showToast('Invalid units', 'warning', 3000);
 const inventorySnapshot = JSON.parse(JSON.stringify(factoryInventoryData));
 const historySnapshot = [...factoryProductionHistory];
 try {
-const settings = factoryDefaultFormulas[currentFactoryEntryStore];
+const _sfpeType = typeof getStoreFormulaType === 'function' ? await getStoreFormulaType(currentFactoryEntryStore) : (currentFactoryEntryStore === 'STORE_C' ? 'asaan' : 'standard');
+const settings = factoryDefaultFormulas[_sfpeType] || factoryDefaultFormulas[currentFactoryEntryStore];
 if (!settings || settings.length === 0) {
 showToast('No formula configured for this store. Please set up Factory Formulas before recording production.', 'warning', 5000);
 return;
 }
-const additionalCost = factoryAdditionalCosts[currentFactoryEntryStore] || 0;
+const additionalCost = factoryAdditionalCosts[_sfpeType] || factoryAdditionalCosts[currentFactoryEntryStore] || 0;
 let baseCost = 0;
 let rawMat = 0;
 if (settings) {
@@ -1168,11 +1181,13 @@ throw new Error(`Insufficient "${inventoryItem.name}" in inventory! Available: $
 let factProdId = generateUUID('fprod');
 if (!validateUUID(factProdId)) factProdId = generateUUID('fprod');
 const factProdCreatedAt = getTimestamp();
+const _savedFormulaType = typeof getStoreFormulaType === 'function' ? await getStoreFormulaType(currentFactoryEntryStore) : (currentFactoryEntryStore === 'STORE_C' ? 'asaan' : 'standard');
 const productionRecord = {
 id: factProdId,
 date: new Date().toISOString().split('T')[0],
 time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
 store: currentFactoryEntryStore,
+formulaType: _savedFormulaType,
 units,
 totalCost,
 materialsCost: baseCost,
@@ -1233,15 +1248,17 @@ updateFactorySummaryCard();
 _filterFactoryHistoryByMode(mode);
 }
 
-function setFactoryAvailableStore(store, el) {
-document.getElementById('factoryAvailStatsStandard').classList.add('hidden');
-document.getElementById('factoryAvailStatsStandard').style.display = 'none';
-document.getElementById('factoryAvailStatsAsaan').style.display = 'none';
-const statsElement = document.getElementById('factoryAvailStats' + (store === 'standard' ? 'Standard' : 'Asaan'));
+async function setFactoryAvailableStore(formulaType, el) {
+const _ftype = (formulaType === 'asaan') ? 'asaan' : 'standard';
+const stdEl = document.getElementById('factoryAvailStatsStandard');
+const asaanEl = document.getElementById('factoryAvailStatsAsaan');
+if (stdEl) { stdEl.classList.add('hidden'); stdEl.style.display = 'none'; }
+if (asaanEl) { asaanEl.classList.add('hidden'); asaanEl.style.display = 'none'; }
+const statsElement = document.getElementById('factoryAvailStats' + (_ftype === 'asaan' ? 'Asaan' : 'Standard'));
 if (statsElement) { statsElement.classList.remove('hidden'); statsElement.style.display = 'grid'; }
-const parent = el.parentElement;
-parent.querySelectorAll('.toggle-opt').forEach(t => t.classList.remove('active'));
-el.classList.add('active');
+const parent = el ? el.parentElement : null;
+if (parent) parent.querySelectorAll('.toggle-opt').forEach(t => t.classList.remove('active'));
+if (el) el.classList.add('active');
 updateFactoryUnitsAvailableStats();
 }
 
@@ -1269,10 +1286,11 @@ const month = dateObj.toLocaleDateString('en-US', { month: 'short' });
 const day = String(dateObj.getDate()).padStart(2, '0');
 const year = String(dateObj.getFullYear()).slice(-2);
 const dateStr = `${month} ${day} ${year} ${esc(entry.time || '')}`;
-const badgeClass = entry.store === 'standard' ? 'factory-badge-std' : 'factory-badge-asn';
-const storeLabel = entry.store === 'standard' ? 'STD' : 'ASN';
+const _histFtype = entry.formulaType || (entry.store === 'asaan' || entry.store === 'STORE_C' ? 'asaan' : 'standard');
+const badgeClass = _histFtype === 'asaan' ? 'factory-badge-asn' : 'factory-badge-std';
+const storeLabel = typeof getStoreLabel === 'function' ? getStoreLabel(entry.store) : (entry.store || 'STD');
 const perUnitCost = entry.units > 0 ? entry.totalCost / entry.units : 0;
-const additionalCostPerUnit = factoryAdditionalCosts[entry.store] || 0;
+const additionalCostPerUnit = factoryAdditionalCosts[_histFtype] || factoryAdditionalCosts[entry.store] || 0;
 const totalAdditionalCost = additionalCostPerUnit * entry.units;
 
 const formula = factoryDefaultFormulas[entry.store] || [];
@@ -1320,7 +1338,7 @@ div.innerHTML = `
 <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:5px;margin-bottom:8px;border-bottom:1px solid var(--glass-border);padding-bottom:5px;">
 <div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;">
 <span class="u-fs-sm2 u-text-muted">${dateStr}</span>
-${entry.managedBy ? `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 9px;font-size:0.65rem;font-weight:700;letter-spacing:0.04em;color:var(--accent-purple);background:rgba(206,147,216,0.10);border:1px solid rgba(206,147,216,0.28);border-radius:999px;">${esc(entry.managedBy)}</span>` : ''}
+${entry.managedBy ? `<span class="managed-by-badge">${esc(entry.managedBy)}</span>` : ''}
 ${entry.createdBy && typeof _creatorBadgeHtml === 'function' ? _creatorBadgeHtml(entry) : ''}
 </div>
 <div style="display:flex;gap:6px;align-items:center;">
@@ -1416,10 +1434,12 @@ async function calculateDynamicCost(storeType, formulaUnits, netWeight) {
 const factoryDefaultFormulas = (await sqliteStore.get('factory_default_formulas')) || {};
 const factoryAdditionalCosts = (await sqliteStore.get('factory_additional_costs')) || {};
 let formulaStore = 'standard';
-if (storeType === 'STORE_C' || storeType === 'asaan') {
-formulaStore = 'asaan';
-} else if (storeType !== 'STORE_A' && storeType !== 'STORE_B' && storeType !== 'standard') {
-return { costPerUnit: 0, totalFormulaCost: 0, dynamicCostPerKg: 0, formulaStore: storeType, rawMaterialCost: 0 };
+if (storeType === 'standard' || storeType === 'asaan') {
+  formulaStore = storeType;
+} else if (typeof getStoreFormulaType === 'function') {
+  formulaStore = await getStoreFormulaType(storeType);
+} else {
+  formulaStore = storeType === 'STORE_C' ? 'asaan' : 'standard';
 }
 const formula = factoryDefaultFormulas[formulaStore];
 if (!formula || formula.length === 0 || netWeight <= 0) {
@@ -1463,16 +1483,27 @@ const tracking = {
 standard: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] },
 asaan: { produced: 0, consumed: 0, available: 0, unitCostHistory: [] }
 };
+
+const _appStores = (typeof getAppStores === 'function') ? await getAppStores() : [];
+const _storeTypeMap = {};
+_appStores.forEach(s => { _storeTypeMap[s.key] = s.formulaType || 'standard'; });
+function _resolveFormulaType(storeVal) {
+  if (storeVal === 'standard' || storeVal === 'asaan') return storeVal;
+  return _storeTypeMap[storeVal] || (storeVal === 'STORE_C' ? 'asaan' : 'standard');
+}
 factoryProductionHistory.forEach(entry => {
 if (entry.store && entry.units > 0) {
-tracking[entry.store].produced += entry.units;
+const ft = entry.formulaType || _resolveFormulaType(entry.store);
+if (!tracking[ft]) tracking[ft] = { produced: 0, consumed: 0, available: 0, unitCostHistory: [] };
+tracking[ft].produced += entry.units;
 if (entry.totalCost && entry.units > 0) {
-tracking[entry.store].unitCostHistory.push({ date: entry.date, costPerUnit: entry.totalCost / entry.units, units: entry.units });
+tracking[ft].unitCostHistory.push({ date: entry.date, costPerUnit: entry.totalCost / entry.units, units: entry.units });
 }
 }
 });
 db.forEach(entry => {
-const formulaStore = entry.store === 'STORE_C' ? 'asaan' : 'standard';
+const formulaStore = entry.formulaStore || _resolveFormulaType(entry.store);
+if (!tracking[formulaStore]) tracking[formulaStore] = { produced: 0, consumed: 0, available: 0, unitCostHistory: [] };
 if (entry.formulaUnits) tracking[formulaStore].consumed += entry.formulaUnits;
 });
 tracking.standard.available = Math.max(0, tracking.standard.produced - tracking.standard.consumed);
@@ -1494,7 +1525,14 @@ return tracking;
 
 async function validateFormulaAvailability(storeType, requestedUnits) {
 const factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {};
-const formulaStore = (storeType === 'STORE_C' || storeType === 'asaan') ? 'asaan' : 'standard';
+let formulaStore = 'standard';
+if (storeType === 'standard' || storeType === 'asaan') {
+  formulaStore = storeType;
+} else if (typeof getStoreFormulaType === 'function') {
+  formulaStore = await getStoreFormulaType(storeType);
+} else {
+  formulaStore = storeType === 'STORE_C' ? 'asaan' : 'standard';
+}
 const available = factoryUnitTracking[formulaStore]?.available || 0;
 return { available, sufficient: available >= requestedUnits, deficit: Math.max(0, requestedUnits - available) };
 }
@@ -1503,7 +1541,7 @@ async function updateUnitsAvailableIndicator() {
 const factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || {};
 const store = document.getElementById('storeSelector').value;
 if (!store) return;
-const formulaStore = store === 'STORE_C' ? 'asaan' : 'standard';
+const formulaStore = typeof getStoreFormulaType === 'function' ? await getStoreFormulaType(store) : (store === 'STORE_C' ? 'asaan' : 'standard');
 const available = factoryUnitTracking[formulaStore]?.available || 0;
 const indicator = document.getElementById('currentUnitsAvailable');
 const warning = document.getElementById('insufficientUnitsWarning');

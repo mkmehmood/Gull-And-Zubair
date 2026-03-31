@@ -443,11 +443,11 @@ statusClass = 'partial';
 }
 toggleBtnHtml = `<span class="status-toggle-btn ${statusClass}" style="pointer-events:none;cursor:default;">${btnText}</span>`;
 } else if (isPartialPayment) {
-toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(255, 159, 10, 0.1); color:var(--warning);">PARTIAL PAYMENT</span>`;
+toggleBtnHtml = `<span class="status-toggle-btn txn-warning">PARTIAL PAYMENT</span>`;
 } else if (isCollection) {
-toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(48, 209, 88, 0.1); color:var(--accent-emerald);">COLLECTION</span>`;
+toggleBtnHtml = `<span class="status-toggle-btn txn-collect">COLLECTION</span>`;
 } else {
-toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(37, 99, 235, 0.1); color:var(--accent);">CASH SALE</span>`;
+toggleBtnHtml = `<span class="status-toggle-btn txn-cash">CASH SALE</span>`;
 }
 const deleteBtnHtml = t.isMerged ? '' : `<button class="btn btn-sm btn-danger u-p-4-8" onclick="deleteTransactionFromOverlay('${esc(t.id)}')">⌫</button>`;
 const safeId = String(t.id).replace(/'/g, "\\'");
@@ -475,7 +475,7 @@ itemContent = `
   <div class="cust-history-info">
     <div class="u-mono-bold">
       ${formatDisplayDate(t.date)}
-      <span style="background:rgba(255,159,10,0.15);color:var(--warning);padding:2px 6px;border-radius:4px;font-size:0.65rem;margin-left:6px;font-weight:600;">OLD DEBT</span>${_mergedBadgeHtml(t, {inline:true})}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(t) : ''}
+      <span class="old-debt-badge">OLD DEBT</span>${_mergedBadgeHtml(t, {inline:true})}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(t) : ''}
     </div>
     <div style="font-size:0.75rem;color:var(--warning);">Previous Balance: ${await formatCurrency(t.totalValue)}</div>
     <div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px;">${esc(t.notes || 'Brought forward from previous records')}</div>
@@ -985,7 +985,7 @@ _toastQueue.push({ message, type, duration });
 _playNextToast();
 }
 window.showToast = showToast;
- 
+
 const _gcIcons = {
   delete:   '<svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 11 L10 31 A2 2 0 0 0 12 33 H24 A2 2 0 0 0 26 31 L28 11 Z" fill="var(--danger)" fill-opacity="0.12" stroke="var(--danger)" stroke-width="1.5" stroke-linejoin="round"/><line x1="6" y1="11" x2="30" y2="11" stroke="var(--danger)" stroke-width="1.6" stroke-linecap="round"/><path d="M14 8 H22 M14 8 A1 1 0 0 1 15 7 H21 A1 1 0 0 1 22 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" opacity="0.65"/><line x1="14" y1="17" x2="14" y2="27" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" opacity="0.6"/><line x1="22" y1="17" x2="22" y2="27" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" opacity="0.6"/></svg>',
   remove:   '<svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="18" cy="18" r="13" fill="var(--danger)" fill-opacity="0.12" stroke="var(--danger)" stroke-width="1.5"/><line x1="13" y1="13" x2="23" y2="23" stroke="var(--danger)" stroke-width="2" stroke-linecap="round"/><line x1="23" y1="13" x2="13" y2="23" stroke="var(--danger)" stroke-width="2" stroke-linecap="round"/></svg>',

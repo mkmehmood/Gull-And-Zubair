@@ -1032,7 +1032,7 @@ const _UI_DEFAULTS = {
   currentIndMetric: 'weight',
   currentOverviewMode: 'day',
   currentProductionView: 'store',
-  currentFactoryEntryStore: 'standard',
+  currentFactoryEntryStore: 'STORE_A',
   currentFactorySettingsStore: 'standard',
   currentFactorySummaryMode: 'daily',
   currentCashTrackerMode: 'day',
@@ -1159,14 +1159,8 @@ const net = parseFloat(netElement.value) || 0;
 const inputDate = dateElement.value;
 const store = storeElement.value;
 const formulaUnits = parseFloat(formulaUnitsElement.value) || 0;
-let formulaStore = 'standard';
-let salePrice = 0;
-if (store === 'STORE_C') {
-formulaStore = 'asaan';
-salePrice = await getSalePriceForStore('STORE_C');
-} else {
-salePrice = await getSalePriceForStore(store);
-}
+const formulaStore = typeof getStoreFormulaType === 'function' ? await getStoreFormulaType(store) : (store === 'STORE_C' ? 'asaan' : 'standard');
+const salePrice = await getSalePriceForStore(store);
 const validation = await validateFormulaAvailability(store, formulaUnits);
 if (!validation.sufficient) {
 showToast(` Insufficient formula units! Available: ${validation.available}, Requested: ${formulaUnits}`, 'warning', 4000);
@@ -1885,12 +1879,8 @@ balanceHtml = `<span class="u-text-accent u-fw-800" >Balance Settled</span>`;
 statsEl.innerHTML = `
 ${balanceHtml}
 <span style="display:inline-flex; gap:8px; margin-left:12px; flex-wrap:wrap;">
-<span style="background:rgba(52,217,116,0.15); color:var(--accent-emerald); padding:2px 8px; border-radius:10px; font-size:0.7rem; font-weight:700;">
-IN: ${fmtAmt(totalIn)}
-</span>
-<span style="background:rgba(255,77,109,0.15); color:var(--danger); padding:2px 8px; border-radius:10px; font-size:0.7rem; font-weight:700;">
-OUT: ${fmtAmt(totalOut)}
-</span>
+<span class="txn-stat-badge txn-in">IN: ${fmtAmt(totalIn)}</span>
+<span class="txn-stat-badge txn-out">OUT: ${fmtAmt(totalOut)}</span>
 </span>`;
 const list = document.getElementById('entityManagementHistoryList');
 if (!list) {
@@ -1935,7 +1925,6 @@ return;
 transactions.forEach(t => {
 const isOut = t.type === 'OUT';
 const colorClass = isOut ? 'cost-val' : 'profit-val';
-const badgeBg = isOut ? 'rgba(220, 38, 38, 0.1)' : 'rgba(5, 150, 105, 0.1)';
 const badgeColor = isOut ? 'var(--danger)' : 'var(--accent-emerald)';
 const label = isOut ? 'PAYMENT OUT' : 'PAYMENT IN';
 const safeId = String(t.id).replace(/'/g, "\\'");
@@ -1954,7 +1943,7 @@ item.innerHTML = `
   </div>
   <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
     <div style="text-align:right;">
-      <span style="background:${badgeBg};color:${badgeColor};padding:2px 6px;border-radius:4px;font-size:0.65rem;font-weight:700;">${label}</span>
+      <span style="color:${badgeColor};padding:2px 6px;border-radius:4px;font-size:0.65rem;font-weight:700;">${label}</span>
       <div class="${colorClass}" style="font-size:0.9rem;margin-top:2px;">${fmtAmt(t.amount)}</div>
     </div>
     <button id="${photoBadgeId}" title="View photo" onclick="_toggleEntityTxnPanel(this,'','${safeId}','${safeExpenseId}')"
@@ -5056,7 +5045,13 @@ document.getElementById('cust-name').value = '';
 document.getElementById('cust-quantity').value = '';
 selectSalesRep(document.querySelector('#sales-rep-toggle-group .toggle-opt'), 'NONE');
 selectPaymentType(document.getElementById('btn-payment-credit'), 'CREDIT');
-selectSupplyStore(document.getElementById('btn-supply-store-a'), 'STORE_A');
+
+(async () => {
+  const _stores = typeof getAppStores === 'function' ? await getAppStores() : [];
+  const _firstStore = _stores[0] || { key: 'STORE_A' };
+  const _firstBtn = document.querySelector('#supply-store-toggles .toggle-opt');
+  selectSupplyStore(_firstBtn, _firstStore.key);
+})();
 if (phoneInput) phoneInput.value = '';
 document.getElementById('new-customer-phone-container').classList.add('hidden');
 if (typeof renderCustomersTable === 'function') {
@@ -5276,14 +5271,127 @@ await saveCustomerSale();
 }
 }
 
+const _DEFAULT_STORES = [
+  { key: 'STORE_A', name: 'ZUBAIR',   formulaType: 'standard' },
+  { key: 'STORE_B', name: 'MAHMOOD',  formulaType: 'standard' },
+  { key: 'STORE_C', name: 'ASAAN',    formulaType: 'asaan'    },
+];
+let _storesCache = null;
+let _storesCacheTs = 0;
+const _STORES_CACHE_TTL = 3000;
+
+async function getAppStores() {
+  const now = Date.now();
+  if (_storesCache && (now - _storesCacheTs) < _STORES_CACHE_TTL) return _storesCache;
+  try {
+    const saved = await sqliteStore.get('app_stores');
+    _storesCache = (Array.isArray(saved) && saved.length > 0) ? saved : _DEFAULT_STORES.map(s => ({ ...s }));
+  } catch(e) {
+    _storesCache = _DEFAULT_STORES.map(s => ({ ...s }));
+  }
+  _storesCacheTs = now;
+  return _storesCache;
+}
+function _invalidateStoresCache() { _storesCache = null; _storesCacheTs = 0; }
+window._invalidateStoresCache = _invalidateStoresCache;
+window.getAppStores = getAppStores;
+
 function getStoreLabel(storeCode) {
-switch(storeCode) {
-case 'STORE_A': return 'ZUBAIR';
-case 'STORE_B': return 'MAHMOOD';
-case 'STORE_C': return 'ASAAN';
-default: return storeCode;
+  if (_storesCache) {
+    const f = _storesCache.find(s => s.key === storeCode);
+    if (f) return f.name;
+  }
+  switch(storeCode) {
+    case 'STORE_A': return 'ZUBAIR';
+    case 'STORE_B': return 'MAHMOOD';
+    case 'STORE_C': return 'ASAAN';
+    default: return storeCode || '';
+  }
 }
+async function getStoreLabelAsync(storeCode) {
+  const stores = await getAppStores();
+  const f = stores.find(s => s.key === storeCode);
+  return f ? f.name : (storeCode || '');
 }
+async function getStoreFormulaType(storeCode) {
+  const stores = await getAppStores();
+  const f = stores.find(s => s.key === storeCode);
+  return f ? (f.formulaType || 'standard') : 'standard';
+}
+window.getStoreFormulaType = getStoreFormulaType;
+
+async function rebuildStoreUI() {
+  const stores = await getAppStores();
+
+  const supplyGroup = document.getElementById('supply-store-toggles');
+  if (supplyGroup) {
+    supplyGroup.innerHTML = '';
+    stores.forEach((s, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'toggle-opt' + (i === 0 ? ' active' : '');
+      btn.id = 'btn-supply-store-' + s.key.toLowerCase();
+      btn.textContent = s.name;
+      btn.onclick = () => selectSupplyStore(btn, s.key);
+      supplyGroup.appendChild(btn);
+    });
+    const hidden = document.getElementById('supply-store-value');
+    if (hidden && stores.length) hidden.value = stores[0].key;
+  }
+
+  const retSection = document.getElementById('returnStoreSection');
+  if (retSection) {
+    const retGroup = retSection.querySelector('.toggle-group');
+    if (retGroup) {
+      retGroup.innerHTML = '';
+      stores.forEach((s, i) => {
+        const btn = document.createElement('button');
+        btn.className = 'toggle-opt' + (i === 0 ? ' active' : '');
+        btn.id = 'ret-store-' + s.key.toLowerCase();
+        btn.textContent = s.name;
+        btn.onclick = () => selectReturnStore(s.key, btn);
+        retGroup.appendChild(btn);
+      });
+    }
+  }
+
+  const storeHidden = document.getElementById('storeSelector');
+  const storeTglGrp = document.getElementById('storeSelectorToggleGroup');
+  if (storeTglGrp && storeHidden) {
+    const cur = storeHidden.value;
+    storeTglGrp.innerHTML = '';
+    stores.forEach((s, i) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toggle-opt' + ((cur ? s.key === cur : i === 0) ? ' active' : '');
+      btn.textContent = s.name;
+      btn.onclick = () => {
+        storeHidden.value = s.key;
+        storeTglGrp.querySelectorAll('.toggle-opt').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        updateProductionCostOnStoreChange();
+      };
+      storeTglGrp.appendChild(btn);
+    });
+    if (!storeHidden.value && stores.length) storeHidden.value = stores[0].key;
+    else if (!stores.find(s => s.key === cur) && stores.length) storeHidden.value = stores[0].key;
+  }
+
+  const factoryStoreSel = document.getElementById('factory-store-selector');
+  if (factoryStoreSel) {
+    const curFactory = factoryStoreSel.dataset.current || 'standard';
+    factoryStoreSel.innerHTML = '';
+    stores.forEach((s, i) => {
+      const div = document.createElement('div');
+      div.className = 'factory-store-opt' + (i === 0 ? ' active' : '');
+      div.dataset.storeKey = s.key;
+      div.textContent = s.name;
+      div.onclick = function() { selectFactoryEntryStore(s.key, this); };
+      factoryStoreSel.appendChild(div);
+    });
+  }
+
+}
+window.rebuildStoreUI = rebuildStoreUI;
 
 async function getAvailableStoresForDate(date) {
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
@@ -5392,9 +5500,11 @@ calculateCustomerSale();
 }
 
 function selectSupplyStore(btn, value) {
-document.querySelectorAll('#btn-supply-store-a, #btn-supply-store-b, #btn-supply-store-c').forEach(b => b.classList.remove('active'));
-btn.classList.add('active');
-document.getElementById('supply-store-value').value = value;
+const grp = document.getElementById('supply-store-toggles');
+if (grp) grp.querySelectorAll('.toggle-opt').forEach(b => b.classList.remove('active'));
+if (btn) btn.classList.add('active');
+const hid = document.getElementById('supply-store-value');
+if (hid) hid.value = value;
 calculateCustomerSale();
 }
 
@@ -6795,9 +6905,10 @@ const selectedDateObj = new Date(selectedDate);
 const selectedYear = selectedDateObj.getFullYear();
 const selectedMonth = selectedDateObj.getMonth();
 const selectedDay = selectedDateObj.getDate();
-const stores = ['STORE_A', 'STORE_B', 'STORE_C'];
-const storeLabels = ['ZUBAIR', 'MAHMOOD', 'ASAAN'];
-const storeColors = ['#3b82f6', '#8b5cf6', '#10b981'];
+const _chartStores = await getAppStores();
+const stores = _chartStores.map(s => s.key);
+const storeLabels = _chartStores.map(s => s.name);
+const storeColors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444'].slice(0, _chartStores.length);
 let data = [];
 let metricLabel = '';
 stores.forEach(store => {
@@ -6998,7 +7109,7 @@ const storeBadgeClass = item.store === 'STORE_A' ? 'store-a' : item.store === 'S
 const storeLabel = item.store === 'STORE_A' ? 'ZUBAIR' : item.store === 'STORE_B' ? 'MAHMOOD' : 'ASAAN';
 let returnBadge = '';
 if (item.isReturn) {
-returnBadge = `<span class="payment-badge" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); top: 35px; right: 12px;"> RETURN</span>`;
+returnBadge = `<span class="payment-badge" style="top: 35px; right: 12px; color: var(--accent-emerald);"> RETURN</span>`;
 }
 let paymentBadge = '';
 let mergedBadge = '';
@@ -7010,9 +7121,8 @@ div.className = `card liquid-card ${highlightClass}`;
 if (item.date) div.setAttribute('data-date', item.date);
 let returnsByStoreHtml = '';
 if (item.isMerged && item.isReturn && item.returnsByStore && Object.keys(item.returnsByStore).length > 1) {
-  const storeLabels2 = { STORE_A:'ZUBAIR', STORE_B:'MAHMOOD', STORE_C:'ASAAN' };
   returnsByStoreHtml = Object.entries(item.returnsByStore).map(([s,q]) =>
-    `<p><span style="color:var(--text-muted);">${esc(storeLabels2[s]||s)}:</span> <span class="qty-val">${safeValue(q).toFixed(2)} kg</span></p>`
+    `<p><span style="color:var(--text-muted);">${esc(typeof getStoreLabel === 'function' ? getStoreLabel(s) : s)}:</span> <span class="qty-val">${safeValue(q).toFixed(2)} kg</span></p>`
   ).join('');
 }
 div.innerHTML = `
@@ -7021,7 +7131,7 @@ ${returnBadge}
 ${item.isMerged ? '' : paymentBadge}
 <div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-bottom:4px;">
 <h4 style="margin:0;">${dateDisplay} @ ${esc(item.time || '')}${mergedBadge}</h4>
-${item.managedBy ? `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 9px;font-size:0.65rem;font-weight:700;letter-spacing:0.04em;color:var(--warning);background:rgba(255,179,0,0.10);border:1px solid rgba(255,179,0,0.28);border-radius:999px;">${esc(item.managedBy)}</span>` : ''}
+${item.managedBy ? `<span class="managed-by-badge">${esc(item.managedBy)}</span>` : ''}
 ${item.createdBy && typeof _creatorBadgeHtml === 'function' ? _creatorBadgeHtml(item) : ''}
 </div>
 ${item.isReturn ? `<p style="color:var(--accent-emerald); font-size:0.75rem; font-style:italic;">${item.isMerged ? 'Merged returns by' : 'Returned by'} ${esc(item.returnedBy || 'Representative')}</p>` : ''}
@@ -7408,6 +7518,7 @@ paymentTransactions: paymentTransactions,
 expenses: expenseRecords,
 stockReturns: stockReturns,
 settings: await sqliteStore.get('naswar_default_settings', defaultSettings),
+appStores: await sqliteStore.get('app_stores') || [],
 deleted_records: Array.from(deletedRecordIds),
 _meta: { encryptedFor: currentUser.email, encryptedUid: currentUser.uid, createdAt: Date.now(), version: 4 }
 };
@@ -7817,6 +7928,17 @@ await sqliteStore.set('naswar_default_settings', data.settings);
 await sqliteStore.set('naswar_default_settings_timestamp', settingsTimestamp);
 defaultSettings = data.settings;
 }
+if (Array.isArray(data.appStores) && data.appStores.length > 0) {
+const localStores = (await sqliteStore.get('app_stores')) || [];
+const localKeySet = new Set(localStores.map(s => s.key));
+const merged = [...localStores];
+for (const s of data.appStores) {
+  if (s && s.key && !localKeySet.has(s.key)) merged.push(s);
+}
+await sqliteStore.set('app_stores', merged);
+await sqliteStore.set('app_stores_timestamp', settingsTimestamp);
+if (typeof _invalidateStoresCache === 'function') _invalidateStoresCache();
+}
 await loadAllData();
 try { syncFactoryProductionStats(); } catch(e) { console.error('Factory stats error:', _safeErr(e)); }
 try { await invalidateAllCaches(); } catch(e) { console.error('Cache invalidation error:', _safeErr(e)); }
@@ -7903,6 +8025,15 @@ try {
       { merge: true }
     );
     operationCount++;
+    const _restoreStores = await sqliteStore.get('app_stores');
+    if (Array.isArray(_restoreStores) && _restoreStores.length > 0) {
+      currentBatch.set(
+        userRef.collection('appStores').doc('stores'),
+        sanitizeForFirestore({ stores: _restoreStores }),
+        { merge: true }
+      );
+      operationCount++;
+    }
   } catch (factorySettingsError) { console.error('Factory settings cloud error', _safeErr(factorySettingsError)); }
   if (operationCount > 0) {
     for (let _bi = 0; _bi < batches.length; _bi++) {
@@ -8416,7 +8547,7 @@ const adminDate = document.getElementById('admin-rep-date');
 if (mainDate && adminDate) {
 adminDate.value = mainDate.value;
 }
-if (newTransCard) newTransCard.style.display = 'none';
+if (newTransCard) newTransCard.style.display = 'block';
 if (typeof calculateRepAnalytics === 'function') {
 calculateRepAnalytics();
 }
@@ -8827,9 +8958,22 @@ const factoryUnitTracking = (await sqliteStore.get('factory_unit_tracking')) || 
 const factoryProductionHistory = ensureArray(await sqliteStore.get('factory_production_history'));
 const db = ensureArray(await sqliteStore.get('mfg_pro_pkr'));
 const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
+
+const stores = typeof getAppStores === 'function' ? await getAppStores() : [];
+const storeFormulaMap = {};
+for (const s of stores) {
+  storeFormulaMap[s.key] = s.formulaType || 'standard';
+}
+
 const stdProductionData = db.filter(item => {
-return (item.store === 'STORE_A' || item.store === 'STORE_B') && item.isReturn !== true;
+  const ft = storeFormulaMap[item.store] || (item.store === 'STORE_C' ? 'asaan' : 'standard');
+  return ft === 'standard' && item.isReturn !== true;
 });
+const asaanProductionData = db.filter(item => {
+  const ft = storeFormulaMap[item.store] || (item.store === 'STORE_C' ? 'asaan' : 'standard');
+  return ft === 'asaan' && item.isReturn !== true;
+});
+
 const stdProducedUnits = factoryProductionHistory
 .filter(item => item.store === 'standard')
 .reduce((sum, item) => sum + (item.units || 0), 0);
@@ -8842,7 +8986,6 @@ const stdAvailableUnits = Math.max(0, stdProducedUnits - stdUsedUnits);
 const stdCostPerUnit = await getCostPerUnit('standard');
 const stdTotalCostValue = stdCostPerUnit * stdAvailableUnits;
 const stdProfitPerKg = stdOutputQuantity > 0 ? stdTotalProfit / stdOutputQuantity : 0;
-const stdProfitPerUnit = stdUsedUnits > 0 ? stdTotalProfit / stdUsedUnits : 0;
 const stdWeightPerUnit = await getWeightPerUnit('standard');
 const stdRawMaterialsUsed = stdWeightPerUnit * stdUsedUnits;
 const stdMaterialsValue = stdProductionData.reduce((sum, item) => sum + (item.formulaCost || item.totalCost || 0), 0);
@@ -8856,7 +8999,7 @@ _setFac('factoryStdRawUsed', safeNumber(stdRawMaterialsUsed, 0).toFixed(2) + ' k
 _setFac('factoryStdMatVal', await formatCurrency(stdMaterialsValue));
 _setFac('factoryStdProfit', await formatCurrency(stdTotalProfit));
 _setFac('factoryStdProfitUnit', await formatCurrency(stdProfitPerKg) + '/kg');
-const asaanProductionData = db.filter(item => item.store === 'STORE_C' && item.isReturn !== true);
+
 const asaanProducedUnits = factoryProductionHistory
 .filter(item => item.store === 'asaan')
 .reduce((sum, item) => sum + (item.units || 0), 0);
@@ -8869,7 +9012,6 @@ const asaanAvailableUnits = Math.max(0, asaanProducedUnits - asaanUsedUnits);
 const asaanCostPerUnit = await getCostPerUnit('asaan');
 const asaanTotalCostValue = asaanCostPerUnit * asaanAvailableUnits;
 const asaanProfitPerKg = asaanOutputQuantity > 0 ? asaanTotalProfit / asaanOutputQuantity : 0;
-const asaanProfitPerUnit = asaanUsedUnits > 0 ? asaanTotalProfit / asaanUsedUnits : 0;
 const asaanWeightPerUnit = await getWeightPerUnit('asaan');
 const asaanRawMaterialsUsed = asaanWeightPerUnit * asaanUsedUnits;
 const asaanMaterialsValue = asaanProductionData.reduce((sum, item) => sum + (item.formulaCost || item.totalCost || 0), 0);
@@ -9165,11 +9307,19 @@ const today = new Date().toISOString().split('T')[0];
 factoryDateInput.value = today;
 currentFactoryDate = today;
 }
-refreshFactoryTab();
+currentFactoryEntryStore = 'STORE_A';
+const formulaSelector = document.getElementById('factory-formula-selector');
+if (formulaSelector) {
+formulaSelector.querySelectorAll('.factory-store-opt').forEach((opt, i) => {
+if (i === 0) opt.classList.add('active');
+else opt.classList.remove('active');
+});
+}
 document.querySelectorAll('#tab-factory .toggle-group .toggle-opt').forEach((opt, index) => {
 if (index === 0) opt.classList.add('active');
 else opt.classList.remove('active');
 });
+refreshFactoryTab();
 }
 
 function setProductionView(view, event) {
@@ -9214,9 +9364,10 @@ const selectedDate = document.getElementById('sys-date').value;
 const selectedDateObj = new Date(selectedDate);
 const selectedYear = selectedDateObj.getFullYear();
 const selectedMonth = selectedDateObj.getMonth();
-const stores = ['STORE_A', 'STORE_B', 'STORE_C'];
-const storeNames = ['ZUBAIR', 'MAHMOOD', 'ASAAN'];
-const storeColors = ['store-a', 'store-b', 'store-c'];
+const _appStoresOv = await getAppStores();
+const stores = _appStoresOv.map(s => s.key);
+const storeNames = _appStoresOv.map(s => s.name);
+const storeColors = _appStoresOv.map((s,i) => ['store-a','store-b','store-c','store-d','store-e'][i] || 'store-a');
 let totalCombined = {
 production: 0,
 returns: 0,
@@ -9901,7 +10052,7 @@ const supplyTagText = item.supplyStore === 'STORE_A' ? 'ZUBAIR' :
 item.supplyStore === 'STORE_B' ? 'MAHMOOD' : 'ASAAN';
 let repBadge = '';
 if (item.salesRep && item.salesRep !== 'NONE' && item.salesRep !== 'ADMIN') {
-repBadge = `<span style="font-size:0.65rem; background:#e0e7ff; color:#3730a3; padding:2px 6px; border-radius:4px; margin-left:5px;"> ${esc(item.salesRep.split(' ')[0])}</span>`;
+repBadge = `<span class="sales-rep-badge"> ${esc(item.salesRep.split(' ')[0])}</span>`;
 }
 let mergedBadge = '';
 if (item.isMerged) {
@@ -9914,8 +10065,8 @@ let creditSection = '';
 if (!isOldDebtItem) {
 if (paymentType === 'CREDIT' && !creditReceived) {
 creditSection = `
-<div class="credit-checkbox-container" onclick="(async () => { await toggleCustomerCreditReceived('${esc(item.id)}', event) })()">
-<input type="checkbox" class="credit-checkbox" onclick="(async () => { await toggleCustomerCreditReceived(${item.id}, event); })()">
+<div class="credit-checkbox-container" style="cursor:default;pointer-events:none;opacity:0.7;">
+<input type="checkbox" class="credit-checkbox" disabled>
 <label class="credit-checkbox-label">Mark as Received</label>
 </div>
 `;
@@ -9928,7 +10079,7 @@ if (isOldDebtItem) {
 card.innerHTML = `
 <div class="payment-badge credit">CREDIT</div>
 <div class="customer-name" style="margin-top: 12px;">${esc(item.customerName)}
-<span style="background:rgba(255,159,10,0.15);color:var(--warning);padding:2px 6px;border-radius:4px;font-size:0.65rem;margin-left:6px;font-weight:600;">OLD DEBT</span>${item.isMerged ? _mergedBadgeHtml(item, {inline:true}) : ''}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(item) : ''}
+<span class="old-debt-badge">OLD DEBT</span>${item.isMerged ? _mergedBadgeHtml(item, {inline:true}) : ''}${(typeof _creatorBadgeHtml === 'function') ? _creatorBadgeHtml(item) : ''}
 </div>
 <h4 style="margin-top: 5px; font-size: 0.85rem; color: var(--text-muted);">${dateDisplay}</h4>
 <hr>
@@ -9938,7 +10089,7 @@ ${deleteBtnHtml}
 `;
 } else if (isAdminCollItem) {
 card.innerHTML = `
-<div class="payment-badge collection" style="background:rgba(5,150,105,0.15);color:var(--accent-emerald);border:1px solid rgba(5,150,105,0.3);">COLLECTION</div>
+<div class="payment-badge collection">COLLECTION</div>
 <div class="customer-name" style="margin-top:12px;">${esc(item.customerName)} ${mergedBadge}</div>
 <div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-top:5px;margin-bottom:2px;">
 <h4 style="margin:0;font-size:0.85rem;color:var(--text-muted);">${dateDisplay}</h4>
@@ -10433,7 +10584,7 @@ const ampm = hours >= 12 ? 'PM' : 'AM';
 hours = hours % 12;
 hours = hours ? hours : 12;
 const timeString = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')} ${ampm}`;
-const formulaStore = storeKey === 'STORE_C' ? 'asaan' : 'standard';
+const formulaStore = typeof getStoreFormulaType === 'function' ? await getStoreFormulaType(storeKey) : (storeKey === 'STORE_C' ? 'asaan' : 'standard');
 const salePrice = getSalePriceForStore(storeKey);
 const costPerKg = getCostPriceForStore(storeKey);
 const totalCost = quantity * costPerKg;
@@ -10763,8 +10914,7 @@ document.addEventListener('DOMContentLoaded', async function _appBootstrap() {
   const saleDate2 = document.getElementById('sale-date');
   if (sellerSelect) sellerSelect.addEventListener('change', autoFillTotalSoldQuantity);
   if (saleDate2) saleDate2.addEventListener('change', autoFillTotalSoldQuantity);
-  const storeSelector = document.getElementById('storeSelector');
-  if (storeSelector) storeSelector.addEventListener('change', updateProductionCostOnStoreChange);
+
   initSplashScreen();
   setProductionView('store');
   requestAnimationFrame(async () => {
@@ -11995,6 +12145,43 @@ await unifiedSave('factory_inventory_data', factoryInventoryData, mat);
 }
 }
 }
+if (transactionType === 'IN') {
+const isSupplierEntity = entity.isSupplier ||
+factoryInventoryData.some(m => String(m.supplierId) === String(entity.id));
+if (isSupplierEntity) {
+let inMatId = generateUUID('mat');
+if (!validateUUID(inMatId)) inMatId = generateUUID('mat');
+const inMatNow = getTimestamp();
+let inMaterial = {
+id: inMatId,
+name: description || `Credit from ${name}`,
+quantity: 0,
+cost: 0,
+unit: 'kg',
+totalValue: amount,
+totalPayable: amount,
+paymentStatus: 'pending',
+supplierId: entity.id,
+supplierName: entity.name,
+supplierContact: entity.phone || '',
+supplierType: entity.supplierCategory || 'raw_materials',
+purchaseDate: date,
+purchaseQuantity: 0,
+purchaseCost: 0,
+createdAt: inMatNow,
+updatedAt: inMatNow,
+timestamp: inMatNow,
+syncedAt: new Date().toISOString(),
+sourceExpenseId: payExpenseId
+};
+inMaterial = ensureRecordIntegrity(inMaterial, false);
+factoryInventoryData.push(inMaterial);
+transaction.isPayable = true;
+transaction.materialId = inMatId;
+await unifiedSave('factory_inventory_data', factoryInventoryData, inMaterial);
+notifyDataChange('factory_inventory_data');
+}
+}
 transaction = ensureRecordIntegrity(transaction, false);
 paymentTransactions.push(transaction);
 await unifiedSave('payment_entities', paymentEntities, entity);
@@ -12521,7 +12708,7 @@ tr.innerHTML = `
 <td style="padding: 8px 4px; font-weight: 600; font-size: 0.8rem; cursor:pointer;" onclick="openExpenseEntityDetails('${esc(row.id)}')">
 ${esc(row.name)}
 <div style="display: inline-block; margin-left: 6px;">
-<span style="background: ${row.typeLabel === 'EXPENSE' ? 'var(--warning)' : 'var(--accent)'}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.55rem; font-weight: 700;">
+<span style="color: ${row.typeLabel === 'EXPENSE' ? 'var(--warning)' : 'var(--accent)'}; padding: 2px 6px; border-radius: 4px; font-size: 0.55rem; font-weight: 700;">
 ${row.typeLabel}
 </span>
 </div>
@@ -12540,7 +12727,7 @@ ${row.dateStr}
 <td style="padding: 8px 4px; font-weight: 700; font-size: 0.8rem; color: ${row.nameColor}; cursor:pointer;" onclick="openEntityDetailsOverlay('${esc(row.id)}')">
 ${esc(row.name)}
 <div style="font-size: 0.6rem; margin-top: 2px;">
-<span style="background: ${row.amountColor}; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.55rem; font-weight: 600;">
+<span style="color: ${row.amountColor}; padding: 1px 4px; border-radius: 3px; font-size: 0.55rem; font-weight: 600;">
 ${row.balanceLabel}
 </span>
 </div>
@@ -13058,12 +13245,8 @@ if (statsEl) {
 statsEl.innerHTML = `
 <span style="color:var(--warning); font-weight:800;">Total: ${fmtAmt(filteredTotal)}</span>
 <span style="display:inline-flex; gap:8px; margin-left:12px; flex-wrap:wrap;">
-<span style="background:rgba(255,184,48,0.15); color:var(--warning); padding:2px 8px; border-radius:10px; font-size:0.7rem; font-weight:700;">
-${count} record${count !== 1 ? 's' : ''}
-</span>
-<span style="background:rgba(255,77,109,0.15); color:var(--danger); padding:2px 8px; border-radius:10px; font-size:0.7rem; font-weight:700;">
-All-Time: ${fmtAmt(allTimeTotal)}
-</span>
+<span class="txn-stat-badge txn-warning">${count} record${count !== 1 ? 's' : ''}</span>
+<span class="txn-stat-badge txn-out">All-Time: ${fmtAmt(allTimeTotal)}</span>
 </span>`;
 }
 const list = document.getElementById('expenseManagementHistoryList');
@@ -13084,7 +13267,7 @@ item.innerHTML = `
 </div>
 <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
 <div style="text-align:right; margin-right:4px;">
-<span style="background:rgba(255,184,48,0.15); color:var(--warning); padding:2px 6px; border-radius:4px; font-size:0.65rem; font-weight:700;">EXPENSE</span>
+<span class="txn-label-badge txn-warning">EXPENSE</span>
 <div class="cost-val" style="font-size:0.9rem; margin-top:2px;">${fmtAmt(parseFloat(exp.amount) || 0)}</div>
 </div>
 <button id="${_expPhotoBadgeId}" title="View photo" onclick="(async()=>{const ph=(await sqliteStore.get('person_photos'))||{};const d=ph['expense:${esc(exp.id)}'];if(d)openPhotoLightbox(d);else showToast('No photo','warning',1500);})()"
@@ -14110,19 +14293,19 @@ async function renderRecycleBin(filterCollection = 'all') {
       const _rbManagedBy = _snap.managedBy || rec.managedBy || null;
       const _rbSalesRep  = _snap.salesRep  || rec.salesRep  || null;
       const _rbCreatorBadge = _rbCreatedBy
-        ? `<span style="display:inline-flex;align-items:center;padding:2px 7px;font-size:0.62rem;font-weight:700;letter-spacing:0.04em;color:#06b6d4;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.30);border-radius:999px;white-space:nowrap;">${esc(_rbCreatedBy)}</span>`
+        ? `<span class="creator-badge">${esc(_rbCreatedBy)}</span>`
         : '';
       const _rbManagedBadge = _rbManagedBy
-        ? `<span style="display:inline-flex;align-items:center;padding:2px 7px;font-size:0.62rem;font-weight:700;letter-spacing:0.04em;color:var(--warning);background:rgba(255,179,0,0.10);border:1px solid rgba(255,179,0,0.28);border-radius:999px;white-space:nowrap;">${esc(_rbManagedBy)}</span>`
+        ? `<span class="managed-by-badge">${esc(_rbManagedBy)}</span>`
         : '';
       const _rbRepBadge = (_rbSalesRep && !_rbCreatedBy)
-        ? `<span style="display:inline-flex;align-items:center;padding:2px 7px;font-size:0.62rem;font-weight:700;letter-spacing:0.04em;color:var(--accent);background:rgba(37,99,235,0.10);border:1px solid rgba(37,99,235,0.25);border-radius:999px;white-space:nowrap;">${esc(_rbSalesRep.split(' ')[0])}</span>`
+        ? `<span class="sales-rep-badge">${esc(_rbSalesRep.split(' ')[0])}</span>`
         : '';
       const _rbBadgesHtml = [_rbManagedBadge, _rbCreatorBadge, _rbRepBadge].filter(Boolean).join('');
 
       const _rbDeletedByRaw = rec.deleted_by || null;
       const _rbDeletedByBadge = (_rbDeletedByRaw && _rbDeletedByRaw !== 'user')
-        ? `<span style="display:inline-flex;align-items:center;gap:3px;padding:2px 7px;font-size:0.62rem;font-weight:700;letter-spacing:0.04em;color:#f87171;background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.28);border-radius:999px;white-space:nowrap;"><svg width="9" height="9" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;"><path d="M8 11 L10 31 A2 2 0 0 0 12 33 H24 A2 2 0 0 0 26 31 L28 11 Z" fill="var(--danger)" fill-opacity="0.15" stroke="var(--danger)" stroke-width="1.5" stroke-linejoin="round"/><line x1="6" y1="11" x2="30" y2="11" stroke="var(--danger)" stroke-width="1.6" stroke-linecap="round"/><path d="M14 8 H22 M14 8 A1 1 0 0 1 15 7 H21 A1 1 0 0 1 22 8" stroke="var(--danger)" stroke-width="1.4" stroke-linecap="round"/></svg>del by ${esc(_rbDeletedByRaw)}</span>`
+        ? `<span style="display:inline-flex;align-items:center;gap:3px;font-size:0.62rem;font-weight:700;letter-spacing:0.04em;color:#f87171;white-space:nowrap;"><svg width="9" height="9" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;"><path d="M8 11 L10 31 L12 33 H24 L26 31 L28 11 Z" fill="var(--danger)" fill-opacity="0.15" stroke="var(--danger)" stroke-width="1.5" stroke-linejoin="round"/><line x1="6" y1="11" x2="30" y2="11" stroke="var(--danger)" stroke-width="1.6" stroke-linecap="round"/><path d="M14 8 H22 M14 8 L15 7 H21 L22 8" stroke="var(--danger)" stroke-width="1.4" stroke-linecap="round"/></svg>${esc(_rbDeletedByRaw)}</span>`
         : '';
 
       const nameHtml = displayName
@@ -14135,14 +14318,14 @@ async function renderRecycleBin(filterCollection = 'all') {
         ? `<span style="font-size:0.78rem;font-weight:700;color:var(--accent);">${esc(displayAmount)}</span>`
         : '';
       const syncBadge = rec.syncedToCloud
-        ? `<span style="font-size:0.62rem;background:rgba(16,185,129,0.15);color:#10b981;padding:2px 6px;border-radius:999px;white-space:nowrap;"> synced</span>`
-        : `<span style="font-size:0.62rem;background:rgba(239,68,68,0.12);color:#ef4444;padding:2px 6px;border-radius:999px;white-space:nowrap;"> local</span>`;
+        ? `<span class="sync-status-badge sync-ok"> synced</span>`
+        : `<span class="sync-status-badge sync-local"> local</span>`;
       const colDot = {
         'sales':'#10b981','transactions':'#3b82f6','rep_sales':'#8b5cf6',
         'expenses':'#f59e0b','production':'#ec4899','factory_history':'#14b8a6',
         'returns':'#f97316','unknown':'#9ca3af'
       }[col] || '#9ca3af';
-      const typeTag = `<span style="font-size:0.62rem;background:rgba(255,255,255,0.06);color:var(--text-muted);padding:2px 7px;border-radius:999px;border:1px solid var(--glass-border);white-space:nowrap;">${esc(typeLabel)}</span>`;
+      const typeTag = `<span class="type-tag-badge">${esc(typeLabel)}</span>`;
       return `<div style="background:var(--input-bg);border:1px solid var(--glass-border);border-radius:12px;padding:12px 14px;margin-bottom:9px;display:flex;align-items:center;gap:11px;">
         <div style="width:9px;height:9px;min-width:9px;border-radius:50%;background:${colDot};flex-shrink:0;"></div>
         <div style="flex:1;min-width:0;overflow:hidden;">
@@ -14163,9 +14346,9 @@ async function renderRecycleBin(filterCollection = 'all') {
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex-shrink:0;">
           ${canRecover
-            ? `<button onclick="attemptRecoverRecord('${esc(rec.id)}','${esc(col)}')" style="display:inline-flex;align-items:center;gap:4px;padding:7px 13px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);border-radius:999px;font-size:0.78rem;font-weight:700;cursor:pointer;white-space:nowrap;"><svg width="13" height="13" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;"><path d="M10 8 A10 10 0 0 1 28 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/><polyline points="25,6 28,10 24,11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M26 28 A10 10 0 0 1 8 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/><polyline points="11,30 8,26 12,25" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg> Recover</button>`
+            ? `<button onclick="attemptRecoverRecord('${esc(rec.id)}','${esc(col)}')" style="display:inline-flex;align-items:center;gap:4px;padding:7px 13px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);border-radius:999px;font-size:0.78rem;font-weight:700;cursor:pointer;white-space:nowrap;"><svg width="13" height="13" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;"><polyline points="8,20 18,10 28,20" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><line x1="18" y1="10" x2="18" y2="30" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Recover</button>`
             : `<span style="font-size:0.7rem;color:var(--text-muted);padding:4px 8px;">—</span>`}
-          <button onclick="attemptHardDeleteRecord('${esc(rec.id)}','${esc(col)}')" style="display:inline-flex;align-items:center;gap:4px;padding:5px 10px;background:rgba(239,68,68,0.12);color:#ef4444;border:1px solid rgba(239,68,68,0.3);border-radius:999px;font-size:0.7rem;font-weight:700;cursor:pointer;white-space:nowrap;"><svg width="11" height="11" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;"><path d="M8 11 L10 31 A2 2 0 0 0 12 33 H24 A2 2 0 0 0 26 31 L28 11 Z" fill="currentColor" opacity="0.15" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><line x1="6" y1="11" x2="30" y2="11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M14 8 H22 M14 8 A1 1 0 0 1 15 7 H21 A1 1 0 0 1 22 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M15 17 C15 17 13 20 15 23 C17 26 21 26 21 26" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" fill="none"/><polyline points="19,24 21,26 19,28" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg> Delete Forever</button>
+          <button onclick="attemptHardDeleteRecord('${esc(rec.id)}','${esc(col)}')" style="display:inline-flex;align-items:center;gap:4px;padding:5px 10px;background:rgba(239,68,68,0.12);color:#ef4444;border:1px solid rgba(239,68,68,0.3);border-radius:999px;font-size:0.7rem;font-weight:700;cursor:pointer;white-space:nowrap;"><svg width="11" height="11" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;"><path d="M8 11 L10 31 L12 33 H24 L26 31 L28 11 Z" fill="currentColor" opacity="0.15" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><line x1="6" y1="11" x2="30" y2="11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M14 8 H22 M14 8 L15 7 H21 L22 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="15" y1="17" x2="15" y2="27" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><line x1="21" y1="17" x2="21" y2="27" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> Delete Forever</button>
         </div>
       </div>`;
     }).join('');
@@ -16208,7 +16391,7 @@ return;
 const TAB_COLORS = { factory: 'var(--accent-purple)', prod: 'var(--accent-emerald)', payments: 'var(--accent-cyan)', sales: 'var(--accent-gold)' };
 list.innerHTML = userRolesList.map((user, i) => {
 const tabs = Array.isArray(user.tabs) ? user.tabs : [];
-const tabBadges = tabs.map(t => `<span style="font-size:0.58rem;padding:2px 7px;border-radius:9999px;background:${TAB_COLORS[t]||'var(--accent)'}22;color:${TAB_COLORS[t]||'var(--accent)'};border:1px solid ${TAB_COLORS[t]||'var(--accent)'}55;font-weight:700;text-transform:uppercase;">${t}</span>`).join('');
+const tabBadges = tabs.map(t => `<span style="font-size:0.58rem;padding:2px 7px;border-radius:9999px;color:${TAB_COLORS[t]||'var(--accent)'};border:1px solid ${TAB_COLORS[t]||'var(--accent)'}55;font-weight:700;text-transform:uppercase;">${t}</span>`).join('');
 return `
 <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 14px; background:var(--glass-raised); border:1px solid var(--glass-border); border-radius:var(--radius-lg); margin-bottom:8px;">
 <div style="flex:1; min-width:0;">

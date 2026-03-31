@@ -859,14 +859,14 @@ return name && typeof name === 'string' && name.toLowerCase().includes(filter);
 });
 const totalItems = filteredCustomers.length;
 if (!filteredCustomers || !Array.isArray(filteredCustomers) || !custMap) {
-tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:20px; color:var(--danger);">Invalid customer data</td></tr>`;
+tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; padding:20px; color:var(--danger);">Invalid customer data</td></tr>`;
 } else if (totalItems === 0) {
 if (Object.keys(custMap).length === 0) {
-tbody.innerHTML = `<tr><td class="u-empty-state-md" colspan="5" >No customers yet. Add your first sale to get started!</td></tr>`;
+tbody.innerHTML = `<tr><td class="u-empty-state-md" colspan="4" >No customers yet. Add your first sale to get started!</td></tr>`;
 } else {
 const filterInput = document.getElementById('rep-filter');
 const filter = filterInput ? filterInput.value : '';
-tbody.innerHTML = `<tr><td class="u-empty-state-md" colspan="5" >No customers match "${esc(filter)}"</td></tr>`;
+tbody.innerHTML = `<tr><td class="u-empty-state-md" colspan="4" >No customers match "${esc(filter)}"</td></tr>`;
 }
 } else {
 function buildRepCustomerRow(name) {
@@ -1104,11 +1104,11 @@ statusClass = 'partial';
 }
 toggleBtnHtml = `<span class="status-toggle-btn ${statusClass}" style="pointer-events:none;cursor:default;">${btnText}</span>`;
 } else if (isPartialPayment) {
-toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(255,159,10,0.1);color:var(--warning);">PARTIAL PAYMENT</span>`;
+toggleBtnHtml = `<span class="status-toggle-btn txn-warning">PARTIAL PAYMENT</span>`;
 } else if (isCollection) {
-toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(48,209,88,0.1);color:var(--accent-emerald);">COLLECTION</span>`;
+toggleBtnHtml = `<span class="status-toggle-btn txn-collect">COLLECTION</span>`;
 } else {
-toggleBtnHtml = `<span class="status-toggle-btn" style="background:rgba(37,99,235,0.1);color:var(--accent);">CASH SALE</span>`;
+toggleBtnHtml = `<span class="status-toggle-btn txn-cash">CASH SALE</span>`;
 }
 const deleteBtnHtml = t.isMerged ? '' : `<button class="btn btn-sm btn-danger u-p-4-8" onclick="deleteRepTransactionFromOverlay('${esc(t.id)}')">⌫</button>`;
 const safeId = String(t.id).replace(/'/g, "\\'");
@@ -1140,7 +1140,7 @@ itemContent = `
   <div class="cust-history-info">
     <div style="font-weight:700;font-size:0.85rem;color:var(--text-main);">
       ${formatDisplayDate(t.date)}
-      <span style="background:rgba(255,159,10,0.15);color:var(--warning);padding:2px 6px;border-radius:4px;font-size:0.65rem;margin-left:6px;font-weight:600;">OLD DEBT</span>${_mergedBadgeHtml(t, {inline:true})}
+      <span class="old-debt-badge">OLD DEBT</span>${_mergedBadgeHtml(t, {inline:true})}
     </div>
     <div style="font-size:0.75rem;color:var(--warning);">Previous Balance: ${await formatCurrency(t.totalValue)}</div>
     <div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px;">${esc(t.notes || 'Brought forward from previous records')}</div>
@@ -1815,7 +1815,7 @@ ${qtyAmount}
 <div style="display:flex;align-items:center;gap:5px;justify-content:flex-end;flex-wrap:wrap;">
 <span class="u-fs-sm u-text-muted">${esc(item.time || '')}</span>
 ${item.createdBy && typeof _creatorBadgeHtml === 'function' ? _creatorBadgeHtml(item) : ''}
-${item.salesRep && !item.createdBy ? `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;font-size:0.62rem;font-weight:700;color:var(--accent);background:rgba(37,99,235,0.10);border:1px solid rgba(37,99,235,0.25);border-radius:999px;">${esc(item.salesRep.split(' ')[0])}</span>` : ''}
+${item.salesRep && !item.createdBy ? `<span class="sales-rep-badge">${esc(item.salesRep.split(' ')[0])}</span>` : ''}
 </div>
 </div>
 </div>

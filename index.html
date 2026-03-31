@@ -555,6 +555,21 @@ input:checked + .theme-toggle-track::before { transform: translateX(22px); }
       <span id="bio-toggle-label">Fingerprint Lock</span>
     </button>
     <div class="sidebar-section-label" style="padding-top:6px;color:var(--text-secondary);font-size:0.55rem;">BUSINESS</div>
+    <button class="sidebar-settings-btn" id="sidebar-btn-stores" onclick="closeSidebar();openStoreManagerScreen()">
+      <svg width="24" height="24" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="3" y="10" width="30" height="20" rx="3" fill="var(--accent)" fill-opacity="0.12" stroke="var(--accent)" stroke-width="1.6"/>
+        <path d="M3 16 H33" stroke="var(--accent)" stroke-width="1.3" opacity="0.5"/>
+        <rect x="7" y="20" width="7" height="6" rx="1.2" fill="var(--accent)" fill-opacity="0.25"/>
+        <rect x="17" y="20" width="7" height="6" rx="1.2" fill="var(--accent)" fill-opacity="0.18"/>
+        <path d="M9 4 L9 11" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round"/>
+        <path d="M18 4 L18 11" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round"/>
+        <path d="M27 4 L27 11" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round"/>
+        <circle cx="29" cy="27" r="5" fill="var(--accent-gold)" fill-opacity="0.22" stroke="var(--accent-gold)" stroke-width="1.4"/>
+        <line x1="29" y1="24.5" x2="29" y2="29.5" stroke="var(--accent-gold)" stroke-width="1.6" stroke-linecap="round"/>
+        <line x1="26.5" y1="27" x2="31.5" y2="27" stroke="var(--accent-gold)" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      Store Manager
+    </button>
     <button class="sidebar-settings-btn" onclick="closeSidebar();openStandaloneScreen('add-entity-screen');if(typeof prepareAddEntityScreen==='function')prepareAddEntityScreen()">
       <svg width="24" height="24" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
         <circle cx="14" cy="12" r="5.5" fill="var(--accent)" fill-opacity="0.15" stroke="var(--accent)" stroke-width="1.5"/>
@@ -679,6 +694,49 @@ input:checked + .theme-toggle-track::before { transform: translateX(22px); }
       </svg>
       Logout
     </button>
+    </div>
+  </div>
+</div>
+
+<div id="store-manager-screen" class="standalone-screen" style="display:none">
+  <div class="screen-topbar">
+    <h2 class="screen-title">Store Manager</h2>
+  </div>
+  <div class="screen-body" id="store-manager-body">
+
+    <div class="liquid-card" style="padding:16px;margin-bottom:16px;border:1px solid var(--glass-border);border-radius:var(--radius-lg);">
+      <p class="settings-group-label" id="store-form-heading">New Store</p>
+      <input type="hidden" id="store-edit-index" value="-1">
+      <div class="grid-inputs u-mb-15">
+        <div class="field">
+          <label>Store Name</label>
+          <input type="text" id="store-name-input" placeholder="e.g. KARACHI" maxlength="32" style="text-transform:uppercase;" oninput="this.value=this.value.toUpperCase()">
+        </div>
+        <div class="field">
+          <label>Formula Type</label>
+          <input type="hidden" id="store-formula-select" value="standard">
+          <div class="toggle-group" id="formulaTypeToggleGroup">
+            <button type="button" class="toggle-opt active" onclick="setFormulaToggle('standard',this)">Standard</button>
+            <button type="button" class="toggle-opt" onclick="setFormulaToggle('asaan',this)">Asaan</button>
+          </div>
+          <div class="u-field-hint-xs">Determines which cost &amp; sale price formula is used for this store</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-noman" style="flex:1;" onclick="(async()=>{await saveStoreFromForm()})()">
+          <span id="store-save-btn-text">Add Store</span>
+        </button>
+        <button class="btn" id="store-cancel-edit-btn" style="display:none;background:var(--glass-raised);color:var(--text-muted);" onclick="resetStoreForm()">Cancel</button>
+      </div>
+    </div>
+
+    <p class="settings-group-label">Existing Stores</p>
+    <div id="store-list-container"></div>
+
+    <div style="margin-top:20px;padding:12px 14px;background:rgba(245,158,11,0.07);border:1px solid var(--warning);border-radius:var(--radius-lg);font-size:0.72rem;color:var(--text-muted);line-height:1.6;">
+      <strong style="color:var(--warning);">Note:</strong> Store keys (STORE_A, STORE_B, etc.) are permanent and link to all historical records.
+      Renaming a store updates its display name everywhere. Deleting is only allowed if the store has no production records.
+      Changes sync to all connected devices automatically.
     </div>
   </div>
 </div>
@@ -1027,7 +1085,7 @@ input:checked + .theme-toggle-track::before { transform: translateX(22px); }
     <div style="flex:1;min-width:0;">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
         <h2 class="screen-title" style="flex:none;">CLOSE FINANCIAL YEAR</h2>
-        <span id="cy-phase-badge" style="font-size:0.58rem;font-weight:700;text-transform:uppercase;letter-spacing:0.09em;padding:2px 8px;border-radius:999px;background:rgba(29,233,182,0.10);color:var(--accent);border:1px solid rgba(29,233,182,0.20);transition:all 0.4s ease;font-family:'Geist Mono',monospace;">PREVIEW</span>
+        <span id="cy-phase-badge" class="cy-phase-badge">PREVIEW</span>
       </div>
       <div id="cy-panel-subtitle" style="font-size:0.68rem;color:var(--text-muted);margin-top:1px;line-height:1.4;transition:color 0.3s;">Compact all records into opening balances</div>
     </div>
@@ -1132,7 +1190,7 @@ window._showLogoutConfirmDialog = async function() {
 
     <div style="display:flex;flex-direction:column;align-items:center;margin-bottom:18px;">
       <div style="position:relative;width:88px;height:88px;margin-bottom:10px;">
-        <div id="entity-photo-preview" style="width:88px;height:88px;border-radius:50%;background:var(--glass-bg,#1a2535);border:2.5px solid var(--accent);overflow:hidden;display:flex;align-items:center;justify-content:center;cursor:pointer;" onclick="previewPhotoClick('entity')">
+        <div id="entity-photo-preview" style="width:88px;height:88px;border-radius:50%;background:var(--input-bg);border:2.5px solid var(--accent);overflow:hidden;display:flex;align-items:center;justify-content:center;cursor:pointer;" onclick="previewPhotoClick('entity')">
           <svg id="entity-photo-placeholder" width="38" height="38" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="opacity:0.5;"><circle cx="18" cy="13" r="6" fill="var(--accent)"/><path d="M6 30c0-6.627 5.373-10 12-10s12 3.373 12 10" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>
           <img id="entity-photo-img" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;">
         </div>
@@ -1260,7 +1318,7 @@ window._showLogoutConfirmDialog = async function() {
 
     <div style="display:flex;flex-direction:column;align-items:center;margin-bottom:18px;">
       <div style="position:relative;width:88px;height:88px;margin-bottom:10px;">
-        <div id="cust-photo-preview" style="width:88px;height:88px;border-radius:50%;background:var(--glass-bg,#1a2535);border:2.5px solid var(--accent);overflow:hidden;display:flex;align-items:center;justify-content:center;cursor:pointer;" onclick="previewPhotoClick('cust')">
+        <div id="cust-photo-preview" style="width:88px;height:88px;border-radius:50%;background:var(--input-bg);border:2.5px solid var(--accent);overflow:hidden;display:flex;align-items:center;justify-content:center;cursor:pointer;" onclick="previewPhotoClick('cust')">
           <svg id="cust-photo-placeholder" width="38" height="38" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="opacity:0.5;"><circle cx="18" cy="13" r="6" fill="var(--accent)"/><path d="M6 30c0-6.627 5.373-10 12-10s12 3.373 12 10" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>
           <img id="cust-photo-img" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;">
         </div>
@@ -1360,7 +1418,7 @@ window._showLogoutConfirmDialog = async function() {
 
     <div style="display:flex;flex-direction:column;align-items:center;margin-bottom:18px;">
       <div style="position:relative;width:88px;height:88px;margin-bottom:10px;">
-        <div id="rep-cust-photo-preview" style="width:88px;height:88px;border-radius:50%;background:var(--glass-bg,#1a2535);border:2.5px solid var(--accent);overflow:hidden;display:flex;align-items:center;justify-content:center;cursor:pointer;" onclick="previewPhotoClick('rep-cust')">
+        <div id="rep-cust-photo-preview" style="width:88px;height:88px;border-radius:50%;background:var(--input-bg);border:2.5px solid var(--accent);overflow:hidden;display:flex;align-items:center;justify-content:center;cursor:pointer;" onclick="previewPhotoClick('rep-cust')">
           <svg id="rep-cust-photo-placeholder" width="38" height="38" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="opacity:0.5;"><circle cx="18" cy="13" r="6" fill="var(--accent)"/><path d="M6 30c0-6.627 5.373-10 12-10s12 3.373 12 10" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>
           <img id="rep-cust-photo-img" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;">
         </div>
@@ -1441,7 +1499,7 @@ window._showLogoutConfirmDialog = async function() {
   <div id="photo-lightbox-inner" style="position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:hidden;">
     <img id="photo-lightbox-img" src="" alt="" style="max-width:92vw;max-height:88vh;border-radius:12px;object-fit:contain;display:block;transform-origin:center center;cursor:grab;transition:none;box-shadow:0 8px 48px rgba(0,0,0,0.7);">
   </div>
-  <!-- toolbar -->
+
   <div style="position:fixed;top:0;left:0;right:0;display:flex;justify-content:space-between;align-items:center;padding:12px 16px;z-index:1;pointer-events:none;">
     <div style="display:flex;align-items:center;gap:8px;pointer-events:all;">
       <button onclick="_lbZoom(-1)" title="Zoom out" style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,0.13);border:1.5px solid rgba(255,255,255,0.22);color:#fff;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px);">−</button>
@@ -1451,7 +1509,7 @@ window._showLogoutConfirmDialog = async function() {
     </div>
     <button onclick="closePhotoLightbox()" style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,0.13);border:1.5px solid rgba(255,255,255,0.22);color:#fff;font-size:1.1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px);pointer-events:all;">✕</button>
   </div>
-  <!-- double-tap hint -->
+
   <div style="position:fixed;bottom:18px;left:0;right:0;text-align:center;font-size:0.65rem;color:rgba(255,255,255,0.35);pointer-events:none;letter-spacing:0.05em;">PINCH OR SCROLL TO ZOOM · DOUBLE-TAP TO RESET</div>
 </div>
 
@@ -1481,7 +1539,7 @@ window._showLogoutConfirmDialog = async function() {
 <style>
 .person-avatar-ring {
   width: 52px; height: 52px; border-radius: 50%;
-  background: var(--glass-bg, #1a2535);
+  background: var(--input-bg);
   border: 2.5px solid var(--accent);
   overflow: hidden; display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
@@ -1496,52 +1554,6 @@ window._showLogoutConfirmDialog = async function() {
 <header style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
 <h1 class="shimmer-text u-heading-bold">Rep Sales</h1>
 </header>
-<div id="admin-rep-controls" class="section liquid-card hidden">
-<div class="section-header">
-<h3 style="margin:0; color:var(--text-main); font-size: 0.9rem;">Admin View</h3>
-</div>
-<div class="grid-inputs" style="margin-top: 10px;">
-<div class="field">
-<label style="color: var(--accent);">View For:</label>
-<select id="admin-rep-selector" class="store-selector" onchange="adminSwitchRepProfile(this.value)">
-</select>
-</div>
-<div class="field">
-<label>Select Date</label>
-<input type="date" id="admin-rep-date" onchange="handleAdminRepDateChange(this.value)">
-</div>
-</div>
-<div id="rep-map-container" style="height: 300px; width: 100%; margin-top: 15px; border-radius: 12px; border: 2px solid var(--glass-border); z-index: 1;"></div>
-<div style="text-align: right; font-size: 0.7rem; color: var(--text-muted); margin-top: 5px;">
- Cash Sale |  Collection |  Credit Sale
-</div>
-</div>
-<div id="admin-rep-analytics" class="section liquid-card hidden">
-<div class="section-header">
-<h3 class="u-heading-main" >Analytics</h3>
-<div class="toggle-group">
-<div class="toggle-opt active" id="rep-analytics-day-btn" onclick="setRepAnalyticsMode('day')">Daily</div>
-<div class="toggle-opt" id="rep-analytics-week-btn" onclick="setRepAnalyticsMode('week')">Weekly</div>
-<div class="toggle-opt" id="rep-analytics-month-btn" onclick="setRepAnalyticsMode('month')">Monthly</div>
-<div class="toggle-opt" id="rep-analytics-year-btn" onclick="setRepAnalyticsMode('year')">Yearly</div>
-<div class="toggle-opt" id="rep-analytics-all-btn" onclick="setRepAnalyticsMode('all')">All Time</div>
-</div>
-</div>
-<div style="display: flex; flex-direction: column; gap: 8px;">
-<div style="display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--glass-border);">
-<span class="u-fs-md u-text-muted u-fw-600" >Collections</span>
-<span class="profit-val" id="rep-analytics-collections" style="font-size: 0.95rem; font-weight: 800;">0.00</span>
-</div>
-<div style="display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--glass-border);">
-<span class="u-fs-md u-text-muted u-fw-600" >Cash Sales</span>
-<span class="profit-val" id="rep-analytics-cash-sales" style="font-size: 0.95rem; font-weight: 800;">0.00</span>
-</div>
-<div style="display: flex; justify-content: space-between; padding: 10px 0;">
-<span class="u-fs-md u-text-muted u-fw-600" >Credit Sales</span>
-<span class="cost-val" id="rep-analytics-credit-sales" style="font-size: 0.95rem; font-weight: 800;">0.00</span>
-</div>
-</div>
-</div>
 <div id="rep-new-transaction-card" class="section liquid-card">
 <div class="section-header">
 <h3 style="color:var(--accent); margin:0;">New Transaction</h3>
@@ -1597,9 +1609,56 @@ style="border-color:var(--accent-emerald); width:100%; box-sizing:border-box; pa
 </div>
 <button class="btn btn-main" onclick="(async () => { await saveRepTransaction() })()">Submit Transaction</button>
 </div>
+<div id="admin-rep-controls" class="section liquid-card hidden">
+<div class="section-header">
+<h3 style="margin:0; color:var(--text-main); font-size: 0.9rem;">Admin View</h3>
+</div>
+<div class="grid-inputs" style="margin-top: 10px;">
+<div class="field">
+<label style="color: var(--accent);">View For:</label>
+<select id="admin-rep-selector" class="store-selector" onchange="adminSwitchRepProfile(this.value)">
+</select>
+</div>
+<div class="field">
+<label>Select Date</label>
+<input type="date" id="admin-rep-date" onchange="handleAdminRepDateChange(this.value)">
+</div>
+</div>
+<div id="rep-map-container" style="height: 300px; width: 100%; margin-top: 15px; border-radius: 12px; border: 2px solid var(--glass-border); z-index: 1;"></div>
+<div style="text-align: right; font-size: 0.7rem; color: var(--text-muted); margin-top: 5px;">
+ Cash Sale |  Collection |  Credit Sale
+</div>
+</div>
+<div id="admin-rep-analytics" class="section liquid-card hidden">
+<div class="section-header">
+<h3 class="u-heading-main" >Analytics</h3>
+<div class="toggle-group">
+<div class="toggle-opt active" id="rep-analytics-day-btn" onclick="setRepAnalyticsMode('day')">Daily</div>
+<div class="toggle-opt" id="rep-analytics-week-btn" onclick="setRepAnalyticsMode('week')">Weekly</div>
+<div class="toggle-opt" id="rep-analytics-month-btn" onclick="setRepAnalyticsMode('month')">Monthly</div>
+<div class="toggle-opt" id="rep-analytics-year-btn" onclick="setRepAnalyticsMode('year')">Yearly</div>
+<div class="toggle-opt" id="rep-analytics-all-btn" onclick="setRepAnalyticsMode('all')">All Time</div>
+</div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px;">
+<div style="display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--glass-border);">
+<span class="u-fs-md u-text-muted u-fw-600" >Collections</span>
+<span class="profit-val" id="rep-analytics-collections" style="font-size: 0.95rem; font-weight: 800;">0.00</span>
+</div>
+<div style="display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--glass-border);">
+<span class="u-fs-md u-text-muted u-fw-600" >Cash Sales</span>
+<span class="profit-val" id="rep-analytics-cash-sales" style="font-size: 0.95rem; font-weight: 800;">0.00</span>
+</div>
+<div style="display: flex; justify-content: space-between; padding: 10px 0;">
+<span class="u-fs-md u-text-muted u-fw-600" >Credit Sales</span>
+<span class="cost-val" id="rep-analytics-credit-sales" style="font-size: 0.95rem; font-weight: 800;">0.00</span>
+</div>
+</div>
+</div>
+
 <div class="section liquid-card">
 <div class="section-header" style="position: relative; flex-wrap: nowrap; gap: 10px; align-items: center;">
-<h3 style="color:var(--text-main); margin:0; white-space: nowrap; flex-shrink: 0;">Customer List</h3>
+<h3 class="u-heading-main" style="white-space: nowrap; flex-shrink: 0;">Customer List</h3>
 <input type="text" id="rep-filter" class="search-bar u-flex-1 u-min-w-0 u-fs-sm2 u-m-0"
 placeholder="Search customers..."
 oninput="renderRepCustomerTable()">
@@ -1641,6 +1700,7 @@ No records found
 </div>
 </div>
 </div>
+</div>
 <div id="repHistoryList" class="report-grid"></div>
 </div>
 <div id="tab-prod">
@@ -1672,11 +1732,8 @@ Dynamic Cost Value: <span class="u-text-danger" id="display-cost-value" >0.00</s
 </div>
 <div class="field">
 <label>Select Store:</label>
-<select id="storeSelector" class="store-selector" onchange="updateProductionCostOnStoreChange()">
-<option value="STORE_A">ZUBAIR</option>
-<option value="STORE_B">MAHMOOD</option>
-<option value="STORE_C">ASAAN</option>
-</select>
+<input type="hidden" id="storeSelector">
+<div id="storeSelectorToggleGroup" class="toggle-group" style="flex-wrap:wrap;"></div>
 </div>
 </div>
 
@@ -1845,10 +1902,10 @@ style="border-color:var(--accent-emerald); width:100%; box-sizing:border-box;">
 <div id="cust-sale-supply-payment">
 <div class="field u-mb-15" >
 <label>Supply</label>
-<div class="toggle-group">
-<button id="btn-supply-store-a" class="toggle-opt active" onclick="selectSupplyStore(this,'STORE_A')">ZUBAIR</button>
-<button id="btn-supply-store-b" class="toggle-opt" onclick="selectSupplyStore(this,'STORE_B')">MAHMOOD</button>
-<button id="btn-supply-store-c" class="toggle-opt" onclick="selectSupplyStore(this,'STORE_C')">ASAAN</button>
+<div class="toggle-group" id="supply-store-toggles">
+<button class="toggle-opt active" onclick="selectSupplyStore(this,'STORE_A')">ZUBAIR</button>
+<button class="toggle-opt" onclick="selectSupplyStore(this,'STORE_B')">MAHMOOD</button>
+<button class="toggle-opt" onclick="selectSupplyStore(this,'STORE_C')">ASAAN</button>
 </div>
 <input type="hidden" id="supply-store-value" value="STORE_A">
 </div>
@@ -2135,9 +2192,9 @@ No records found
 <input type="date" id="factory-date" onchange="refreshFactoryTab(); setFactorySummaryMode(currentFactorySummaryMode || 'daily');" style="font-size:0.8rem; padding:5px 8px;">
 </div>
 </div>
-<div class="factory-store-selector">
-<div class="factory-store-opt active" onclick="selectFactoryEntryStore('standard', this)">STANDARD STORE</div>
-<div class="factory-store-opt" onclick="selectFactoryEntryStore('asaan', this)">ASAAN STORE</div>
+<div class="factory-store-selector" id="factory-formula-selector">
+<div class="factory-store-opt active" id="factory-formula-opt-standard" onclick="selectFactoryFormula('standard', this)">Standard</div>
+<div class="factory-store-opt" id="factory-formula-opt-asaan" onclick="selectFactoryFormula('asaan', this)">Asaan</div>
 </div>
 <div class="grid-inputs">
 <div class="field">
@@ -2157,9 +2214,9 @@ Select a store...
 <div class="section liquid-card">
 <div class="section-header">
 <h3 class="u-heading-main" >Units Available <span class="update-indicator" id="unitsUpdateIndicator"></span></h3>
-<div class="toggle-group">
-<div class="toggle-opt active" onclick="setFactoryAvailableStore('standard', this)">Standard Store</div>
-<div class="toggle-opt" onclick="setFactoryAvailableStore('asaan', this)">Asaan Store</div>
+<div class="toggle-group" id="factory-avail-store-toggle">
+<div class="toggle-opt active" onclick="setFactoryAvailableStore('standard', this)">Standard</div>
+<div class="toggle-opt" onclick="setFactoryAvailableStore('asaan', this)">Asaan</div>
 </div>
 </div>
 <div id="factoryAvailStatsStandard">
@@ -2450,7 +2507,7 @@ style="width: 100%; font-size: 0.85rem; font-weight: 600; padding: 8px;"
     placeholder="Add details..."
     style="flex:1; font-size: 0.85rem; padding: 8px;"
   >
-  <button id="expense-photo-btn" title="Attach photo" onclick="openExpensePhotoCapture()" style="flex-shrink:0;width:36px;height:36px;border-radius:8px;border:1px solid var(--glass-border);background:var(--glass-bg,#1a2535);color:var(--accent);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;position:relative;">
+  <button id="expense-photo-btn" title="Attach photo" onclick="openExpensePhotoCapture()" style="flex-shrink:0;width:36px;height:36px;border-radius:8px;border:1px solid var(--glass-border);background:var(--input-bg);color:var(--accent);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;position:relative;">
     <svg width="17" height="17" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="9" width="30" height="22" rx="3" stroke="var(--accent)" stroke-width="1.6" fill="var(--accent)" fill-opacity="0.10"/><circle cx="18" cy="20" r="6" stroke="var(--accent)" stroke-width="1.6" fill="var(--accent)" fill-opacity="0.15"/><path d="M13 9l2-4h6l2 4" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>
     <span id="expense-photo-dot" style="display:none;position:absolute;top:4px;right:4px;width:7px;height:7px;border-radius:50%;background:var(--accent);border:1.5px solid var(--card-bg,#111827);"></span>
   </button>
@@ -2512,7 +2569,7 @@ Save Transaction
 <span>Operating Expenses:</span>
 <span class="formula-value u-text-danger" id="cashDetailOperatingExpenses">0.00</span>
 </div>
-<div class="formula-item" style="font-weight:800; background:rgba(37, 99, 235, 0.1); padding:8px; border-radius:10px; margin-top:5px;">
+<div class="formula-item formula-item--highlight">
 <span>NET CASH IN HAND:</span>
 <span class="formula-value u-text-emerald" id="cashDetailNet">0.00</span>
 </div>
@@ -2538,11 +2595,11 @@ Save Transaction
 <span>Representative Credits:</span>
 <span class="formula-value" id="calculatorReceivables">0.00</span>
 </div>
-<div class="formula-item" style="font-weight:800; background:rgba(37, 99, 235, 0.05); padding:8px; border-radius:10px;">
+<div class="formula-item formula-item--highlight-subtle">
 <span>TOTAL RECEIVABLES:</span>
 <span class="formula-value" style="color:var(--accent);" id="formulaReceivables">0.00</span>
 </div>
-<div class="formula-item" style="font-weight:800; background:rgba(37, 99, 235, 0.1); padding:8px; border-radius:10px; margin-top:10px;">
+<div class="formula-item formula-item--highlight formula-item--mt">
 <span>TOTAL CURRENT ASSETS:</span>
 <span class="formula-value u-text-emerald" id="currentAssetsTotal">0.00</span>
 </div>
@@ -2674,19 +2731,19 @@ No records found
 </div>
 <div id="unified-summary" style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--glass-border); display: none;">
 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; font-size: 0.75rem;">
-<div style="display:flex; justify-content:space-between; align-items:center; padding:5px 8px; background:rgba(52,217,116,0.07); border-radius:10px; border-left:3px solid var(--accent-emerald);">
+<div style="display:flex; justify-content:space-between; align-items:center; padding:5px 8px; border-radius:10px; border-left:3px solid var(--accent-emerald);">
 <span class="u-text-muted" >Total Receivable</span>
 <span id="unified-receivables" style="color:var(--accent-emerald); font-weight:700;">0.00</span>
 </div>
-<div style="display:flex; justify-content:space-between; align-items:center; padding:5px 8px; background:rgba(255,184,48,0.07); border-radius:10px; border-left:3px solid var(--warning);">
+<div style="display:flex; justify-content:space-between; align-items:center; padding:5px 8px; border-radius:10px; border-left:3px solid var(--warning);">
 <span class="u-text-muted" >Expenses</span>
 <span id="unified-expenses" style="color:var(--warning); font-weight:700;">0.00</span>
 </div>
-<div style="display:flex; justify-content:space-between; align-items:center; padding:5px 8px; background:rgba(255,77,109,0.07); border-radius:10px; border-left:3px solid var(--danger);">
+<div style="display:flex; justify-content:space-between; align-items:center; padding:5px 8px; border-radius:10px; border-left:3px solid var(--danger);">
 <span class="u-text-muted" >Supplies Payable</span>
 <span id="unified-supplier-payables" style="color:var(--danger); font-weight:700;">0.00</span>
 </div>
-<div style="display:flex; justify-content:space-between; align-items:center; padding:5px 8px; background:rgba(201,110,245,0.07); border-radius:10px; border-left:3px solid var(--accent-purple);">
+<div style="display:flex; justify-content:space-between; align-items:center; padding:5px 8px; border-radius:10px; border-left:3px solid var(--accent-purple);">
 <span class="u-text-muted" >Entity Payable</span>
 <span id="unified-entity-payables" style="color:var(--accent-purple); font-weight:700;">0.00</span>
 </div>
@@ -2859,6 +2916,167 @@ function sidebarNav(tab) {
 }
 window.sidebarNav = sidebarNav;
 
+async function openStoreManagerScreen() {
+  openStandaloneScreen('store-manager-screen');
+  await renderStoreList();
+  resetStoreForm();
+}
+window.openStoreManagerScreen = openStoreManagerScreen;
+
+async function renderStoreList() {
+  const stores = await (typeof getAppStores === 'function' ? getAppStores() : Promise.resolve([]));
+  const container = document.getElementById('store-list-container');
+  if (!container) return;
+
+  let productionData = [];
+  try {
+    productionData = (typeof sqliteStore !== 'undefined') ? (await sqliteStore.get('mfg_pro_pkr') || []) : [];
+  } catch(e) {}
+  const usedKeys = new Set(productionData.map(r => r.store).filter(Boolean));
+
+  if (!stores.length) {
+    container.innerHTML = '<p style="color:var(--text-muted);font-size:0.8rem;padding:12px 0;">No stores found.</p>';
+    return;
+  }
+
+  const fTypeLabel = { standard: 'Standard', asaan: 'Asaan' };
+  const fTypeColor = { standard: 'var(--accent)', asaan: 'var(--accent-purple,#a78bfa)' };
+
+  container.innerHTML = stores.map((s, i) => {
+    const isUsed = usedKeys.has(s.key);
+    const isBuiltin = ['STORE_A','STORE_B','STORE_C'].includes(s.key);
+    return `
+    <div class="settings-list-item" style="flex-direction:column;align-items:stretch;gap:0;padding:12px 14px;margin-bottom:8px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+        <div style="width:36px;height:36px;border-radius:50%;background:rgba(29,233,182,0.1);border:1.5px solid var(--accent);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:0.75rem;color:var(--accent);flex-shrink:0;">
+          ${(s.name || '?').slice(0,2)}
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:800;font-size:0.88rem;color:var(--text-main);">${s.name}</div>
+          <div style="font-size:0.65rem;color:var(--text-muted);margin-top:1px;">
+            Key: <span style="font-family:monospace;color:var(--accent);">${s.key}</span>
+            &nbsp;·&nbsp;
+            <span style="color:${fTypeColor[s.formulaType]||'var(--accent)'};">${fTypeLabel[s.formulaType] || s.formulaType} Formula</span>
+            ${isUsed ? '&nbsp;·&nbsp;<span style="color:var(--text-muted);">Has records</span>' : ''}
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0;">
+          <button onclick="editStore(${i})" style="background:rgba(29,233,182,0.1);border:1px solid var(--accent);color:var(--accent);border-radius:8px;padding:5px 10px;font-size:0.7rem;font-weight:700;cursor:pointer;">Edit</button>
+          ${!isBuiltin && !isUsed ? `<button onclick="deleteStore(${i})" style="background:rgba(239,68,68,0.1);border:1px solid var(--danger);color:var(--danger);border-radius:8px;padding:5px 10px;font-size:0.7rem;font-weight:700;cursor:pointer;">Delete</button>` : ''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+window.renderStoreList = renderStoreList;
+
+function setFormulaToggle(val, btn) {
+  document.getElementById('store-formula-select').value = val;
+  const grp = document.getElementById('formulaTypeToggleGroup');
+  if (grp) grp.querySelectorAll('.toggle-opt').forEach(b => b.classList.toggle('active', b === btn));
+}
+window.setFormulaToggle = setFormulaToggle;
+
+function _setFormulaToggleByValue(val) {
+  document.getElementById('store-formula-select').value = val || 'standard';
+  const grp = document.getElementById('formulaTypeToggleGroup');
+  if (grp) grp.querySelectorAll('.toggle-opt').forEach(b => b.classList.toggle('active', b.getAttribute('onclick').includes("'" + (val || 'standard') + "'")));
+}
+
+function resetStoreForm() {
+  document.getElementById('store-edit-index').value = '-1';
+  document.getElementById('store-name-input').value = '';
+  _setFormulaToggleByValue('standard');
+  document.getElementById('store-form-heading').textContent = 'New Store';
+  document.getElementById('store-save-btn-text').textContent = 'Add Store';
+  const cancelBtn = document.getElementById('store-cancel-edit-btn');
+  if (cancelBtn) cancelBtn.style.display = 'none';
+}
+window.resetStoreForm = resetStoreForm;
+
+async function editStore(index) {
+  const stores = await (typeof getAppStores === 'function' ? getAppStores() : Promise.resolve([]));
+  const s = stores[index];
+  if (!s) return;
+  document.getElementById('store-edit-index').value = String(index);
+  document.getElementById('store-name-input').value = s.name;
+  _setFormulaToggleByValue(s.formulaType || 'standard');
+  document.getElementById('store-form-heading').textContent = 'Edit Store';
+  document.getElementById('store-save-btn-text').textContent = 'Save Changes';
+  const cancelBtn = document.getElementById('store-cancel-edit-btn');
+  if (cancelBtn) cancelBtn.style.display = '';
+  document.getElementById('store-name-input').focus();
+}
+window.editStore = editStore;
+
+async function deleteStore(index) {
+  const stores = await (typeof getAppStores === 'function' ? getAppStores() : Promise.resolve([]));
+  const s = stores[index];
+  if (!s) return;
+  const confirmed = await (typeof showGlassConfirm === 'function'
+    ? showGlassConfirm('Delete store "' + s.name + '"?\nThis cannot be undone.', { title:'Delete Store', confirmText:'Delete', cancelText:'Cancel', icon:'🗑' })
+    : Promise.resolve(window.confirm('Delete store "' + s.name + '"?')));
+  if (!confirmed) return;
+  stores.splice(index, 1);
+  await sqliteStore.set('app_stores', stores);
+  await sqliteStore.set('app_stores_timestamp', Date.now());
+  if (typeof _invalidateStoresCache === 'function') _invalidateStoresCache();
+  if (typeof triggerAutoSync === 'function') triggerAutoSync();
+  await renderStoreList();
+  if (typeof rebuildStoreUI === 'function') await rebuildStoreUI();
+  if (typeof showToast === 'function') showToast('Store deleted', 'success');
+}
+window.deleteStore = deleteStore;
+
+async function saveStoreFromForm() {
+  const nameRaw = (document.getElementById('store-name-input').value || '').trim().toUpperCase();
+  const formulaType = document.getElementById('store-formula-select').value || 'standard';
+  const editIndex = parseInt(document.getElementById('store-edit-index').value, 10);
+
+  if (!nameRaw) {
+    if (typeof showToast === 'function') showToast('Store name is required', 'warning');
+    return;
+  }
+
+  const stores = await (typeof getAppStores === 'function' ? getAppStores() : Promise.resolve([]));
+
+  if (editIndex >= 0) {
+    // Editing existing store
+    const s = stores[editIndex];
+    if (!s) return;
+    // Check duplicate name
+    const dup = stores.findIndex((st, i) => i !== editIndex && st.name === nameRaw);
+    if (dup >= 0) { if (typeof showToast === 'function') showToast('A store with this name already exists', 'warning'); return; }
+    s.name = nameRaw;
+    s.formulaType = formulaType;
+  } else {
+    // New store — generate next key
+    const existingNums = stores.map(s => {
+      const m = s.key.match(/^STORE_([A-Z])$/);
+      if (m) return m[1].charCodeAt(0) - 65;
+      return -1;
+    }).filter(n => n >= 0);
+    const nextNum = existingNums.length ? Math.max(...existingNums) + 1 : 0;
+    if (nextNum > 25) { if (typeof showToast === 'function') showToast('Maximum 26 stores allowed', 'warning'); return; }
+    const newKey = 'STORE_' + String.fromCharCode(65 + nextNum);
+    // Check duplicate name
+    const dup = stores.findIndex(st => st.name === nameRaw);
+    if (dup >= 0) { if (typeof showToast === 'function') showToast('A store with this name already exists', 'warning'); return; }
+    stores.push({ key: newKey, name: nameRaw, formulaType });
+  }
+
+  await sqliteStore.set('app_stores', stores);
+  await sqliteStore.set('app_stores_timestamp', Date.now());
+  if (typeof _invalidateStoresCache === 'function') _invalidateStoresCache();
+  if (typeof triggerAutoSync === 'function') triggerAutoSync();
+  resetStoreForm();
+  await renderStoreList();
+  if (typeof rebuildStoreUI === 'function') await rebuildStoreUI();
+  if (typeof showToast === 'function') showToast(editIndex >= 0 ? 'Store updated' : 'Store added', 'success');
+}
+window.saveStoreFromForm = saveStoreFromForm;
+// ─────────────────────────────────────────────────────────────────────────────
+
 window.openDataMenu = function() { if(typeof performOneClickSync==='function') performOneClickSync().catch(function(e){console.error('Sync error:',(e&&e.message)||String(e)||'(unknown)')}); };
 window.closeDataMenu = function() {  };
 
@@ -2914,7 +3132,6 @@ window._origOpenFactorySettings = window.openFactorySettings;
 
 async function _loadFormulaScreen(store) {
   window.currentFactorySettingsStore = store;
-  if (typeof selectFactoryStore === 'function') selectFactoryStore(store, null);
 
   if (store === 'asaan') {
 
@@ -2971,8 +3188,56 @@ async function _loadFormulaScreen(store) {
     }
   } else {
 
-    if (window._origOpenFactorySettings) {
-      try { await window._origOpenFactorySettings.call(window); } catch(e) {}
+    try {
+      var stdFormulas  = await sqliteStore.get('factory_default_formulas');
+      var stdCosts     = await sqliteStore.get('factory_additional_costs');
+      var stdFactor    = await sqliteStore.get('factory_cost_adjustment_factor');
+      var stdPrices    = await sqliteStore.get('factory_sale_prices');
+      var stdTracking  = await sqliteStore.get('factory_unit_tracking');
+      var stdInventory = await sqliteStore.get('factory_inventory_data');
+
+      var stdFormula    = (stdFormulas  && stdFormulas.standard)              || [];
+      var stdAddlCost   = (stdCosts     && stdCosts.standard   != null)       ? stdCosts.standard   : 0;
+      var stdAdj        = (stdFactor    && stdFactor.standard  != null)       ? stdFactor.standard  : 1;
+      var stdSaleStd    = (stdPrices    && stdPrices.standard  != null)       ? stdPrices.standard  : 0;
+      var stdSaleAsaan  = (stdPrices    && stdPrices.asaan     != null)       ? stdPrices.asaan     : 0;
+      var stdAvailable  = (stdTracking  && stdTracking.standard)              ? stdTracking.standard.available : 0;
+
+      var acpu = document.getElementById('additional-cost-per-unit');
+      var caf  = document.getElementById('cost-adjustment-factor');
+      var spS  = document.getElementById('sale-price-standard');
+      var spA  = document.getElementById('sale-price-asaan');
+      if (acpu) acpu.value = stdAddlCost;
+      if (caf)  caf.value  = stdAdj;
+      if (spS)  spS.value  = stdSaleStd;
+      if (spA)  spA.value  = stdSaleAsaan;
+
+      var stdContainer = document.getElementById('factoryRawMaterialsContainer');
+      if (stdContainer) {
+        stdContainer.replaceChildren();
+        var safeStdInventory = Array.isArray(stdInventory) ? stdInventory : [];
+        for (var ing of stdFormula) {
+          if (typeof createFactorySettingRow === 'function') {
+            await createFactorySettingRow(stdContainer, ing.id, ing.quantity, ing.cost, ing.name, safeStdInventory);
+          }
+        }
+      }
+
+      var totalRawCost = 0, totalWeight = 0;
+      stdFormula.forEach(function(ing) {
+        totalRawCost += (ing.cost * ing.quantity);
+        totalWeight  += ing.quantity;
+      });
+      var perUnitCost    = totalRawCost + stdAddlCost;
+      var salesCostPerKg = stdAdj > 0 ? perUnitCost / stdAdj : perUnitCost;
+      var _setS = function(id, val) { var el = document.getElementById(id); if (el) el.innerText = val; };
+      _setS('factorySettingsUnitWeight',      (parseFloat(totalWeight) || 0).toFixed(2) + ' kg');
+      _setS('factorySettingsRawCostPerUnit',  totalRawCost.toFixed(2));
+      _setS('factorySettingsPerUnit',         perUnitCost.toFixed(2));
+      _setS('factorySettingsAvailableUnits',  stdAvailable);
+      _setS('factorySettingsSalesCostPerKg',  salesCostPerKg.toFixed(2));
+    } catch(e) {
+      console.error('[_loadFormulaScreen standard]', e);
     }
   }
 }
@@ -3149,6 +3414,14 @@ document.addEventListener('DOMContentLoaded', function() {
   document.querySelectorAll('.sidebar-nav-btn').forEach(function(b) { b.classList.remove('active'); });
   var firstActive = document.getElementById('snav-prod');
   if (firstActive) firstActive.classList.add('active');
+
+  // Rebuild dynamic store UI once stores are loaded
+  if (typeof rebuildStoreUI === 'function') {
+    // Small delay to let sqliteStore initialize
+    setTimeout(function() {
+      rebuildStoreUI().catch(function(e) { console.warn('[StoreUI]', e && e.message); });
+    }, 600);
+  }
 
   document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
