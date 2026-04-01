@@ -625,6 +625,9 @@ window._firestoreNetworkDisabled = false;
 setTimeout(() => {
 if (typeof triggerAutoSync === 'function') triggerAutoSync();
 }, 1500);
+if (typeof _checkDeviceStatus === 'function') {
+setTimeout(_checkDeviceStatus, 2000);
+}
 });
 setInterval(async () => {
 if (!navigator.onLine) return;
@@ -1151,13 +1154,15 @@ const netElement = document.getElementById('net-wt');
 const dateElement = document.getElementById('sys-date');
 const storeElement = document.getElementById('storeSelector');
 const formulaUnitsElement = document.getElementById('formula-units');
+const grossWtEl = document.getElementById('gross-wt');
+const contWtEl = document.getElementById('cont-wt');
 if (!netElement || !dateElement || !storeElement || !formulaUnitsElement) {
 showToast('Form error: Missing required fields', 'error');
 return;
 }
 const net = parseFloat(netElement.value) || 0;
-const gross = parseFloat(document.getElementById('gross-wt')?.value) || 0;
-const cont = parseFloat(document.getElementById('cont-wt')?.value) || 0;
+const grossWt = parseFloat(grossWtEl ? grossWtEl.value : 0) || 0;
+const contWt = parseFloat(contWtEl ? contWtEl.value : 0) || 0;
 const inputDate = dateElement.value;
 const store = storeElement.value;
 const formulaUnits = parseFloat(formulaUnitsElement.value) || 0;
@@ -1210,8 +1215,6 @@ date: inputDate,
 time: timeString,
 store: store,
 net,
-gross: gross || undefined,
-cont: cont || undefined,
 cp: costData.dynamicCostPerKg,
 sp: salePrice,
 totalCost,
@@ -1220,6 +1223,8 @@ profit,
 formulaUnits: formulaUnits,
 formulaStore: costData.formulaStore,
 formulaCost: costData.totalFormulaCost,
+grossWt: grossWt || 0,
+contWt: contWt || 0,
 paymentStatus: paymentStatus,
 timestamp: prodCreatedAt,
 recordDate: new Date(inputDate).getTime(),
@@ -1239,18 +1244,18 @@ showToast(" Failed to save production entry. Please try again.", "error");
 return;
 }
 await syncFactoryProductionStats().catch(e => console.warn('[saveProductionEntry] stats failed:', _safeErr(e)));
-const grossWt = document.getElementById('gross-wt');
-const contWt = document.getElementById('cont-wt');
-const netWt = document.getElementById('net-wt');
+const _clearGrossWt = document.getElementById('gross-wt');
+const _clearContWt = document.getElementById('cont-wt');
+const _clearNetWt = document.getElementById('net-wt');
 const formulaUnitsEl = document.getElementById('formula-units');
 const displayCostValue = document.getElementById('display-cost-value');
 const profitPerKg = document.getElementById('profit-per-kg');
 const formulaUnitCostDisplay = document.getElementById('formula-unit-cost-display');
 const totalFormulaCostDisplay = document.getElementById('total-formula-cost-display');
 const dynamicCostPerKg = document.getElementById('dynamic-cost-per-kg');
-if (grossWt) grossWt.value = '';
-if (contWt) contWt.value = '';
-if (netWt) netWt.value = '';
+if (_clearGrossWt) _clearGrossWt.value = '';
+if (_clearContWt) _clearContWt.value = '';
+if (_clearNetWt) _clearNetWt.value = '';
 if (formulaUnitsEl) formulaUnitsEl.value = '1';
 if (displayCostValue) displayCostValue.innerText = '0.00';
 if (profitPerKg) profitPerKg.innerText = '0.00';
@@ -7114,17 +7119,13 @@ const highlightClass = isSelected ? 'highlight-card' : '';
 const dateDisplay = isSelected ? `${formatDisplayDate(item.date)} (Selected)` : formatDisplayDate(item.date);
 const storeBadgeClass = item.store === 'STORE_A' ? 'store-a' : item.store === 'STORE_B' ? 'store-b' : 'store-c';
 const storeLabel = item.store === 'STORE_A' ? 'ZUBAIR' : item.store === 'STORE_B' ? 'MAHMOOD' : 'ASAAN';
-let returnBadge = '';
-if (item.isReturn) {
-returnBadge = `<span class="payment-badge" style="top: 35px; right: 12px; color: var(--accent-emerald);"> RETURN</span>`;
-}
 let paymentBadge = '';
 let mergedBadge = '';
 if (item.isMerged) {
 mergedBadge = _mergedBadgeHtml(item, {inline:true});
 }
 const div = document.createElement('div');
-div.className = `card liquid-card ${highlightClass}`;
+div.className = `card liquid-card ${highlightClass}${item.isReturn ? ' return-card' : ''}`;
 if (item.date) div.setAttribute('data-date', item.date);
 let returnsByStoreHtml = '';
 if (item.isMerged && item.isReturn && item.returnsByStore && Object.keys(item.returnsByStore).length > 1) {
@@ -7132,18 +7133,6 @@ if (item.isMerged && item.isReturn && item.returnsByStore && Object.keys(item.re
     `<p><span style="color:var(--text-muted);">${esc(typeof getStoreLabel === 'function' ? getStoreLabel(s) : s)}:</span> <span class="qty-val">${safeValue(q).toFixed(2)} kg</span></p>`
   ).join('');
 }
-if (item.isReturn) {
-div.innerHTML = `
-${currentProductionView === 'combined' ? `<span class="store-badge ${storeBadgeClass}">${esc(storeLabel)}</span>` : ''}
-<div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-bottom:4px;">
-<h4 style="margin:0;">${dateDisplay} @ ${esc(item.time || '')}${mergedBadge}</h4>
-</div>
-<p style="color:var(--accent-emerald); font-size:0.75rem; font-style:italic;">${item.isMerged ? 'Merged returns by' : 'Returned by'} ${esc(item.returnedBy || 'Representative')}</p>
-<p><span>Returned Weight:</span> <span class="qty-val">${safeValue(item.net).toFixed(2)} kg</span></p>
-${returnsByStoreHtml}
-${item.isMerged ? '' : `<button class="tbl-action-btn danger u-w-full" style="margin-top:20px;" onclick="(async () => { await deleteProdEntry('${esc(item.id)}') })()">Delete</button>`}
-`;
-} else {
 div.innerHTML = `
 ${currentProductionView === 'combined' ? `<span class="store-badge ${storeBadgeClass}">${esc(storeLabel)}</span>` : ''}
 ${item.isMerged ? '' : paymentBadge}
@@ -7152,8 +7141,14 @@ ${item.isMerged ? '' : paymentBadge}
 ${item.managedBy ? `<span class="managed-by-badge">${esc(item.managedBy)}</span>` : ''}
 ${item.createdBy && typeof _creatorBadgeHtml === 'function' ? _creatorBadgeHtml(item) : ''}
 </div>
-${item.gross ? `<p><span>Gross Weight:</span> <span class="qty-val">${safeValue(item.gross).toFixed(2)} kg</span></p>` : ''}
-${item.cont ? `<p><span>Container Weight:</span> <span class="qty-val">${safeValue(item.cont).toFixed(2)} kg</span></p>` : ''}
+${item.isReturn ? `
+<p style="color:var(--accent-emerald);font-size:0.75rem;font-style:italic;">${item.isMerged ? 'Merged returns by' : 'Returned by'} ${esc(item.returnedBy || 'Representative')}</p>
+<p><span>Returned:</span> <span class="qty-val">${safeValue(item.net).toFixed(2)} kg</span></p>
+${returnsByStoreHtml}
+${item.isMerged ? '' : `<button class="tbl-action-btn danger u-w-full u-mt-8" onclick="(async () => { await deleteProdEntry('${esc(item.id)}') })()">Delete</button>`}
+` : `
+${item.grossWt ? `<p><span>Gross Weight:</span> <span class="qty-val">${safeValue(item.grossWt).toFixed(2)} kg</span></p>` : ''}
+${item.contWt ? `<p><span>Container:</span> <span style="color:var(--text-muted);">${safeValue(item.contWt).toFixed(2)} kg</span></p>` : ''}
 <p><span>Net Weight:</span> <span class="qty-val">${safeValue(item.net).toFixed(2)} kg</span></p>
 <p><span>Cost Price:</span> <span class="cost-val">${safeValue(item.cp).toFixed(2)}/kg</span></p>
 <p><span>Sale Price:</span> <span class="rev-val">${safeValue(item.sp).toFixed(2)}/kg</span></p>
@@ -7164,8 +7159,8 @@ ${item.cont ? `<p><span>Container Weight:</span> <span class="qty-val">${safeVal
 ${item.formulaUnits ? `<p><span>Formula Units:</span> <span class="qty-val">${safeValue(item.formulaUnits).toFixed(2)}</span></p>` : ''}
 ${item.formulaCost ? `<p><span>Formula Cost:</span> <span class="cost-val">${fmtAmt(safeValue(item.formulaCost))}</span></p>` : ''}
 ${item.isMerged ? '' : `<button class="tbl-action-btn danger u-w-full u-mt-8" onclick="(async () => { await deleteProdEntry('${esc(item.id)}') })()">Delete</button>`}
+`}
 `;
-}
 fragment.appendChild(div);
 });
 histContainer.replaceChildren(fragment);
@@ -12638,12 +12633,29 @@ const supplierIds = new Set();
 if (typeof factoryInventoryData !== 'undefined') {
 factoryInventoryData.forEach(m => { if (m.supplierId) supplierIds.add(String(m.supplierId)); });
 }
+if (typeof paymentTransactions !== 'undefined') {
+paymentTransactions.forEach(t => {
+if (t.isPayable && t.type === 'IN' && t.supplierCreditAmount) {
+supplierIds.add(String(t.entityId));
+}
+});
+}
 const supplierEntityBalances = {};
 if (typeof factoryInventoryData !== 'undefined') {
 factoryInventoryData.forEach(material => {
 if (material.supplierId && material.paymentStatus === 'pending' && material.totalPayable > 0) {
 const sid = String(material.supplierId);
 supplierEntityBalances[sid] = (supplierEntityBalances[sid] || 0) + material.totalPayable;
+}
+});
+}
+if (typeof paymentTransactions !== 'undefined') {
+paymentTransactions.forEach(t => {
+if (!t.isPayable || t.type !== 'IN' || !t.supplierCreditAmount) return;
+const creditAmt = parseFloat(t.supplierCreditAmount) || 0;
+if (creditAmt > 0) {
+const sid = String(t.entityId);
+supplierEntityBalances[sid] = (supplierEntityBalances[sid] || 0) + creditAmt;
 }
 });
 }
@@ -17164,6 +17176,45 @@ window.removeDevice = removeDevice;
 window.getDeviceId = getDeviceId;
 window.getDeviceName = getDeviceName;
 window.registerDevice = registerDevice;
+async function _checkDeviceStatus() {
+if (!firebaseDB || !currentUser) return;
+if (window._firestoreNetworkDisabled || !navigator.onLine) return;
+try {
+const deviceId = await getDeviceId();
+if (!deviceId) return;
+const deviceRef = firebaseDB.collection('users').doc(currentUser.uid)
+.collection('devices').doc(deviceId);
+const doc = await deviceRef.get();
+if (!doc.exists) {
+if (typeof signOut === 'function') {
+showToast('This device has been removed. Logging out…', 'warning', 4000);
+setTimeout(() => signOut().catch(() => {}), 800);
+}
+return;
+}
+const data = doc.data();
+if (data && (data.forceLogout === true || data.targetMode === 'force_logout')) {
+if (typeof signOut === 'function') {
+showToast('Logged out remotely by admin.', 'warning', 4000);
+setTimeout(() => signOut().catch(() => {}), 800);
+}
+}
+} catch (_e) {}
+}
+window._deviceStatusPollInterval = window._deviceStatusPollInterval || null;
+function _startDeviceStatusPolling() {
+if (window._deviceStatusPollInterval) return;
+window._deviceStatusPollInterval = setInterval(_checkDeviceStatus, 30000);
+}
+function _stopDeviceStatusPolling() {
+if (window._deviceStatusPollInterval) {
+clearInterval(window._deviceStatusPollInterval);
+window._deviceStatusPollInterval = null;
+}
+}
+window._checkDeviceStatus = _checkDeviceStatus;
+window._startDeviceStatusPolling = _startDeviceStatusPolling;
+window._stopDeviceStatusPolling = _stopDeviceStatusPolling;
 async function restoreDeviceModeOnLogin(uid) {
 
 function _applyModeFromData(modeStr, ts, assignedRep, assignedManager, assignedUserTabs, remoteApplied) {
@@ -17340,9 +17391,9 @@ console.warn('[device] listenForDeviceCommands retry failed:', _safeErr(e));
 }, delay);
 });
 window.deviceCommandsUnsubscribe = unsubscribe;
-
 window._deviceCmdRetryAttempts = 0;
 window._deviceCmdRetrying = false;
+if (typeof _startDeviceStatusPolling === 'function') _startDeviceStatusPolling();
 } catch (error) {
 console.error('[device] listenForDeviceCommands failed:', _safeErr(error));
 }

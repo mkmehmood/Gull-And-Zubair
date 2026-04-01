@@ -1318,6 +1318,13 @@ grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 gap: 12px;
 margin-bottom: 20px;
 }
+#prodHistoryList .card:not(.return-card),
+#historyList .card {
+min-height: 180px;
+}
+#prodHistoryList .return-card {
+min-height: 0;
+}
 .card {
 background: linear-gradient(160deg,
 rgba(255,255,255,0.13) 0%,
@@ -1331,7 +1338,6 @@ transition: all 0.3s;
 box-shadow: var(--shadow);
 backdrop-filter: blur(32px) saturate(180%);
 -webkit-backdrop-filter: blur(32px) saturate(180%);
-min-height: 180px;
 display: flex;
 flex-direction: column;
 }
