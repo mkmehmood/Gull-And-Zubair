@@ -975,7 +975,7 @@ ensureRecordIntegrity(material, true);
 const payableTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
 const now = new Date();
 const dateStr = now.toISOString().split('T')[0];
-const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 let payableTxId = generateUUID('pay');
 if (!validateUUID(payableTxId)) payableTxId = generateUUID('pay');
 const payableTxCreatedAt = getTimestamp();
@@ -1185,7 +1185,7 @@ const _savedFormulaType = typeof getStoreFormulaType === 'function' ? await getS
 const productionRecord = {
 id: factProdId,
 date: new Date().toISOString().split('T')[0],
-time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
 store: currentFactoryEntryStore,
 formulaType: _savedFormulaType,
 units,

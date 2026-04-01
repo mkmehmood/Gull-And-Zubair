@@ -747,7 +747,7 @@ s.paymentType === 'CREDIT' && !s.creditReceived
 if (pending.length === 0) { showToast('No pending credit transactions found for this customer.', 'info', 4000); return; }
 const nowDate = new Date();
 const nowISODate = nowDate.toISOString().split('T')[0];
-const nowTime = nowDate.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+const nowTime = nowDate.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: true});
 const nowEpoch = getTimestamp();
 for (const sale of pending) {
 if (remaining <= 0) break;
@@ -837,7 +837,7 @@ s.paymentType === 'CREDIT' && !s.creditReceived
 if (pending.length === 0) { showToast('No pending credit transactions found for this customer.', 'info', 4000); return; }
 const nowDate = new Date();
 const nowISODate = nowDate.toISOString().split('T')[0];
-const nowTime = nowDate.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+const nowTime = nowDate.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: true});
 const nowEpoch = getTimestamp();
 for (const sale of pending) {
 if (remaining <= 0) break;
@@ -1211,7 +1211,7 @@ tx.totalValue = oldDebit; tx.customerPhone = phone; tx.timestamp = getTimestamp(
 tx.updatedAt = getTimestamp();
 tx.currentRepProfile = 'admin';
 if (amountChanged) { tx.creditReceived = false; tx.partialPaymentReceived = 0; }
-if (!tx.time) tx.time = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+if (!tx.time) tx.time = new Date().toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: true});
 ensureRecordIntegrity(tx, true);
 oldDebtModified = true; oldDebtRecord = tx;
 } else {
@@ -1220,7 +1220,7 @@ customerName: name, customerPhone: phone, salesRep: 'ADMIN', quantity: 0,
 supplyStore: 'N/A', paymentType: 'CREDIT', transactionType: 'OLD_DEBT',
 currentRepProfile: 'admin',
 totalValue: oldDebit, creditReceived: false, partialPaymentReceived: 0,
-time: new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}),
+time: new Date().toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: true}),
 timestamp: getTimestamp(), createdAt: getTimestamp(), updatedAt: getTimestamp(),
 notes: 'Previous balance brought forward' };
 salesArray.push(tx); oldDebtModified = true; oldDebtRecord = tx;

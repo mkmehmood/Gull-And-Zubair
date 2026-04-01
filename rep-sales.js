@@ -1293,7 +1293,7 @@ const amountChanged = tx.totalValue !== oldDebit;
 tx.totalValue = oldDebit; tx.customerPhone = phone; tx.timestamp = getTimestamp();
 tx.updatedAt = getTimestamp();
 if (amountChanged) { tx.creditReceived = false; tx.partialPaymentReceived = 0; }
-if (!tx.time) tx.time = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+if (!tx.time) tx.time = new Date().toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: true});
 ensureRecordIntegrity(tx, true);
 oldDebtModified = true; oldDebtRecord = tx;
 } else {
@@ -1301,7 +1301,7 @@ const tx = { id: generateUUID('old_debt'), date: new Date().toISOString().split(
 customerName: name, customerPhone: phone, salesRep: currentRepProfile, quantity: 0,
 supplyStore: 'N/A', paymentType: 'CREDIT', transactionType: 'OLD_DEBT',
 totalValue: oldDebit, creditReceived: false, partialPaymentReceived: 0,
-time: new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}),
+time: new Date().toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: true}),
 timestamp: getTimestamp(), createdAt: getTimestamp(), updatedAt: getTimestamp(),
 notes: 'Previous balance brought forward' };
 salesArray.push(tx); oldDebtModified = true; oldDebtRecord = tx;
@@ -1720,7 +1720,7 @@ for (let i = 1; i <= pageCount; i++) {
 doc.setPage(i);
 doc.setFontSize(7); doc.setTextColor(160);
 doc.text(
-`Generated on ${now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })} at ${now.toLocaleTimeString('en-US')} | GULL AND ZUBAIR NASWAR DEALERS`,
+`Generated on ${now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })} at ${now.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: true})} | GULL AND ZUBAIR NASWAR DEALERS`,
 pageW / 2, 291, { align: 'center' }
 );
 doc.text(`Page ${i} of ${pageCount}`, pageW / 2, 287, { align: 'center' });

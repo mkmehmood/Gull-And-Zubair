@@ -1156,6 +1156,8 @@ showToast('Form error: Missing required fields', 'error');
 return;
 }
 const net = parseFloat(netElement.value) || 0;
+const gross = parseFloat(document.getElementById('gross-wt')?.value) || 0;
+const cont = parseFloat(document.getElementById('cont-wt')?.value) || 0;
 const inputDate = dateElement.value;
 const store = storeElement.value;
 const formulaUnits = parseFloat(formulaUnitsElement.value) || 0;
@@ -1208,6 +1210,8 @@ date: inputDate,
 time: timeString,
 store: store,
 net,
+gross: gross || undefined,
+cont: cont || undefined,
 cp: costData.dynamicCostPerKg,
 sp: salePrice,
 totalCost,
@@ -2863,7 +2867,7 @@ for (let i = 1; i <= pageCount; i++) {
 doc.setPage(i);
 doc.setFontSize(7); doc.setTextColor(160);
 doc.text(
-`Generated on ${now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })} at ${now.toLocaleTimeString('en-US')} | GULL AND ZUBAIR NASWAR DEALERS`,
+`Generated on ${now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })} at ${now.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: true})} | GULL AND ZUBAIR NASWAR DEALERS`,
 pageW / 2, 291, { align: 'center' }
 );
 doc.text(`Page ${i} of ${pageCount}`, pageW / 2, 287, { align: 'center' });
@@ -3216,7 +3220,7 @@ for (let i = 1; i <= pageCount; i++) {
 doc.setPage(i);
 doc.setFontSize(7); doc.setTextColor(160);
 doc.text(
-`Generated on ${now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })} at ${now.toLocaleTimeString('en-US')} | GULL AND ZUBAIR NASWAR DEALERS`,
+`Generated on ${now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })} at ${now.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: true})} | GULL AND ZUBAIR NASWAR DEALERS`,
 pageW / 2, 291, { align: 'center' }
 );
 doc.text(`Page ${i} of ${pageCount}`, pageW / 2, 287, { align: 'center' });
@@ -4685,6 +4689,11 @@ rawMaterialSupplierIds.add(String(material.supplierId));
 }
 });
 }
+paymentTransactions.forEach(transaction => {
+if (transaction.isPayable && transaction.type === 'IN' && transaction.supplierCreditAmount) {
+rawMaterialSupplierIds.add(String(transaction.entityId));
+}
+});
 const entityBalances = {};
 paymentEntities.forEach(entity => {
 if (entity.isExpenseEntity === true) return;
@@ -4692,6 +4701,7 @@ entityBalances[entity.id] = 0;
 });
 paymentTransactions.forEach(transaction => {
 if (transaction.isExpense === true) return;
+if (rawMaterialSupplierIds.has(String(transaction.entityId))) return;
 if (entityBalances[transaction.entityId] !== undefined) {
 if (transaction.type === 'OUT') {
 entityBalances[transaction.entityId] -= parseFloat(transaction.amount) || 0;
@@ -6541,7 +6551,7 @@ doc.setFontSize(12); doc.setFont(undefined,'bold'); doc.setTextColor(50,50,50);
 const titleText = type === 'rep' ? `My Customers — ${currentRepProfile || ''}` : 'All Customers — Complete List';
 doc.text(titleText, pageW/2, 30, { align:'center' });
 doc.setFontSize(8.5); doc.setFont(undefined,'normal'); doc.setTextColor(100,100,100);
-doc.text(`Generated: ${new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})} at ${new Date().toLocaleTimeString('en-US')}`, pageW/2, 36, { align:'center' });
+doc.text(`Generated: ${new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})} at ${new Date().toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: true})}`, pageW/2, 36, { align:'center' });
 doc.setDrawColor(...hdrColor); doc.setLineWidth(0.5);
 doc.line(14, 39, pageW - 14, 39);
 const customerRows = [];
@@ -6626,7 +6636,7 @@ for (let i = 1; i <= pageCount; i++) {
 doc.setPage(i);
 doc.setFontSize(7); doc.setTextColor(160);
 doc.text(
-`Generated on ${new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})} at ${new Date().toLocaleTimeString('en-US')} | GULL AND ZUBAIR NASWAR DEALERS`,
+`Generated on ${new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})} at ${new Date().toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: true})} | GULL AND ZUBAIR NASWAR DEALERS`,
 pageW/2, pageH - 5, { align:'center' }
 );
 doc.text(`Page ${i} of ${pageCount}`, pageW/2, pageH - 9, { align:'center' });
@@ -6658,7 +6668,7 @@ if (sale.quantity <= remainingQty) {
 sale.paymentType = 'CASH';
 sale.creditReceived = true;
 sale.creditReceivedDate = new Date().toISOString().split('T')[0];
-sale.creditReceivedTime = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+sale.creditReceivedTime = new Date().toLocaleTimeString('en-US', {hour: '2-digit', minute:'2-digit', hour12: true});
 if (!sale.currentRepProfile) sale.currentRepProfile = 'admin';
 sale.updatedAt = getTimestamp();
 ensureRecordIntegrity(sale, true);
@@ -7122,16 +7132,30 @@ if (item.isMerged && item.isReturn && item.returnsByStore && Object.keys(item.re
     `<p><span style="color:var(--text-muted);">${esc(typeof getStoreLabel === 'function' ? getStoreLabel(s) : s)}:</span> <span class="qty-val">${safeValue(q).toFixed(2)} kg</span></p>`
   ).join('');
 }
+if (item.isReturn) {
 div.innerHTML = `
 ${currentProductionView === 'combined' ? `<span class="store-badge ${storeBadgeClass}">${esc(storeLabel)}</span>` : ''}
 ${returnBadge}
+${item.isMerged ? '' : ''}
+<div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-bottom:4px;">
+<h4 style="margin:0;">${dateDisplay} @ ${esc(item.time || '')}${mergedBadge}</h4>
+</div>
+<p style="color:var(--accent-emerald); font-size:0.75rem; font-style:italic;">${item.isMerged ? 'Merged returns by' : 'Returned by'} ${esc(item.returnedBy || 'Representative')}</p>
+<p><span>Returned Weight:</span> <span class="qty-val">${safeValue(item.net).toFixed(2)} kg</span></p>
+${returnsByStoreHtml}
+${item.isMerged ? '' : `<button class="tbl-action-btn danger u-w-full u-mt-8" onclick="(async () => { await deleteProdEntry('${esc(item.id)}') })()">Delete</button>`}
+`;
+} else {
+div.innerHTML = `
+${currentProductionView === 'combined' ? `<span class="store-badge ${storeBadgeClass}">${esc(storeLabel)}</span>` : ''}
 ${item.isMerged ? '' : paymentBadge}
 <div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-bottom:4px;">
 <h4 style="margin:0;">${dateDisplay} @ ${esc(item.time || '')}${mergedBadge}</h4>
 ${item.managedBy ? `<span class="managed-by-badge">${esc(item.managedBy)}</span>` : ''}
 ${item.createdBy && typeof _creatorBadgeHtml === 'function' ? _creatorBadgeHtml(item) : ''}
 </div>
-${item.isReturn ? `<p style="color:var(--accent-emerald); font-size:0.75rem; font-style:italic;">${item.isMerged ? 'Merged returns by' : 'Returned by'} ${esc(item.returnedBy || 'Representative')}</p>` : ''}
+${item.gross ? `<p><span>Gross Weight:</span> <span class="qty-val">${safeValue(item.gross).toFixed(2)} kg</span></p>` : ''}
+${item.cont ? `<p><span>Container Weight:</span> <span class="qty-val">${safeValue(item.cont).toFixed(2)} kg</span></p>` : ''}
 <p><span>Net Weight:</span> <span class="qty-val">${safeValue(item.net).toFixed(2)} kg</span></p>
 <p><span>Cost Price:</span> <span class="cost-val">${safeValue(item.cp).toFixed(2)}/kg</span></p>
 <p><span>Sale Price:</span> <span class="rev-val">${safeValue(item.sp).toFixed(2)}/kg</span></p>
@@ -7139,11 +7163,11 @@ ${item.isReturn ? `<p style="color:var(--accent-emerald); font-size:0.75rem; fon
 <p><span>Total Cost:</span> <span class="cost-val">${fmtAmt(safeValue(item.totalCost))}</span></p>
 <p><span>Total Value:</span> <span class="rev-val">${fmtAmt(safeValue(item.totalSale))}</span></p>
 <p><span>Net Profit:</span> <span class="profit-val">${fmtAmt(safeValue(item.profit))}</span></p>
-${returnsByStoreHtml}
-${item.formulaUnits && !item.isReturn ? `<p><span>Formula Units:</span> <span class="qty-val">${safeValue(item.formulaUnits).toFixed(2)}</span></p>` : ''}
-${item.formulaCost && !item.isReturn ? `<p><span>Formula Cost:</span> <span class="cost-val">${fmtAmt(safeValue(item.formulaCost))}</span></p>` : ''}
+${item.formulaUnits ? `<p><span>Formula Units:</span> <span class="qty-val">${safeValue(item.formulaUnits).toFixed(2)}</span></p>` : ''}
+${item.formulaCost ? `<p><span>Formula Cost:</span> <span class="cost-val">${fmtAmt(safeValue(item.formulaCost))}</span></p>` : ''}
 ${item.isMerged ? '' : `<button class="tbl-action-btn danger u-w-full u-mt-8" onclick="(async () => { await deleteProdEntry('${esc(item.id)}') })()">Delete</button>`}
 `;
+}
 fragment.appendChild(div);
 });
 histContainer.replaceChildren(fragment);
@@ -11214,6 +11238,13 @@ factoryInventoryData.forEach(m => {
 if (m.supplierId) supplierIdSet.add(String(m.supplierId));
 });
 }
+if (typeof paymentTransactions !== 'undefined') {
+paymentTransactions.forEach(t => {
+if (t.isPayable && t.type === 'IN' && t.supplierCreditAmount) {
+supplierIdSet.add(String(t.entityId));
+}
+});
+}
 const balances = {};
 paymentEntities.forEach(entity => {
 if (entity.isExpenseEntity === true) return;
@@ -11755,7 +11786,7 @@ updated = true;
 }
 if (!transaction.time && transaction.timestamp) {
 const d = new Date(transaction.timestamp);
-transaction.time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+transaction.time = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 updated = true;
 }
 if (transaction.description === undefined) {
@@ -12125,8 +12156,8 @@ const da = new Date(a.purchaseDate || a.date || a.createdAt || 0).getTime();
 const db = new Date(b.purchaseDate || b.date || b.createdAt || 0).getTime();
 return da - db;
 });
-if (pendingMaterials.length > 0) {
 let remaining = amount;
+if (pendingMaterials.length > 0) {
 const materialsToSave = [];
 for (const mat of pendingMaterials) {
 if (remaining <= 0) break;
@@ -12152,10 +12183,37 @@ await unifiedSave('factory_inventory_data', factoryInventoryData, mat);
 }
 }
 }
+if (remaining > 0) {
+const openCredits = paymentTransactions
+.filter(t =>
+t.isPayable === true &&
+t.type === 'IN' &&
+String(t.entityId) === String(entity.id) &&
+parseFloat(t.supplierCreditAmount || 0) > 0
+)
+.sort((a, b) => new Date(a.date || a.createdAt || 0) - new Date(b.date || b.createdAt || 0));
+for (const ct of openCredits) {
+if (remaining <= 0) break;
+const open = parseFloat(ct.supplierCreditAmount);
+if (remaining >= open) {
+remaining -= open;
+ct.supplierCreditAmount = 0;
+} else {
+ct.supplierCreditAmount = parseFloat((open - remaining).toFixed(2));
+remaining = 0;
+}
+ct.updatedAt = getTimestamp();
+ensureRecordIntegrity(ct, true);
+await unifiedSave('payment_transactions', paymentTransactions, ct);
+}
+if (!transaction.isPayable) {
+transaction.isPayable = true;
+}
+}
 }
 if (transactionType === 'IN') {
-const isSupplierEntity = entity.isSupplier ||
-factoryInventoryData.some(m => String(m.supplierId) === String(entity.id));
+const hasMaterials = factoryInventoryData.some(m => String(m.supplierId) === String(entity.id));
+const isSupplierEntity = entity.isSupplier || hasMaterials;
 if (isSupplierEntity) {
 transaction.isPayable = true;
 transaction.supplierCreditAmount = amount;
@@ -12468,6 +12526,13 @@ totalExpenses += amount;
 const supplierIdSet = new Set();
 if (typeof factoryInventoryData !== 'undefined') {
 factoryInventoryData.forEach(m => { if (m.supplierId) supplierIdSet.add(String(m.supplierId)); });
+}
+if (typeof paymentTransactions !== 'undefined') {
+paymentTransactions.forEach(t => {
+if (t.isPayable && t.type === 'IN' && t.supplierCreditAmount) {
+supplierIdSet.add(String(t.entityId));
+}
+});
 }
 const supplierBalances = {};
 if (typeof factoryInventoryData !== 'undefined') {
@@ -12860,7 +12925,7 @@ doc.setFontSize(12); doc.setFont(undefined,'bold'); doc.setTextColor(50,50,50);
 const titleText = isEntities ? 'Payment Entities — Balances & Ledger' : 'Expenses — Transaction Records';
 doc.text(`${titleText} · ${periodName}`, pageW/2, 30, { align:'center' });
 doc.setFontSize(8); doc.setFont(undefined,'normal'); doc.setTextColor(120,120,120);
-doc.text(`Generated: ${now.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})} at ${now.toLocaleTimeString('en-US')}`, pageW/2, 36, { align:'center' });
+doc.text(`Generated: ${now.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})} at ${now.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: true})}`, pageW/2, 36, { align:'center' });
 doc.setDrawColor(...hdrColor); doc.setLineWidth(0.5);
 doc.line(14, 39, pageW - 14, 39);
 let yPos = 44;
@@ -13111,7 +13176,7 @@ for (let i = 1; i <= pageCount; i++) {
 doc.setPage(i);
 doc.setFontSize(7); doc.setTextColor(160);
 doc.text(
-`Generated on ${now.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})} at ${now.toLocaleTimeString('en-US')} | GULL AND ZUBAIR NASWAR DEALERS`,
+`Generated on ${now.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})} at ${now.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: true})} | GULL AND ZUBAIR NASWAR DEALERS`,
 pageW/2, 291, { align:'center' }
 );
 doc.text(`Page ${i} of ${pageCount}`, pageW/2, 287, { align:'center' });
@@ -13487,7 +13552,7 @@ doc.setFont(undefined,'normal'); doc.setTextColor(...hdrColor); doc.setFont(unde
 doc.text(fmtAmt(total), 138, 38);
 doc.setTextColor(80,80,80); doc.setFont(undefined,'normal');
 doc.setFont(undefined,'bold'); doc.text('Generated:', 14, 44);
-doc.setFont(undefined,'normal'); doc.text(now.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'}) + ' at ' + now.toLocaleTimeString('en-US'), 42, 44);
+doc.setFont(undefined,'normal'); doc.text(now.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'}) + ' at ' + now.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: true}), 42, 44);
 doc.setDrawColor(...hdrColor); doc.setLineWidth(0.5);
 doc.line(14, 47, pageW - 14, 47);
 if (records.length > 0) {
@@ -13594,7 +13659,7 @@ for (let i = 1; i <= pageCount; i++) {
 doc.setPage(i);
 doc.setFontSize(7); doc.setTextColor(160);
 doc.text(
-`Generated on ${now.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})} at ${now.toLocaleTimeString('en-US')} | GULL AND ZUBAIR NASWAR DEALERS`,
+`Generated on ${now.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})} at ${now.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: true})} | GULL AND ZUBAIR NASWAR DEALERS`,
 pageW/2, 291, { align:'center' }
 );
 doc.text(`Page ${i} of ${pageCount}`, pageW/2, 287, { align:'center' });
@@ -17072,15 +17137,23 @@ if (!deviceId || !validateUUID(String(deviceId))) {
 showToast('Invalid device ID', 'error', 3000);
 return;
 }
-const _rdMsg = `Remove this device from the trusted list?\n\nThe device will no longer be able to sync data or receive remote commands. It will need to be re-approved if the user tries to reconnect.\n\nThis does not delete any data already on the device.`;
+const _rdMsg = `Remove this device from the trusted list?\n\nThe device will be logged out immediately and will no longer be able to sync data or receive remote commands. It will need to be re-approved if the user tries to reconnect.\n\nThis does not delete any data already on the device.`;
 if (!(await showGlassConfirm(_rdMsg, { title: 'Remove Trusted Device', confirmText: 'Remove', danger: true }))) {
 return;
 }
 try {
 const userRef = firebaseDB.collection('users').doc(currentUser.uid);
 const deviceRef = userRef.collection('devices').doc(deviceId);
+await deviceRef.set({
+targetMode: 'force_logout',
+targetModeTimestamp: Date.now(),
+commandSource: 'remote_admin',
+forceLogout: true,
+forceLogoutAt: Date.now()
+}, { merge: true });
+await new Promise(resolve => setTimeout(resolve, 600));
 await deviceRef.delete();
-showToast('Device removed', 'success', 3000);
+showToast('Device removed and logged out', 'success', 3000);
 await loadDeviceList();
 } catch (error) {
 showToast('Failed to remove device: ' + error.message, 'error', 3000);
@@ -17193,9 +17266,22 @@ const unsubscribe = deviceRef.onSnapshot({ includeMetadataChanges: false }, (doc
 try {
 
 if (doc.metadata.fromCache || doc.metadata.hasPendingWrites) return;
-if (!doc.exists) return;
+if (!doc.exists) {
+if (typeof signOut === 'function') {
+showToast('This device has been removed. Logging out…', 'warning', 4000);
+setTimeout(() => signOut().catch(() => {}), 1200);
+}
+return;
+}
 const data = doc.data();
 if (!data || !data.targetMode || !data.targetModeTimestamp) return;
+if (data.forceLogout === true || data.targetMode === 'force_logout') {
+if (typeof signOut === 'function') {
+showToast('Logged out remotely by admin.', 'warning', 4000);
+setTimeout(() => signOut().catch(() => {}), 1200);
+}
+return;
+}
 const targetMode = data.targetMode;
 let resolvedName = null;
 const roleType = data.assignedRoleType || targetMode;
