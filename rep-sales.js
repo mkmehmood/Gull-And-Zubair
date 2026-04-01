@@ -859,14 +859,14 @@ return name && typeof name === 'string' && name.toLowerCase().includes(filter);
 });
 const totalItems = filteredCustomers.length;
 if (!filteredCustomers || !Array.isArray(filteredCustomers) || !custMap) {
-tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; padding:20px; color:var(--danger);">Invalid customer data</td></tr>`;
+tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:20px; color:var(--danger);">Invalid customer data</td></tr>`;
 } else if (totalItems === 0) {
 if (Object.keys(custMap).length === 0) {
-tbody.innerHTML = `<tr><td class="u-empty-state-md" colspan="4" >No customers yet. Add your first sale to get started!</td></tr>`;
+tbody.innerHTML = `<tr><td class="u-empty-state-md" colspan="5" >No customers yet. Add your first sale to get started!</td></tr>`;
 } else {
 const filterInput = document.getElementById('rep-filter');
 const filter = filterInput ? filterInput.value : '';
-tbody.innerHTML = `<tr><td class="u-empty-state-md" colspan="4" >No customers match "${esc(filter)}"</td></tr>`;
+tbody.innerHTML = `<tr><td class="u-empty-state-md" colspan="5" >No customers match "${esc(filter)}"</td></tr>`;
 }
 } else {
 function buildRepCustomerRow(name) {

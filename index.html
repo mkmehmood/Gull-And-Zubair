@@ -1656,9 +1656,9 @@ style="border-color:var(--accent-emerald); width:100%; box-sizing:border-box; pa
 </div>
 </div>
 
-<div class="section liquid-card">
+<div id="rep-customers-card" class="section liquid-card">
 <div class="section-header" style="position: relative; flex-wrap: nowrap; gap: 10px; align-items: center;">
-<h3 class="u-heading-main" style="white-space: nowrap; flex-shrink: 0;">Customer List</h3>
+<h3 style="color:var(--text-main); margin:0; white-space: nowrap; flex-shrink: 0;">Customer List</h3>
 <input type="text" id="rep-filter" class="search-bar u-flex-1 u-min-w-0 u-fs-sm2 u-m-0"
 placeholder="Search customers..."
 oninput="renderRepCustomerTable()">
@@ -1697,7 +1697,6 @@ No records found
 <div style="display: flex; justify-content: space-between; font-size: 0.7rem; margin-top: 6px;">
 <span style="color: var(--text-muted); font-weight: 400;">Total Collections:</span>
 <span id="rep-customers-total-collections" style="color: var(--accent-emerald); font-weight: 400;">0.00</span>
-</div>
 </div>
 </div>
 </div>
@@ -2681,10 +2680,9 @@ Save Transaction
 </div>
 </div>
 </div>
-<div id="payments-unified-section" style="margin-top: 20px;">
-<div class="section liquid-card">
-<div class="section-header" style="flex-wrap: nowrap; gap: 10px; align-items: center; margin-bottom: 15px;">
-<h3 class="u-heading-main" style="white-space: nowrap; flex-shrink: 0;">Unified Records</h3>
+<div id="payments-unified-section" class="section liquid-card" style="margin-top: 16px;">
+<div style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px; flex-wrap: nowrap;">
+<h4 style="margin: 0; font-size: 1rem; color: var(--text-main); font-weight: 700; white-space: nowrap; flex-shrink: 0;">Unified Records</h4>
 <input type="text" id="unified-search" class="search-bar u-flex-1 u-min-w-0 u-fs-sm2 u-m-0" placeholder="Search..."
 oninput="renderUnifiedTable()">
 <button class="btn-theme" onclick="exportUnifiedData()" title="Download PDF"
@@ -2725,6 +2723,7 @@ No records found
 <span id="unified-table-footer-label">Total:</span>
 </td>
 <td id="unified-table-total" style="padding: 10px 2px; font-weight: 700; text-align: right; font-size: 0.85rem;">0.00</td>
+<td></td>
 </tr>
 </tfoot>
 </table>
@@ -2751,12 +2750,10 @@ No records found
 </div>
 </div>
 </div>
-</div>
 <div id="payment-history-section" style="display:flex; align-items:center; gap:12px; margin-top:32px; margin-bottom:10px; padding:0;">
 <span style="font-size:0.82rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em; white-space:nowrap; flex-shrink:0;">Payment History</span>
 </div>
 <div id="paymentHistoryList" class="report-grid"></div>
-</div>
 </div>
 <div id="offline-banner" role="alert" aria-live="polite">
 <span> Offline — changes saved locally</span>

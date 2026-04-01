@@ -2164,19 +2164,6 @@ await unifiedSave('factory_inventory_data', factoryInventoryData, mat);
 return true;
 }
 if (tx.type === 'IN') {
-const mat = factoryInventoryData.find(m => String(m.id) === String(tx.materialId));
-if (mat) {
-delete mat.supplierId;
-delete mat.supplierName;
-delete mat.supplierContact;
-delete mat.supplierType;
-mat.paymentStatus = 'pending';
-delete mat.totalPayable;
-delete mat.paidDate;
-mat.updatedAt = getTimestamp();
-ensureRecordIntegrity(mat, true);
-await unifiedSave('factory_inventory_data', factoryInventoryData, mat);
-}
 return true;
 }
 return false;
@@ -4734,6 +4721,16 @@ CurrentLiabilities.accountsPayable.supplierPayables += pendingAmount;
 }
 }
 }
+paymentTransactions.forEach(transaction => {
+if (transaction.isExpense === true) return;
+if (!transaction.isPayable || transaction.type !== 'IN') return;
+if (!transaction.supplierCreditAmount) return;
+const creditAmt = parseFloat(transaction.supplierCreditAmount) || 0;
+if (creditAmt > 0) {
+CurrentLiabilities.accountsPayable.supplierPayables += creditAmt;
+rawMaterialSupplierIds.add(String(transaction.entityId));
+}
+});
 for (const entityId in entityBalances) {
 if (rawMaterialSupplierIds.has(String(entityId))) continue;
 const balance = entityBalances[entityId];
@@ -11248,6 +11245,17 @@ balances[transaction.entityId] += parseFloat(transaction.amount) || 0;
 }
 });
 }
+if (typeof paymentTransactions !== 'undefined') {
+paymentTransactions.forEach(transaction => {
+if (!transaction.isPayable || transaction.type !== 'IN') return;
+if (!transaction.supplierCreditAmount) return;
+const creditAmt = parseFloat(transaction.supplierCreditAmount) || 0;
+if (creditAmt > 0 && balances[transaction.entityId] !== undefined) {
+balances[transaction.entityId] += creditAmt;
+supplierIdSet.add(String(transaction.entityId));
+}
+});
+}
 return balances;
 }
 
@@ -12149,37 +12157,8 @@ if (transactionType === 'IN') {
 const isSupplierEntity = entity.isSupplier ||
 factoryInventoryData.some(m => String(m.supplierId) === String(entity.id));
 if (isSupplierEntity) {
-let inMatId = generateUUID('mat');
-if (!validateUUID(inMatId)) inMatId = generateUUID('mat');
-const inMatNow = getTimestamp();
-let inMaterial = {
-id: inMatId,
-name: description || `Credit from ${name}`,
-quantity: 0,
-cost: 0,
-unit: 'kg',
-totalValue: amount,
-totalPayable: amount,
-paymentStatus: 'pending',
-supplierId: entity.id,
-supplierName: entity.name,
-supplierContact: entity.phone || '',
-supplierType: entity.supplierCategory || 'raw_materials',
-purchaseDate: date,
-purchaseQuantity: 0,
-purchaseCost: 0,
-createdAt: inMatNow,
-updatedAt: inMatNow,
-timestamp: inMatNow,
-syncedAt: new Date().toISOString(),
-sourceExpenseId: payExpenseId
-};
-inMaterial = ensureRecordIntegrity(inMaterial, false);
-factoryInventoryData.push(inMaterial);
 transaction.isPayable = true;
-transaction.materialId = inMatId;
-await unifiedSave('factory_inventory_data', factoryInventoryData, inMaterial);
-notifyDataChange('factory_inventory_data');
+transaction.supplierCreditAmount = amount;
 }
 }
 transaction = ensureRecordIntegrity(transaction, false);
@@ -12523,6 +12502,19 @@ if (supplierBalances[sid] > 0) {
 totalSupplierPayables += supplierBalances[sid];
 totalPayables += supplierBalances[sid];
 }
+}
+if (typeof paymentTransactions !== 'undefined') {
+paymentTransactions.forEach(transaction => {
+if (transaction.isExpense === true) return;
+if (!transaction.isPayable || transaction.type !== 'IN') return;
+if (!transaction.supplierCreditAmount) return;
+const creditAmt = parseFloat(transaction.supplierCreditAmount) || 0;
+if (creditAmt > 0) {
+totalSupplierPayables += creditAmt;
+totalPayables += creditAmt;
+supplierIdSet.add(String(transaction.entityId));
+}
+});
 }
 for (const entityId in entityBalances) {
 const balance = entityBalances[entityId];
