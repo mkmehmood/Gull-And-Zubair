@@ -4450,8 +4450,6 @@ if (window._syncUpdatesCleanupInterval) { clearInterval(window._syncUpdatesClean
 if (window._tombstoneCleanupInterval) { clearInterval(window._tombstoneCleanupInterval); window._tombstoneCleanupInterval = null; }
 if (window._perfMonitorInterval) { clearInterval(window._perfMonitorInterval); window._perfMonitorInterval = null; }
 if (typeof syncState !== 'undefined' && syncState.syncInterval) { clearInterval(syncState.syncInterval); syncState.syncInterval = null; }
-if (typeof _stopDeviceStatusPolling === 'function') _stopDeviceStatusPolling();
-else if (window._deviceStatusPollInterval) { clearInterval(window._deviceStatusPollInterval); window._deviceStatusPollInterval = null; }
 if (auth) {
 await auth.signOut();
 currentUser = null;

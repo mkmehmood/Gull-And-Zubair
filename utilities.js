@@ -625,9 +625,6 @@ window._firestoreNetworkDisabled = false;
 setTimeout(() => {
 if (typeof triggerAutoSync === 'function') triggerAutoSync();
 }, 1500);
-if (typeof _checkDeviceStatus === 'function') {
-setTimeout(_checkDeviceStatus, 2000);
-}
 });
 setInterval(async () => {
 if (!navigator.onLine) return;
@@ -17176,45 +17173,6 @@ window.removeDevice = removeDevice;
 window.getDeviceId = getDeviceId;
 window.getDeviceName = getDeviceName;
 window.registerDevice = registerDevice;
-async function _checkDeviceStatus() {
-if (!firebaseDB || !currentUser) return;
-if (window._firestoreNetworkDisabled || !navigator.onLine) return;
-try {
-const deviceId = await getDeviceId();
-if (!deviceId) return;
-const deviceRef = firebaseDB.collection('users').doc(currentUser.uid)
-.collection('devices').doc(deviceId);
-const doc = await deviceRef.get();
-if (!doc.exists) {
-if (typeof signOut === 'function') {
-showToast('This device has been removed. Logging out…', 'warning', 4000);
-setTimeout(() => signOut().catch(() => {}), 800);
-}
-return;
-}
-const data = doc.data();
-if (data && (data.forceLogout === true || data.targetMode === 'force_logout')) {
-if (typeof signOut === 'function') {
-showToast('Logged out remotely by admin.', 'warning', 4000);
-setTimeout(() => signOut().catch(() => {}), 800);
-}
-}
-} catch (_e) {}
-}
-window._deviceStatusPollInterval = window._deviceStatusPollInterval || null;
-function _startDeviceStatusPolling() {
-if (window._deviceStatusPollInterval) return;
-window._deviceStatusPollInterval = setInterval(_checkDeviceStatus, 30000);
-}
-function _stopDeviceStatusPolling() {
-if (window._deviceStatusPollInterval) {
-clearInterval(window._deviceStatusPollInterval);
-window._deviceStatusPollInterval = null;
-}
-}
-window._checkDeviceStatus = _checkDeviceStatus;
-window._startDeviceStatusPolling = _startDeviceStatusPolling;
-window._stopDeviceStatusPolling = _stopDeviceStatusPolling;
 async function restoreDeviceModeOnLogin(uid) {
 
 function _applyModeFromData(modeStr, ts, assignedRep, assignedManager, assignedUserTabs, remoteApplied) {
@@ -17256,6 +17214,13 @@ try {
 
       if (deviceDoc.exists) {
         const data = deviceDoc.data();
+        if (data && (data.forceLogout === true || data.targetMode === 'force_logout')) {
+          if (typeof signOut === 'function') {
+            showToast('This device has been removed by admin. Logging out…', 'warning', 4000);
+            setTimeout(() => signOut().catch(() => {}), 1200);
+          }
+          return;
+        }
         const cloudMode      = data.currentMode || 'admin';
         const cloudTimestamp = data.appMode_timestamp || 0;
         const _modeIsLocked  = cloudMode !== 'admin';
@@ -17316,10 +17281,17 @@ try {
 
 if (doc.metadata.fromCache || doc.metadata.hasPendingWrites) return;
 if (!doc.exists) {
+setTimeout(async () => {
+try {
+const recheck = await deviceRef.get();
+if (!recheck.exists) {
 if (typeof signOut === 'function') {
 showToast('This device has been removed. Logging out…', 'warning', 4000);
 setTimeout(() => signOut().catch(() => {}), 1200);
 }
+}
+} catch (_rc) {}
+}, 3000);
 return;
 }
 const data = doc.data();
@@ -17393,7 +17365,6 @@ console.warn('[device] listenForDeviceCommands retry failed:', _safeErr(e));
 window.deviceCommandsUnsubscribe = unsubscribe;
 window._deviceCmdRetryAttempts = 0;
 window._deviceCmdRetrying = false;
-if (typeof _startDeviceStatusPolling === 'function') _startDeviceStatusPolling();
 } catch (error) {
 console.error('[device] listenForDeviceCommands failed:', _safeErr(error));
 }
