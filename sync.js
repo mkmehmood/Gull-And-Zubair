@@ -4495,9 +4495,10 @@ if (typeof _clearDeviceIdStorage === 'function') {
   await _clearDeviceIdStorage().catch(() => {});
 }
 
-if (_savedAppMode && _savedAppMode.length) {
+if (_savedAppMode && _savedAppMode.length && !window._forceLogoutSignOut) {
   await sqliteStore.setBatch(_savedAppMode).catch(() => {});
 }
+window._forceLogoutSignOut = false;
 showToast(' Signed out successfully', 'success');
 } else {
 currentUser = null;
@@ -4543,9 +4544,10 @@ if (typeof _clearDeviceIdStorage === 'function') {
   await _clearDeviceIdStorage().catch(() => {});
 }
 
-if (_savedAppMode && _savedAppMode.length) {
+if (_savedAppMode && _savedAppMode.length && !window._forceLogoutSignOut) {
   await sqliteStore.setBatch(_savedAppMode).catch(() => {});
 }
+window._forceLogoutSignOut = false;
 showToast(' Signed out', 'success');
 }
 setTimeout(() => {

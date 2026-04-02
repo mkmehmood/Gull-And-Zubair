@@ -5352,7 +5352,8 @@ async function rebuildStoreUI() {
     const retGroup = retSection.querySelector('.toggle-group');
     if (retGroup) {
       retGroup.innerHTML = '';
-      stores.forEach((s, i) => {
+      const returnStores = stores.filter(s => s.key === 'STORE_A' || s.key === 'STORE_B');
+      returnStores.forEach((s, i) => {
         const btn = document.createElement('button');
         btn.className = 'toggle-opt' + (i === 0 ? ' active' : '');
         btn.id = 'ret-store-' + s.key.toLowerCase();
@@ -6416,10 +6417,7 @@ const reconciledCustomerIds = new Set();
 if (Array.isArray(salesHistory)) {
   salesHistory.forEach(h => { if (Array.isArray(h.linkedSalesIds)) h.linkedSalesIds.forEach(id => reconciledCustomerIds.add(id)); });
 }
-const pendingCreditQty = (Array.isArray(customerSales) ? customerSales : [])
-  .filter(s => s.currentRepProfile === 'admin' && s.customerName === seller && s.paymentType === 'CREDIT' && !s.creditReceived && !reconciledCustomerIds.has(s.id) && s.transactionType !== 'OLD_DEBT')
-  .reduce((sum, s) => sum + (s.quantity || 0), 0);
-const linkedIds = await markSalesEntriesAsReceived(seller, pendingCreditQty);
+const linkedIds = await markAllPendingCreditSalesAsCash(seller, reconciledCustomerIds);
 entry.linkedSalesIds = linkedIds;
 const linkedRepIds = await markRepSalesEntriesAsUsed(seller, date, calcId);
 entry.linkedRepSalesIds = linkedRepIds;
@@ -6648,6 +6646,40 @@ showToast(`Exported ${customerMap.size} customers successfully!`, "success");
 } catch (error) {
 showToast('Error generating PDF: ' + error.message, 'error');
 }
+}
+
+async function markAllPendingCreditSalesAsCash(seller, reconciledCustomerIds) {
+const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
+if (!seller || seller === 'COMBINED') return [];
+const linkedIds = [];
+const now = new Date();
+const receivedDate = now.toISOString().split('T')[0];
+const receivedTime = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+customerSales.forEach(sale => {
+if (
+sale.currentRepProfile === 'admin' &&
+sale.customerName === seller &&
+sale.paymentType === 'CREDIT' &&
+!sale.creditReceived &&
+sale.transactionType !== 'OLD_DEBT' &&
+!(reconciledCustomerIds && reconciledCustomerIds.has(sale.id))
+) {
+sale.paymentType = 'CASH';
+sale.creditReceived = true;
+sale.creditReceivedDate = receivedDate;
+sale.creditReceivedTime = receivedTime;
+if (!sale.currentRepProfile) sale.currentRepProfile = 'admin';
+sale.updatedAt = getTimestamp();
+ensureRecordIntegrity(sale, true);
+linkedIds.push(sale.id);
+}
+});
+if (linkedIds.length > 0) {
+await unifiedSave('customer_sales', customerSales, null, linkedIds);
+if (typeof refreshCustomerSales === 'function') refreshCustomerSales(1, false);
+notifyDataChange('sales');
+}
+return linkedIds;
 }
 
 async function markSalesEntriesAsReceived(seller, quantityToMark) {
@@ -17217,6 +17249,7 @@ try {
         if (data && (data.forceLogout === true || data.targetMode === 'force_logout')) {
           if (typeof signOut === 'function') {
             showToast('This device has been removed by admin. Logging out…', 'warning', 4000);
+            window._forceLogoutSignOut = true;
             setTimeout(() => signOut().catch(() => {}), 1200);
           }
           return;
@@ -17287,6 +17320,7 @@ const recheck = await deviceRef.get();
 if (!recheck.exists) {
 if (typeof signOut === 'function') {
 showToast('This device has been removed. Logging out…', 'warning', 4000);
+window._forceLogoutSignOut = true;
 setTimeout(() => signOut().catch(() => {}), 1200);
 }
 }
@@ -17299,6 +17333,7 @@ if (!data || !data.targetMode || !data.targetModeTimestamp) return;
 if (data.forceLogout === true || data.targetMode === 'force_logout') {
 if (typeof signOut === 'function') {
 showToast('Logged out remotely by admin.', 'warning', 4000);
+window._forceLogoutSignOut = true;
 setTimeout(() => signOut().catch(() => {}), 1200);
 }
 return;

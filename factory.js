@@ -1108,14 +1108,9 @@ if (_prodCostEl) _prodCostEl.innerText = await formatCurrency(baseCost);
 
 async function saveFactoryProductionEntry() {
 
-const storeSelectorEl = document.getElementById('storeSelector');
-if (!storeSelectorEl || !storeSelectorEl.value) {
-  const chosen = await showStorePicker('production');
-  if (!chosen) return;
-  storeSelectorEl.value = chosen;
-  const labelEl = document.getElementById('storeSelectorLabel');
-  if (labelEl) labelEl.textContent = getStoreLabel(chosen);
-  await updateProductionCostOnStoreChange();
+if (!currentFactoryEntryStore) {
+showToast('Please select a formula type (Standard or Asaan) before saving.', 'warning', 3000);
+return;
 }
 const _sfpeBatch = await sqliteStore.getBatch([
 'factory_default_formulas','factory_additional_costs',
@@ -1217,10 +1212,6 @@ calculateNetCash();
 calculateCashTracker();
 document.getElementById('factoryProductionUnits').value = '1';
 
-const _storeSel = document.getElementById('storeSelector');
-if (_storeSel) _storeSel.value = '';
-const _storeLbl = document.getElementById('storeSelectorLabel');
-if (_storeLbl) _storeLbl.textContent = '—';
 showToast('Production saved successfully!', 'success');
 } catch (error) {
 factoryInventoryData.length = 0;
@@ -1288,12 +1279,12 @@ const year = String(dateObj.getFullYear()).slice(-2);
 const dateStr = `${month} ${day} ${year} ${esc(entry.time || '')}`;
 const _histFtype = entry.formulaType || (entry.store === 'asaan' || entry.store === 'STORE_C' ? 'asaan' : 'standard');
 const badgeClass = _histFtype === 'asaan' ? 'factory-badge-asn' : 'factory-badge-std';
-const storeLabel = typeof getStoreLabel === 'function' ? getStoreLabel(entry.store) : (entry.store || 'STD');
+const formulaLabel = _histFtype === 'asaan' ? 'Asaan' : 'Standard';
 const perUnitCost = entry.units > 0 ? entry.totalCost / entry.units : 0;
 const additionalCostPerUnit = factoryAdditionalCosts[_histFtype] || factoryAdditionalCosts[entry.store] || 0;
 const totalAdditionalCost = additionalCostPerUnit * entry.units;
 
-const formula = factoryDefaultFormulas[entry.store] || [];
+const formula = factoryDefaultFormulas[_histFtype] || factoryDefaultFormulas[entry.store] || [];
 let matsBreakdownHtml = '';
 if (formula.length > 0) {
 const rowsHtml = formula.map(f => {
@@ -1343,7 +1334,7 @@ ${entry.createdBy && typeof _creatorBadgeHtml === 'function' ? _creatorBadgeHtml
 </div>
 <div style="display:flex;gap:6px;align-items:center;">
 ${_mergedBadgeHtml(entry)}
-<span class="factory-badge ${badgeClass}">${esc(storeLabel)}</span>
+<span class="factory-badge ${badgeClass}">${formulaLabel}</span>
 </div>
 </div>
 <div class="factory-summary-row"><span class="factory-summary-label">Units Produced</span><span class="qty-val">${entry.units}</span></div>
