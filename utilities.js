@@ -10817,7 +10817,11 @@ await Promise.all([
   (async () => {
     try {
       if (document.getElementById('tab-payments') && !document.getElementById('tab-payments').classList.contains('hidden')) {
-        if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
+        const _hasEntities = paymentEntities.length > 0;
+        const _hasTx = paymentTransactions.length > 0;
+        if (_hasEntities || _hasTx) {
+          if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
+        }
       }
       if (typeof calculateNetCash === 'function') calculateNetCash();
     } catch (e) { console.error('refreshPaymentTab failed.', _safeErr(e)); }
@@ -12546,32 +12550,25 @@ totalExpenses += amount;
 }
 });
 const supplierIdSet = new Set();
-if (typeof factoryInventoryData !== 'undefined') {
 factoryInventoryData.forEach(m => { if (m.supplierId) supplierIdSet.add(String(m.supplierId)); });
-}
-if (typeof paymentTransactions !== 'undefined') {
 paymentTransactions.forEach(t => {
 if (t.isPayable && t.type === 'IN' && t.supplierCreditAmount) {
 supplierIdSet.add(String(t.entityId));
 }
 });
-}
 const supplierBalances = {};
-if (typeof factoryInventoryData !== 'undefined') {
 factoryInventoryData.forEach(material => {
 if (material.supplierId && material.paymentStatus === 'pending' && material.totalPayable > 0) {
 const sid = String(material.supplierId);
 supplierBalances[sid] = (supplierBalances[sid] || 0) + material.totalPayable;
 }
 });
-}
 const entityBalances = {};
 paymentEntities.forEach(entity => {
 if (entity.isExpenseEntity === true) return;
 if (supplierIdSet.has(String(entity.id))) return;
 entityBalances[entity.id] = 0;
 });
-if (typeof paymentTransactions !== 'undefined') {
 paymentTransactions.forEach(transaction => {
 if (transaction.isExpense === true) return;
 if (supplierIdSet.has(String(transaction.entityId))) return;
@@ -12583,14 +12580,12 @@ entityBalances[transaction.entityId] += parseFloat(transaction.amount) || 0;
 }
 }
 });
-}
 for (const sid in supplierBalances) {
 if (supplierBalances[sid] > 0) {
 totalSupplierPayables += supplierBalances[sid];
 totalPayables += supplierBalances[sid];
 }
 }
-if (typeof paymentTransactions !== 'undefined') {
 paymentTransactions.forEach(transaction => {
 if (transaction.isExpense === true) return;
 if (!transaction.isPayable || transaction.type !== 'IN') return;
@@ -12602,7 +12597,6 @@ totalPayables += creditAmt;
 supplierIdSet.add(String(transaction.entityId));
 }
 });
-}
 for (const entityId in entityBalances) {
 const balance = entityBalances[entityId];
 if (balance > 0) { totalEntityPayables += balance; totalPayables += balance; }
@@ -12659,26 +12653,19 @@ description: grp.count > 1 ? `${grp.count} transactions` : ''
 }
 if (viewMode === 'entities') {
 const supplierIds = new Set();
-if (typeof factoryInventoryData !== 'undefined') {
 factoryInventoryData.forEach(m => { if (m.supplierId) supplierIds.add(String(m.supplierId)); });
-}
-if (typeof paymentTransactions !== 'undefined') {
 paymentTransactions.forEach(t => {
 if (t.isPayable && t.type === 'IN' && t.supplierCreditAmount) {
 supplierIds.add(String(t.entityId));
 }
 });
-}
 const supplierEntityBalances = {};
-if (typeof factoryInventoryData !== 'undefined') {
 factoryInventoryData.forEach(material => {
 if (material.supplierId && material.paymentStatus === 'pending' && material.totalPayable > 0) {
 const sid = String(material.supplierId);
 supplierEntityBalances[sid] = (supplierEntityBalances[sid] || 0) + material.totalPayable;
 }
 });
-}
-if (typeof paymentTransactions !== 'undefined') {
 paymentTransactions.forEach(t => {
 if (!t.isPayable || t.type !== 'IN' || !t.supplierCreditAmount) return;
 const creditAmt = parseFloat(t.supplierCreditAmount) || 0;
@@ -12687,14 +12674,12 @@ const sid = String(t.entityId);
 supplierEntityBalances[sid] = (supplierEntityBalances[sid] || 0) + creditAmt;
 }
 });
-}
 const entityBalances = {};
 paymentEntities.forEach(entity => {
 if (entity.isExpenseEntity === true) return;
 if (supplierIds.has(String(entity.id))) return;
 entityBalances[entity.id] = 0;
 });
-if (typeof paymentTransactions !== 'undefined') {
 paymentTransactions.forEach(transaction => {
 if (transaction.isExpense === true) return;
 if (supplierIds.has(String(transaction.entityId))) return;
@@ -12706,7 +12691,6 @@ entityBalances[transaction.entityId] += parseFloat(transaction.amount) || 0;
 }
 }
 });
-}
 paymentEntities.forEach(entity => {
 if (entity.isExpenseEntity === true) return;
 const entityName = entity && entity.name ? String(entity.name) : '';
@@ -12775,12 +12759,6 @@ if (a.type === 'entity' && b.type !== 'entity') return 1;
 if (a.type !== 'entity' && b.type === 'entity') return -1;
 return b.date - a.date;
 });
-const totalItems = rows.length;
-if (!rows || !Array.isArray(rows)) {
-tbody.innerHTML = `<tr><td class="u-empty-state-danger" colspan="4" >Invalid data format</td></tr>`;
-if (totalSpan) totalSpan.textContent = '0.00';
-return;
-}
 if (rows.length === 0) {
 tbody.innerHTML = `
 <tr>
@@ -12791,7 +12769,6 @@ No records found matching your filters
 if (totalSpan) totalSpan.textContent = '0.00';
 return;
 }
-
 function buildUnifiedRow(row) {
 const tr = document.createElement('tr');
 tr.style.cssText = 'border-bottom: 1px solid var(--glass-border); transition: background 0.2s; cursor: pointer;';
@@ -12804,7 +12781,7 @@ tr.innerHTML = `
 <td style="padding: 8px 4px; font-weight: 600; font-size: 0.8rem; cursor:pointer;" onclick="openExpenseEntityDetails('${esc(row.id)}')">
 ${esc(row.name)}
 <div style="display: inline-block; margin-left: 6px;">
-<span style="color: ${row.typeLabel === 'EXPENSE' ? 'var(--warning)' : 'var(--accent)'}; padding: 2px 6px; border-radius: 4px; font-size: 0.55rem; font-weight: 700;">
+<span style="background: ${row.typeLabel === 'EXPENSE' ? 'var(--warning)' : 'var(--accent)'}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.55rem; font-weight: 700;">
 ${row.typeLabel}
 </span>
 </div>
@@ -12823,7 +12800,7 @@ ${row.dateStr}
 <td style="padding: 8px 4px; font-weight: 700; font-size: 0.8rem; color: ${row.nameColor}; cursor:pointer;" onclick="openEntityDetailsOverlay('${esc(row.id)}')">
 ${esc(row.name)}
 <div style="font-size: 0.6rem; margin-top: 2px;">
-<span style="color: ${row.amountColor}; padding: 1px 4px; border-radius: 3px; font-size: 0.55rem; font-weight: 600;">
+<span style="background: ${row.amountColor}; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.55rem; font-weight: 600;">
 ${row.balanceLabel}
 </span>
 </div>
@@ -12835,12 +12812,8 @@ ${row.amountStr}
 }
 return tr;
 }
-const _unifiedContainer = document.getElementById('unified-table-container');
 const _paymentsTab = document.getElementById('tab-payments');
-const _tabHidden = _paymentsTab && _paymentsTab.classList.contains('hidden');
-if (_tabHidden && _unifiedContainer) {
-
-} else {
+if (!_paymentsTab || !_paymentsTab.classList.contains('hidden')) {
 GNDVirtualScroll.mount('unified-table-container', rows, buildUnifiedRow, tbody);
 }
 if (viewMode === 'entities') {
