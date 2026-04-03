@@ -213,7 +213,10 @@ console.warn('An unexpected error occurred.', _safeErr(rowError));
 return null;
 }
 }
-GNDVirtualScroll.mount('vs-scroller-customers', customers, buildCustomerRow, tbody);
+tbody.innerHTML = '';
+const _fragC = document.createDocumentFragment();
+customers.forEach((c, i) => { const el = buildCustomerRow(c, i); if (el) _fragC.appendChild(el); });
+tbody.appendChild(_fragC);
 }
 const _setCustH = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
 _setCustH('customer-count', `${totalItems || 0} active`);

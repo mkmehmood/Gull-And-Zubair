@@ -835,7 +835,6 @@ const tbody = document.getElementById('factoryInventoryTableBody');
 let totalVal = 0;
 if (factoryInventoryData.length === 0) {
 tbody.innerHTML = '<tr><td class="u-empty-state-md" colspan="5">No items in inventory</td></tr>';
-GNDVirtualScroll.destroy('vs-scroller-factory-inventory');
 const _invEl = document.getElementById('factoryTotalInventoryValue');
 if (_invEl) _invEl.innerText = await formatCurrency(0);
 return;
@@ -878,7 +877,10 @@ tr.style.cursor = 'pointer';
 tr.innerHTML = `<td style="padding:8px 2px; cursor:pointer;" onclick="editFactoryInventoryItem('${itemId}')"><div style="font-weight:600;font-size:0.8rem;color:var(--accent);">${itemName}</div>${supplierHtml}</td><td style="text-align:center;padding:8px 2px;">${quantityHtml}</td><td style="text-align:right;padding:8px 2px;font-size:0.75rem;color:var(--text-muted);">${costHtml}</td><td style="text-align:right;padding:8px 2px;font-size:0.8rem;font-weight:700;color:var(--accent);">${totalValueStr}</td>`;
 prebuiltRows.push(tr);
 }
-GNDVirtualScroll.mount('vs-scroller-factory-inventory', prebuiltRows, function(el) { return el; }, tbody);
+tbody.innerHTML = '';
+const _fragF = document.createDocumentFragment();
+prebuiltRows.forEach(el => { if (el) _fragF.appendChild(el); });
+tbody.appendChild(_fragF);
 
 const _invEl = document.getElementById('factoryTotalInventoryValue');
 if (_invEl) _invEl.innerText = await formatCurrency(totalVal);

@@ -2296,19 +2296,8 @@ async function initFirebase() {
         subscribeToRealtime().catch(e => console.warn('[sync] online-recovery re-subscribe failed:', _safeErr(e)));
       }
     };
-    window._fbVisibilityHandler = async () => {
-      if (document.visibilityState !== 'visible') return;
-      if (!currentUser || !firebaseDB) return;
-      try {
-        const lastSync = await sqliteStore.get('last_synced');
-        const msSince = lastSync ? (Date.now() - new Date(lastSync).getTime()) : Infinity;
-        if (msSince < APP_CONFIG.VISIBILITY_SYNC_COOLDOWN_MS) return;
-        await pullDataFromCloud(true);
-      } catch (error) { console.warn('Failed to pull data from cloud.', _safeErr(error)); }
-    };
     window.addEventListener('offline', window._fbOfflineHandler);
     window.addEventListener('online',  window._fbOnlineHandler);
-    document.addEventListener('visibilitychange', window._fbVisibilityHandler);
   } catch (e) { console.warn('Failed to pull data from cloud.', _safeErr(e)); }
 }
 
@@ -2717,9 +2706,8 @@ async function _mergeAndPersist(cloudData) {
     ).filter(r => r.deletedAt > threeMonthsAgo);
   const deduped = window._dedupDeletionRecords ? window._dedupDeletionRecords(safeDels) : safeDels;
   await sqliteStore.set('deletion_records', deduped);
-  const _existingDeleted = new Set(ensureArray(await sqliteStore.get('deleted_records')));
-  deduped.forEach(r => _existingDeleted.add(r.id));
-  await sqliteStore.set('deleted_records', Array.from(_existingDeleted));
+  const _deletedSet = new Set(deduped.map(r => r.id));
+  await sqliteStore.set('deleted_records', Array.from(_deletedSet));
   trackFirestoreRead(deletionsSnap.docs.length);
   } catch (_delErr) {
   console.warn('[Sync] Failed to refresh deletions:', _safeErr(_delErr));
@@ -4440,7 +4428,6 @@ clearAutoBackup();
 if (typeof OfflineQueue !== 'undefined') OfflineQueue.cancelRetry();
 if (window._fbOfflineHandler) { window.removeEventListener('offline', window._fbOfflineHandler); window._fbOfflineHandler = null; }
 if (window._fbOnlineHandler)  { window.removeEventListener('online',  window._fbOnlineHandler);  window._fbOnlineHandler  = null; }
-if (window._fbVisibilityHandler) { document.removeEventListener('visibilitychange', window._fbVisibilityHandler); window._fbVisibilityHandler = null; }
 window._firebaseListenersRegistered = false;
 if (seamlessBackupTimer) { clearTimeout(seamlessBackupTimer); seamlessBackupTimer = null; }
 if (socketReconnectTimer) { clearTimeout(socketReconnectTimer); socketReconnectTimer = null; }

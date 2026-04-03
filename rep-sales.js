@@ -891,7 +891,10 @@ ${fmtAmt(Math.max(0, customerData.debt))}
 </td>`;
 return tr;
 }
-GNDVirtualScroll.mount('vs-scroller-rep-customers', filteredCustomers, buildRepCustomerRow, tbody);
+tbody.innerHTML = '';
+const _fragR = document.createDocumentFragment();
+filteredCustomers.forEach((name, i) => { const el = buildRepCustomerRow(name, i); if (el) _fragR.appendChild(el); });
+tbody.appendChild(_fragR);
 }
 let repTotalCreditSales = 0;
 let repTotalCollections = 0;

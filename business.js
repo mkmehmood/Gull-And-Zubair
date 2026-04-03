@@ -59,166 +59,6 @@ function _readFileAsText(file) {
     fr.readAsText(file);
   });
 }
-const GNDVirtualScroll = (() => {
-  const OVERSCAN   = 5;
-  const FALLBACK_H = 44;
-  const _instances = new Map();
-  function _makeSpacerRow(colSpan) {
-    const tr = document.createElement('tr');
-    tr.setAttribute('aria-hidden', 'true');
-    const td = document.createElement('td');
-    td.colSpan  = colSpan;
-    td.style.cssText = 'height:0px; padding:0; border:none; pointer-events:none;';
-    tr.appendChild(td);
-    tr.style.cssText = 'height:0px; pointer-events:none;';
-    return tr;
-  }
-  function _setSpacerHeight(spacerRow, px) {
-    const h = Math.max(0, Math.round(px)) + 'px';
-    spacerRow.style.height = h;
-    spacerRow.firstElementChild.style.height = h;
-  }
-  function _colSpanOf(tbody) {
-    const first = Array.from(tbody.rows).find(r => !r.hasAttribute('aria-hidden'));
-    if (first) return first.cells.length || 5;
-    const table = tbody.closest('table');
-    if (table) {
-      const hRow = table.querySelector('thead tr');
-      if (hRow) return hRow.cells.length || 5;
-    }
-    return 5;
-  }
-  function _render(inst) {
-    const { scroller, tbody, items, buildRow, topSpacer, botSpacer } = inst;
-    const rowH    = inst.rowHeight || FALLBACK_H;
-    const scrollH = scroller.clientHeight;
-    const scrollT = scroller.scrollTop;
-    if (items.length === 0) return;
-    const firstVis = Math.max(0, Math.floor(scrollT / rowH) - OVERSCAN);
-    const lastVis  = Math.min(items.length - 1,
-                       Math.ceil((scrollT + scrollH) / rowH) + OVERSCAN);
-    if (inst.renderedFirst === firstVis && inst.renderedLast === lastVis) return;
-    inst.renderedFirst = firstVis;
-    inst.renderedLast  = lastVis;
-    const frag = document.createDocumentFragment();
-    for (let i = firstVis; i <= lastVis; i++) {
-      const el = buildRow(items[i], i);
-      if (el) frag.appendChild(el);
-    }
-    _setSpacerHeight(topSpacer, firstVis * rowH);
-    _setSpacerHeight(botSpacer, (items.length - 1 - lastVis) * rowH);
-    try {
-      let child = topSpacer.nextSibling;
-      while (child && child !== botSpacer) {
-        const next = child.nextSibling;
-        tbody.removeChild(child);
-        child = next;
-      }
-      tbody.insertBefore(frag, botSpacer);
-    } catch (_domErr) {
-      if (_domErr instanceof DOMException) return;
-      throw _domErr;
-    }
-  }
-  function _measureRowHeight(inst) {
-    const first = Array.from(inst.tbody.rows).find(r => !r.hasAttribute('aria-hidden'));
-    if (first && first.offsetHeight > 0) {
-      inst.rowHeight = first.offsetHeight;
-    }
-  }
-  function mount(scrollerId, items, buildRow, tbody) {
-    destroy(scrollerId);
-    const scroller = document.getElementById(scrollerId);
-    if (!scroller) {
-      tbody.innerHTML = '';
-      const frag = document.createDocumentFragment();
-      items.forEach((item, i) => {
-        const el = buildRow(item, i);
-        if (el) frag.appendChild(el);
-      });
-      tbody.appendChild(frag);
-      return;
-    }
-    if (!items || items.length === 0) {
-      tbody.innerHTML = '';
-      return;
-    }
-    const colSpan  = _colSpanOf(tbody) || 5;
-    const topSpacer = _makeSpacerRow(colSpan);
-    const botSpacer = _makeSpacerRow(colSpan);
-    tbody.innerHTML = '';
-    tbody.appendChild(topSpacer);
-    tbody.appendChild(botSpacer);
-    const inst = {
-      scroller, tbody, items, buildRow,
-      topSpacer, botSpacer,
-      rowHeight: FALLBACK_H,
-      renderedFirst: -1,
-      renderedLast:  -1,
-      rafId: null,
-      scrollHandler: null,
-      resizeObs: null,
-      intersectionObs: null,
-    };
-    _instances.set(scrollerId, inst);
-    _render(inst);
-    requestAnimationFrame(() => {
-      try {
-        _measureRowHeight(inst);
-        _render(inst);
-      } catch (_rafErr) {
-        if (!(_rafErr instanceof DOMException)) throw _rafErr;
-      }
-    });
-    inst.scrollHandler = () => {
-      if (inst.rafId) return;
-      inst.rafId = requestAnimationFrame(() => {
-        inst.rafId = null;
-        try { _render(inst); }
-        catch (_scrollErr) { if (!(_scrollErr instanceof DOMException)) throw _scrollErr; }
-      });
-    };
-    scroller.addEventListener('scroll', inst.scrollHandler, { passive: true });
-    if (typeof ResizeObserver !== 'undefined') {
-      inst.resizeObs = new ResizeObserver(() => {
-        try {
-          inst.renderedFirst = -1;
-          inst.renderedLast  = -1;
-          _measureRowHeight(inst);
-          _render(inst);
-        } catch (_resizeErr) {
-          if (!(_resizeErr instanceof DOMException)) throw _resizeErr;
-        }
-      });
-      inst.resizeObs.observe(scroller);
-    }
-    if (typeof IntersectionObserver !== 'undefined') {
-      inst.intersectionObs = new IntersectionObserver(entries => {
-        if (entries[0].isIntersecting) {
-          try {
-            inst.renderedFirst = -1;
-            inst.renderedLast  = -1;
-            _measureRowHeight(inst);
-            _render(inst);
-          } catch (_intErr) {
-            if (!(_intErr instanceof DOMException)) throw _intErr;
-          }
-        }
-      }, { threshold: 0 });
-      inst.intersectionObs.observe(scroller);
-    }
-  }
-  function destroy(scrollerId) {
-    const inst = _instances.get(scrollerId);
-    if (!inst) return;
-    if (inst.rafId) cancelAnimationFrame(inst.rafId);
-    if (inst.scrollHandler) inst.scroller.removeEventListener('scroll', inst.scrollHandler);
-    if (inst.resizeObs)      inst.resizeObs.disconnect();
-    if (inst.intersectionObs) inst.intersectionObs.disconnect();
-    _instances.delete(scrollerId);
-  }
-  return { mount, destroy };
-})();
 if (window.trustedTypes && window.trustedTypes.createPolicy) {
   window._gndHTMLPolicy = window.trustedTypes.createPolicy('gnd-html-policy', {
     createHTML: (s) => s
@@ -1403,12 +1243,6 @@ const sqliteStore = (() => {
             if (typeof triggerAutoSync === 'function') triggerAutoSync();
           });
 
-          document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible' && _pendingWrites > 0) {
-              _dualPersist().catch(() => {});
-            }
-          });
-
           window.addEventListener('beforeunload', () => {
             if (_pendingWrites > 0 && _sqlDB) {
               if (_persistTimer) { clearTimeout(_persistTimer); _persistTimer = null; }
@@ -2322,7 +2156,6 @@ if (window.deviceHeartbeatInterval) {
 clearInterval(window.deviceHeartbeatInterval);
 }
 window.deviceHeartbeatInterval = setInterval(async () => {
-if (document.hidden) return;
 if (firebaseDB && currentUser) {
 try {
 const _isRepMode = appMode === 'rep';

@@ -609,23 +609,7 @@ showToast('Offline — changes will be saved locally', 'warning', 4000);
   }
 })();
 
-document.addEventListener('visibilitychange', async () => {
-if (document.visibilityState !== 'visible') return;
-if (syncState.pendingUpdates.size > 0 && !syncState.isRefreshing) {
-requestAnimationFrame(() => processSync());
-}
-if (!navigator.onLine) return;
-if (typeof firebaseDB === 'undefined' || !firebaseDB) return;
-if (window._firestoreNetworkDisabled) {
-try {
-await firebaseDB.enableNetwork();
-window._firestoreNetworkDisabled = false;
-} catch(e) {  }
-}
-setTimeout(() => {
-if (typeof triggerAutoSync === 'function') triggerAutoSync();
-}, 1500);
-});
+
 setInterval(async () => {
 if (!navigator.onLine) return;
 if (typeof firebaseDB === 'undefined' || !firebaseDB) return;
@@ -640,7 +624,7 @@ if (typeof triggerAutoSync === 'function') triggerAutoSync();
 function notifyDataChange(dataType) {
 syncState.lastUpdate[dataType] = Date.now();
 syncState.pendingUpdates.add(dataType);
-if (!syncState.isRefreshing && !document.hidden) {
+if (!syncState.isRefreshing) {
 requestAnimationFrame(() => processSync());
 }
 if (typeof triggerSeamlessBackup === 'function') {
@@ -696,7 +680,6 @@ await sqliteStore.set(`${settingName}_timestamp`, timestamp);
 }
 const _tabSyncInProgress = {};
 function processSync() {
-if (document.hidden) return;
 if (syncState.isRefreshing || syncState.pendingUpdates.size === 0) return;
 syncState.isRefreshing = true;
 const updates = Array.from(syncState.pendingUpdates);
@@ -813,12 +796,7 @@ requestAnimationFrame(() => processSync());
 }
 
 function getCurrentActiveTab() {
-if (!document.getElementById('tab-prod').classList.contains('hidden')) return 'prod';
-if (!document.getElementById('tab-sales').classList.contains('hidden')) return 'sales';
-if (!document.getElementById('tab-calc').classList.contains('hidden')) return 'calc';
-if (!document.getElementById('tab-factory').classList.contains('hidden')) return 'factory';
-if (!document.getElementById('tab-payments').classList.contains('hidden')) return 'payments';
-return 'prod';
+return currentActiveTab || 'prod';
 }
 
 function syncCoreDisplays() {
@@ -8511,12 +8489,12 @@ window.scrollTo({ top: 0, behavior: 'instant' });
 const paymentSummarySection = document.getElementById('payment-summary-section');
 const paymentHistorySection = document.getElementById('payment-history-section');
 if (paymentSummarySection) {
-paymentSummarySection.style.display = tab === 'payments' ? '' : 'none';
-paymentSummarySection.style.visibility = tab === 'payments' ? 'visible' : 'hidden';
+paymentSummarySection.style.display = '';
+paymentSummarySection.style.visibility = 'visible';
 }
 if (paymentHistorySection) {
-paymentHistorySection.style.display = tab === 'payments' ? '' : 'none';
-paymentHistorySection.style.visibility = tab === 'payments' ? 'visible' : 'hidden';
+paymentHistorySection.style.display = '';
+paymentHistorySection.style.visibility = 'visible';
 }
 setTimeout(async () => {
 try {
@@ -10816,13 +10794,7 @@ await Promise.all([
 
   (async () => {
     try {
-      if (document.getElementById('tab-payments') && !document.getElementById('tab-payments').classList.contains('hidden')) {
-        const _hasEntities = paymentEntities.length > 0;
-        const _hasTx = paymentTransactions.length > 0;
-        if (_hasEntities || _hasTx) {
-          if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
-        }
-      }
+      if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
       if (typeof calculateNetCash === 'function') calculateNetCash();
     } catch (e) { console.error('refreshPaymentTab failed.', _safeErr(e)); }
   })(),
@@ -12550,25 +12522,32 @@ totalExpenses += amount;
 }
 });
 const supplierIdSet = new Set();
+if (typeof factoryInventoryData !== 'undefined') {
 factoryInventoryData.forEach(m => { if (m.supplierId) supplierIdSet.add(String(m.supplierId)); });
+}
+if (typeof paymentTransactions !== 'undefined') {
 paymentTransactions.forEach(t => {
 if (t.isPayable && t.type === 'IN' && t.supplierCreditAmount) {
 supplierIdSet.add(String(t.entityId));
 }
 });
+}
 const supplierBalances = {};
+if (typeof factoryInventoryData !== 'undefined') {
 factoryInventoryData.forEach(material => {
 if (material.supplierId && material.paymentStatus === 'pending' && material.totalPayable > 0) {
 const sid = String(material.supplierId);
 supplierBalances[sid] = (supplierBalances[sid] || 0) + material.totalPayable;
 }
 });
+}
 const entityBalances = {};
 paymentEntities.forEach(entity => {
 if (entity.isExpenseEntity === true) return;
 if (supplierIdSet.has(String(entity.id))) return;
 entityBalances[entity.id] = 0;
 });
+if (typeof paymentTransactions !== 'undefined') {
 paymentTransactions.forEach(transaction => {
 if (transaction.isExpense === true) return;
 if (supplierIdSet.has(String(transaction.entityId))) return;
@@ -12580,12 +12559,14 @@ entityBalances[transaction.entityId] += parseFloat(transaction.amount) || 0;
 }
 }
 });
+}
 for (const sid in supplierBalances) {
 if (supplierBalances[sid] > 0) {
 totalSupplierPayables += supplierBalances[sid];
 totalPayables += supplierBalances[sid];
 }
 }
+if (typeof paymentTransactions !== 'undefined') {
 paymentTransactions.forEach(transaction => {
 if (transaction.isExpense === true) return;
 if (!transaction.isPayable || transaction.type !== 'IN') return;
@@ -12597,6 +12578,7 @@ totalPayables += creditAmt;
 supplierIdSet.add(String(transaction.entityId));
 }
 });
+}
 for (const entityId in entityBalances) {
 const balance = entityBalances[entityId];
 if (balance > 0) { totalEntityPayables += balance; totalPayables += balance; }
@@ -12653,19 +12635,26 @@ description: grp.count > 1 ? `${grp.count} transactions` : ''
 }
 if (viewMode === 'entities') {
 const supplierIds = new Set();
+if (typeof factoryInventoryData !== 'undefined') {
 factoryInventoryData.forEach(m => { if (m.supplierId) supplierIds.add(String(m.supplierId)); });
+}
+if (typeof paymentTransactions !== 'undefined') {
 paymentTransactions.forEach(t => {
 if (t.isPayable && t.type === 'IN' && t.supplierCreditAmount) {
 supplierIds.add(String(t.entityId));
 }
 });
+}
 const supplierEntityBalances = {};
+if (typeof factoryInventoryData !== 'undefined') {
 factoryInventoryData.forEach(material => {
 if (material.supplierId && material.paymentStatus === 'pending' && material.totalPayable > 0) {
 const sid = String(material.supplierId);
 supplierEntityBalances[sid] = (supplierEntityBalances[sid] || 0) + material.totalPayable;
 }
 });
+}
+if (typeof paymentTransactions !== 'undefined') {
 paymentTransactions.forEach(t => {
 if (!t.isPayable || t.type !== 'IN' || !t.supplierCreditAmount) return;
 const creditAmt = parseFloat(t.supplierCreditAmount) || 0;
@@ -12674,12 +12663,14 @@ const sid = String(t.entityId);
 supplierEntityBalances[sid] = (supplierEntityBalances[sid] || 0) + creditAmt;
 }
 });
+}
 const entityBalances = {};
 paymentEntities.forEach(entity => {
 if (entity.isExpenseEntity === true) return;
 if (supplierIds.has(String(entity.id))) return;
 entityBalances[entity.id] = 0;
 });
+if (typeof paymentTransactions !== 'undefined') {
 paymentTransactions.forEach(transaction => {
 if (transaction.isExpense === true) return;
 if (supplierIds.has(String(transaction.entityId))) return;
@@ -12691,6 +12682,7 @@ entityBalances[transaction.entityId] += parseFloat(transaction.amount) || 0;
 }
 }
 });
+}
 paymentEntities.forEach(entity => {
 if (entity.isExpenseEntity === true) return;
 const entityName = entity && entity.name ? String(entity.name) : '';
@@ -12759,6 +12751,12 @@ if (a.type === 'entity' && b.type !== 'entity') return 1;
 if (a.type !== 'entity' && b.type === 'entity') return -1;
 return b.date - a.date;
 });
+const totalItems = rows.length;
+if (!rows || !Array.isArray(rows)) {
+tbody.innerHTML = `<tr><td class="u-empty-state-danger" colspan="4" >Invalid data format</td></tr>`;
+if (totalSpan) totalSpan.textContent = '0.00';
+return;
+}
 if (rows.length === 0) {
 tbody.innerHTML = `
 <tr>
@@ -12769,6 +12767,7 @@ No records found matching your filters
 if (totalSpan) totalSpan.textContent = '0.00';
 return;
 }
+
 function buildUnifiedRow(row) {
 const tr = document.createElement('tr');
 tr.style.cssText = 'border-bottom: 1px solid var(--glass-border); transition: background 0.2s; cursor: pointer;';
@@ -12781,7 +12780,7 @@ tr.innerHTML = `
 <td style="padding: 8px 4px; font-weight: 600; font-size: 0.8rem; cursor:pointer;" onclick="openExpenseEntityDetails('${esc(row.id)}')">
 ${esc(row.name)}
 <div style="display: inline-block; margin-left: 6px;">
-<span style="background: ${row.typeLabel === 'EXPENSE' ? 'var(--warning)' : 'var(--accent)'}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.55rem; font-weight: 700;">
+<span style="color: ${row.typeLabel === 'EXPENSE' ? 'var(--warning)' : 'var(--accent)'}; padding: 2px 6px; border-radius: 4px; font-size: 0.55rem; font-weight: 700;">
 ${row.typeLabel}
 </span>
 </div>
@@ -12800,7 +12799,7 @@ ${row.dateStr}
 <td style="padding: 8px 4px; font-weight: 700; font-size: 0.8rem; color: ${row.nameColor}; cursor:pointer;" onclick="openEntityDetailsOverlay('${esc(row.id)}')">
 ${esc(row.name)}
 <div style="font-size: 0.6rem; margin-top: 2px;">
-<span style="background: ${row.amountColor}; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.55rem; font-weight: 600;">
+<span style="color: ${row.amountColor}; padding: 1px 4px; border-radius: 3px; font-size: 0.55rem; font-weight: 600;">
 ${row.balanceLabel}
 </span>
 </div>
@@ -12812,10 +12811,10 @@ ${row.amountStr}
 }
 return tr;
 }
-const _paymentsTab = document.getElementById('tab-payments');
-if (!_paymentsTab || !_paymentsTab.classList.contains('hidden')) {
-GNDVirtualScroll.mount('unified-table-container', rows, buildUnifiedRow, tbody);
-}
+tbody.innerHTML = '';
+const _fragU = document.createDocumentFragment();
+rows.forEach((row, i) => { const el = buildUnifiedRow(row, i); if (el) _fragU.appendChild(el); });
+tbody.appendChild(_fragU);
 if (viewMode === 'entities') {
 if (footerLabel) footerLabel.textContent = 'Net Balance:';
 if (totalSpan) {
@@ -16164,56 +16163,7 @@ container.appendChild(fragment);
 this.isRendering = false;
 }
 };
-class VirtualScroller {
-constructor(container, itemHeight, renderFunc) {
-this.container = container;
-this.itemHeight = itemHeight;
-this.renderFunc = renderFunc;
-this.items = [];
-this.visibleRange = { start: 0, end: 0 };
-this.setupScrollListener();
-}
-setItems(items) {
-this.items = items;
-this.render();
-}
-setupScrollListener() {
-this._scrollHandler = () => {
-this.updateVisibleRange();
-this.render();
-};
-this.container.addEventListener('scroll', this._scrollHandler);
-}
-destroy() {
-if (this._scrollHandler) {
-this.container.removeEventListener('scroll', this._scrollHandler);
-this._scrollHandler = null;
-}
-}
-updateVisibleRange() {
-const scrollTop = this.container.scrollTop;
-const containerHeight = this.container.clientHeight;
-const start = Math.floor(scrollTop / this.itemHeight);
-const end = Math.ceil((scrollTop + containerHeight) / this.itemHeight);
-this.visibleRange = { start, end };
-}
-render() {
-const { start, end } = this.visibleRange;
-const visibleItems = this.items.slice(start, end);
-const fragment = document.createDocumentFragment();
-visibleItems.forEach((item, index) => {
-const element = this.renderFunc(item);
-if (element) {
-element.style.position = 'absolute';
-element.style.top = `${(start + index) * this.itemHeight}px`;
-fragment.appendChild(element);
-}
-});
-this.container.innerHTML = '';
-this.container.appendChild(fragment);
-this.container.style.height = `${this.items.length * this.itemHeight}px`;
-}
-}
+
 class ReactiveComponent {
 constructor(element, config = {}) {
 this.element = element;
@@ -16293,7 +16243,6 @@ window.removeEventListener('scroll', window._rafScrollHandler);
 window._rafScrollHandler = null;
 }
 if (window._fbOfflineHandler) { window.removeEventListener('offline', window._fbOfflineHandler); window._fbOfflineHandler = null; }
-if (window._fbVisibilityHandler) { document.removeEventListener('visibilitychange', window._fbVisibilityHandler); window._fbVisibilityHandler = null; }
 if (window._tombstoneCleanupInterval) { clearInterval(window._tombstoneCleanupInterval); window._tombstoneCleanupInterval = null; }
 if (window._syncUpdatesCleanupInterval) { clearInterval(window._syncUpdatesCleanupInterval); window._syncUpdatesCleanupInterval = null; }
 if (window._connectionCheckInterval) { clearInterval(window._connectionCheckInterval); window._connectionCheckInterval = null; }
