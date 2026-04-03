@@ -2717,8 +2717,9 @@ async function _mergeAndPersist(cloudData) {
     ).filter(r => r.deletedAt > threeMonthsAgo);
   const deduped = window._dedupDeletionRecords ? window._dedupDeletionRecords(safeDels) : safeDels;
   await sqliteStore.set('deletion_records', deduped);
-  const _deletedSet = new Set(deduped.map(r => r.id));
-  await sqliteStore.set('deleted_records', Array.from(_deletedSet));
+  const _existingDeleted = new Set(ensureArray(await sqliteStore.get('deleted_records')));
+  deduped.forEach(r => _existingDeleted.add(r.id));
+  await sqliteStore.set('deleted_records', Array.from(_existingDeleted));
   trackFirestoreRead(deletionsSnap.docs.length);
   } catch (_delErr) {
   console.warn('[Sync] Failed to refresh deletions:', _safeErr(_delErr));
