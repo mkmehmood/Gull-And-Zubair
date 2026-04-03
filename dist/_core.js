@@ -8294,8 +8294,9 @@ async function _mergeAndPersist(cloudData) {
     ).filter(r => r.deletedAt > threeMonthsAgo);
   const deduped = window._dedupDeletionRecords ? window._dedupDeletionRecords(safeDels) : safeDels;
   await sqliteStore.set('deletion_records', deduped);
-  const _deletedSet = new Set(deduped.map(r => r.id));
-  await sqliteStore.set('deleted_records', Array.from(_deletedSet));
+  const _existingDeleted = new Set(ensureArray(await sqliteStore.get('deleted_records')));
+  deduped.forEach(r => _existingDeleted.add(r.id));
+  await sqliteStore.set('deleted_records', Array.from(_existingDeleted));
   trackFirestoreRead(deletionsSnap.docs.length);
   } catch (_delErr) {
   console.warn('[Sync] Failed to refresh deletions:', _safeErr(_delErr));
@@ -17312,8 +17313,6 @@ initFactoryTab();
 },
 'payments': async () => {
 await syncPaymentsTab();
-await refreshPaymentTab();
-setTimeout(() => { if (typeof renderUnifiedTable === 'function') renderUnifiedTable(1); }, 150);
 },
 'rep': async () => {
 await new Promise(async resolve => {
@@ -19431,7 +19430,11 @@ await Promise.all([
   (async () => {
     try {
       if (document.getElementById('tab-payments') && !document.getElementById('tab-payments').classList.contains('hidden')) {
-        if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
+        const _hasEntities = paymentEntities.length > 0;
+        const _hasTx = paymentTransactions.length > 0;
+        if (_hasEntities || _hasTx) {
+          if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
+        }
       }
       if (typeof calculateNetCash === 'function') calculateNetCash();
     } catch (e) { console.error('refreshPaymentTab failed.', _safeErr(e)); }
@@ -21094,25 +21097,20 @@ totalExpenses += amount;
 }
 });
 const supplierIdSet = new Set();
-if (typeof factoryInventoryData !== 'undefined') {
 factoryInventoryData.forEach(m => { if (m.supplierId) supplierIdSet.add(String(m.supplierId)); });
-}
 const supplierBalances = {};
-if (typeof factoryInventoryData !== 'undefined') {
 factoryInventoryData.forEach(material => {
 if (material.supplierId && material.paymentStatus === 'pending' && material.totalPayable > 0) {
 const sid = String(material.supplierId);
 supplierBalances[sid] = (supplierBalances[sid] || 0) + material.totalPayable;
 }
 });
-}
 const entityBalances = {};
 paymentEntities.forEach(entity => {
 if (entity.isExpenseEntity === true) return;
 if (supplierIdSet.has(String(entity.id))) return;
 entityBalances[entity.id] = 0;
 });
-if (typeof paymentTransactions !== 'undefined') {
 paymentTransactions.forEach(transaction => {
 if (transaction.isExpense === true) return;
 if (supplierIdSet.has(String(transaction.entityId))) return;
@@ -21124,7 +21122,6 @@ entityBalances[transaction.entityId] += parseFloat(transaction.amount) || 0;
 }
 }
 });
-}
 for (const sid in supplierBalances) {
 if (supplierBalances[sid] > 0) {
 totalSupplierPayables += supplierBalances[sid];
@@ -21187,25 +21184,20 @@ description: grp.count > 1 ? `${grp.count} transactions` : ''
 }
 if (viewMode === 'entities') {
 const supplierIds = new Set();
-if (typeof factoryInventoryData !== 'undefined') {
 factoryInventoryData.forEach(m => { if (m.supplierId) supplierIds.add(String(m.supplierId)); });
-}
 const supplierEntityBalances = {};
-if (typeof factoryInventoryData !== 'undefined') {
 factoryInventoryData.forEach(material => {
 if (material.supplierId && material.paymentStatus === 'pending' && material.totalPayable > 0) {
 const sid = String(material.supplierId);
 supplierEntityBalances[sid] = (supplierEntityBalances[sid] || 0) + material.totalPayable;
 }
 });
-}
 const entityBalances = {};
 paymentEntities.forEach(entity => {
 if (entity.isExpenseEntity === true) return;
 if (supplierIds.has(String(entity.id))) return;
 entityBalances[entity.id] = 0;
 });
-if (typeof paymentTransactions !== 'undefined') {
 paymentTransactions.forEach(transaction => {
 if (transaction.isExpense === true) return;
 if (supplierIds.has(String(transaction.entityId))) return;
@@ -21217,7 +21209,6 @@ entityBalances[transaction.entityId] += parseFloat(transaction.amount) || 0;
 }
 }
 });
-}
 paymentEntities.forEach(entity => {
 if (entity.isExpenseEntity === true) return;
 const entityName = entity && entity.name ? String(entity.name) : '';
@@ -21286,12 +21277,6 @@ if (a.type === 'entity' && b.type !== 'entity') return 1;
 if (a.type !== 'entity' && b.type === 'entity') return -1;
 return b.date - a.date;
 });
-const totalItems = rows.length;
-if (!rows || !Array.isArray(rows)) {
-tbody.innerHTML = `<tr><td class="u-empty-state-danger" colspan="4" >Invalid data format</td></tr>`;
-if (totalSpan) totalSpan.textContent = '0.00';
-return;
-}
 if (rows.length === 0) {
 tbody.innerHTML = `
 <tr>
@@ -21302,7 +21287,6 @@ No records found matching your filters
 if (totalSpan) totalSpan.textContent = '0.00';
 return;
 }
-
 function buildUnifiedRow(row) {
 const tr = document.createElement('tr');
 tr.style.cssText = 'border-bottom: 1px solid var(--glass-border); transition: background 0.2s; cursor: pointer;';
@@ -21346,12 +21330,8 @@ ${row.amountStr}
 }
 return tr;
 }
-const _unifiedContainer = document.getElementById('unified-table-container');
 const _paymentsTab = document.getElementById('tab-payments');
-const _tabHidden = _paymentsTab && _paymentsTab.classList.contains('hidden');
-if (_tabHidden && _unifiedContainer) {
-
-} else {
+if (!_paymentsTab || !_paymentsTab.classList.contains('hidden')) {
 GNDVirtualScroll.mount('unified-table-container', rows, buildUnifiedRow, tbody);
 }
 if (viewMode === 'entities') {
