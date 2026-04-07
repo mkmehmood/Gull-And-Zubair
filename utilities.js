@@ -9982,53 +9982,58 @@ year: {q:0, v:0, cash:0, credit:0, profit:0},
 all: {q:0, v:0, cash:0, credit:0, profit:0}
 };
 const sortedSales = [...customerSales].sort((a,b) => {
-if (a.date === selectedDate && b.date !== selectedDate) return -1;
-if (a.date !== selectedDate && b.date === selectedDate) return 1;
+const aEff = a.supplyDate || a.date;
+const bEff = b.supplyDate || b.date;
+if (aEff === selectedDate && bEff !== selectedDate) return -1;
+if (aEff !== selectedDate && bEff === selectedDate) return 1;
 return compareTimestamps(getRecordTimestamp(b), getRecordTimestamp(a));
 });
 sortedSales.forEach(item => {
 const isRepLinked = item.salesRep && item.salesRep !== 'NONE';
 const isAdminCollection = !isRepLinked && item.paymentType === 'COLLECTION' && item.currentRepProfile === 'admin';
-
-if (!isRepLinked && !isAdminCollection && (item.paymentType === 'PARTIAL_PAYMENT' ||
+const isOldDebt = item.transactionType === 'OLD_DEBT';
+if (!isRepLinked && !isAdminCollection && !isOldDebt && (item.paymentType === 'PARTIAL_PAYMENT' ||
 item.paymentType === 'COLLECTION')) return;
 if (isRepLinked && item.paymentType === 'PARTIAL_PAYMENT') return;
-
-const rowDate = new Date(item.date);
+const effDateStr = item.supplyDate || item.date;
+const rowDate = new Date(effDateStr);
 const rowYear = rowDate.getFullYear();
 const rowMonth = rowDate.getMonth();
-const rowDay = rowDate.getDate();
 const updatePeriod = (period) => {
 if (isAdminCollection) {
-
+period.cash += (item.totalValue || 0);
 return;
 }
-period.q += item.quantity;
-period.v += item.totalValue;
-period.profit += item.profit;
+if (isOldDebt) {
+period.credit += (item.totalValue || 0);
+return;
+}
+period.q += (item.quantity || 0);
+period.v += (item.totalValue || 0);
+period.profit += (item.profit || 0);
 if (item.isMerged && item.mergedSummary) {
 const ms = item.mergedSummary;
-period.cash   += (ms.cashSales    || 0);
+period.cash += (ms.cashSales || 0);
 period.credit += (ms.unpaidCredit || 0);
-} else if(item.paymentType === 'CREDIT' && !item.creditReceived) {
-
-period.credit += item.totalValue;
-} else if(isRepLinked) {
+} else if (isRepLinked) {
 if (item.paymentType === 'CREDIT' && !item.creditReceived) {
 const partialPaid = item.partialPaymentReceived || 0;
-period.credit += (getSaleTransactionValue ? getSaleTransactionValue(item) : item.totalValue || 0) - partialPaid;
+period.credit += (item.totalValue || 0) - partialPaid;
 } else if (item.paymentType === 'COLLECTION' || item.paymentType === 'PARTIAL_PAYMENT') {
 period.credit -= (item.totalValue || 0);
+} else {
+period.cash += (item.totalValue || 0);
 }
-} else if(item.paymentType === 'CASH' || item.creditReceived) {
-
-period.cash += item.totalValue;
+} else if (item.paymentType === 'CREDIT' && !item.creditReceived) {
+period.credit += (item.totalValue || 0);
+} else if (item.paymentType === 'CASH' || item.creditReceived) {
+period.cash += (item.totalValue || 0);
 }
 };
-if(item.date === selectedDate) updatePeriod(stats.day);
-if(rowDate >= weekStart && rowDate <= selectedDateObj) updatePeriod(stats.week);
-if(rowYear === selectedYear && rowMonth === selectedMonth) updatePeriod(stats.month);
-if(rowYear === selectedYear) updatePeriod(stats.year);
+if (effDateStr === selectedDate) updatePeriod(stats.day);
+if (rowDate >= weekStart && rowDate <= selectedDateObj) updatePeriod(stats.week);
+if (rowYear === selectedYear && rowMonth === selectedMonth) updatePeriod(stats.month);
+if (rowYear === selectedYear) updatePeriod(stats.year);
 updatePeriod(stats.all);
 });
 const displayData = sortedSales.filter(item => {
@@ -10063,9 +10068,10 @@ histContainer.replaceChildren(Object.assign(document.createElement('p'), {textCo
 } else {
 const fragment = document.createDocumentFragment();
 displayData.forEach(async item => {
-const isSelected = item.date === selectedDate;
+const effDate = item.supplyDate || item.date;
+const isSelected = effDate === selectedDate;
 const highlightClass = isSelected ? 'highlight-card' : '';
-const dateDisplay = isSelected ? `${formatDisplayDate(item.date)} (Selected)` : formatDisplayDate(item.date);
+const dateDisplay = isSelected ? `${formatDisplayDate(effDate)} (Selected)` : formatDisplayDate(effDate);
 const creditReceived = item.creditReceived || false;
 const paymentType = item.paymentType || 'CASH';
 const badgeClass = creditReceived ? 'received' : (paymentType ? paymentType.toLowerCase() : 'cash');
@@ -10086,7 +10092,8 @@ mergedBadge = _mergedBadgeHtml(item, {inline:true});
 }
 const card = document.createElement('div');
 card.className = `card liquid-card ${highlightClass}${item.isSettled ? ' is-settled-record' : ''}`.trim();
-if (item.date) card.setAttribute('data-date', item.date);
+const _cardDate = item.supplyDate || item.date;
+if (_cardDate) card.setAttribute('data-date', _cardDate);
 let creditSection = '';
 if (!isOldDebtItem) {
 if (paymentType === 'CREDIT' && !creditReceived) {
