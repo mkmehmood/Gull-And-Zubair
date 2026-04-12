@@ -1646,9 +1646,6 @@ if (repHasPrior) {
   ]);
 }
 const finalBal = (repHasPrior ? repOpeningBalance : 0) + totDebit - totCredit;
-txRows.push(['TOTALS', '', `${fmtAmt(totQty)} kg total`,
-'Rs '+fmtAmt(totDebit), 'Rs '+fmtAmt(totCredit),
-Math.abs(finalBal)<0.01?'SETTLED':(finalBal>0?'Rs '+fmtAmt(finalBal):'OVERPAID\nRs '+fmtAmt(Math.abs(finalBal)))]);
 doc.autoTable({
 startY: yPos,
 head: [['Date', 'Type', 'Details', 'Debit (Sale)', 'Credit (Rcvd)', 'Balance']],
@@ -1663,16 +1660,13 @@ columnStyles: {
 },
 didParseCell: function(data) {
 const isOpeningRow = repHasPrior && data.row.index === 0;
-const isTotal = data.row.index === txRows.length - 1;
 if (isOpeningRow) {
   data.cell.styles.fillColor = [220, 235, 255];
   data.cell.styles.fontStyle = 'bold';
   data.cell.styles.textColor = [30, 80, 160];
   data.cell.styles.fontSize  = 8;
-} else if (isTotal) {
-  data.cell.styles.fontStyle='bold'; data.cell.styles.fillColor=[235,230,255]; data.cell.styles.fontSize=9;
 }
-if (!isOpeningRow && !isTotal) {
+if (!isOpeningRow) {
   if (data.column.index===1){
     const txt=(data.cell.text||[]).join('');
     if(txt.includes('CASH')) data.cell.styles.textColor=[40,167,69];

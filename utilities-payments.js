@@ -2859,12 +2859,7 @@ balNote
 ]);
 pdfEntityMeta.push({ entity, balNote, hasMergedTx });
 });
-entityRows.push([
-`TOTAL (${pdfEntityMeta.length} entities)`, '', '', '',
-'Payable: ' + fmtAmt(totPayable) + '\nReceivable: ' + fmtAmt(totReceivable),
-'Net: ' + fmtAmt(Math.abs(totReceivable - totPayable))
-]);
-if (entityRows.length > 1) {
+if (entityRows.length > 0) {
 doc.autoTable({
 startY: yPos,
 head: [['Name', 'Type', 'Phone', 'Balance Source', 'Balance', 'Status']],
@@ -2881,13 +2876,6 @@ columnStyles: {
 5: { cellWidth: 22, halign:'center', fontStyle:'bold' }
 },
 didParseCell: function(data) {
-const isTotal = data.row.index === entityRows.length - 1;
-if (isTotal) {
-data.cell.styles.fontStyle = 'bold';
-data.cell.styles.fillColor = [240, 248, 255];
-data.cell.styles.fontSize = 9;
-return;
-}
 const meta = pdfEntityMeta[data.row.index];
 if (meta && meta.hasMergedTx) data.cell.styles.fillColor = PDF_MERGED_ROW_COLOR;
 if (data.column.index === 4 && meta) {
@@ -2957,13 +2945,11 @@ exp.category || 'operating',
 fmtAmt(parseFloat(exp.amount)||0)
 ];
 });
-const mExpTotal = mergedExpenses.reduce((s,e)=>s+(parseFloat(e.amount)||0),0);
-mergedExpRows.push(['','','','SUBTOTAL ('+mergedExpenses.length+' groups)',fmtAmt(mExpTotal)]);
 doc.autoTable({startY:yPos,head:[['Year Period','Name / Vendor','Category','Summary','Total Amount']],body:mergedExpRows,theme:'grid',
 headStyles:{fillColor:PDF_MERGED_HDR_COLOR,textColor:255,fontSize:9,fontStyle:'bold',halign:'center'},
 styles:{fontSize:8,cellPadding:2.5,lineWidth:0.15,lineColor:[200,180,230],overflow:'linebreak'},
 columnStyles:{0:{cellWidth:30,halign:'center'},1:{cellWidth:34},2:{cellWidth:22,halign:'center',fontSize:7.5},3:{cellWidth:58},4:{cellWidth:28,halign:'right',fontStyle:'bold'}},
-didParseCell:function(data){const isSub=data.row.index===mergedExpRows.length-1;if(isSub){data.cell.styles.fillColor=[230,210,255];data.cell.styles.fontStyle='bold';data.cell.styles.fontSize=9.5;}else{data.cell.styles.fillColor=PDF_MERGED_ROW_COLOR;data.cell.styles.textColor=[80,40,120];}if(data.column.index===4)data.cell.styles.textColor=isSub?[126,34,206]:[140,60,180];},
+didParseCell:function(data){data.cell.styles.fillColor=PDF_MERGED_ROW_COLOR;data.cell.styles.textColor=[80,40,120];if(data.column.index===4)data.cell.styles.textColor=[140,60,180];},
 margin:{left:14,right:14}});
 yPos = doc.lastAutoTable.finalY + 6;
 if (yPos > 250) { doc.addPage(); yPos = 20; }
@@ -2983,7 +2969,6 @@ doc.text('INDIVIDUAL EXPENSE RECORDS', 14, yPos);
 doc.setTextColor(80,80,80); doc.setFont(undefined,'normal');
 yPos += 5;
 }
-expenseRows.push(['', '', '', 'TOTAL (' + expenses.length + ' records)', fmtAmt(totalAmt)]);
 doc.autoTable({
 startY: yPos,
 head: [['Date', 'Name / Vendor', 'Category', 'Description', 'Amount']],
@@ -2998,15 +2983,7 @@ columnStyles: {
 3: { cellWidth: 60 },
 4: { cellWidth: 28, halign:'right', textColor:[220,53,69], fontStyle:'bold' }
 },
-didParseCell: function(data) {
-const isTotal = data.row.index === expenseRows.length - 1;
-if (isTotal) {
-data.cell.styles.fontStyle = 'bold';
-data.cell.styles.fillColor = [255, 245, 235];
-data.cell.styles.fontSize = 9.5;
-if (data.column.index === 4) data.cell.styles.textColor = [220,53,69];
-}
-},
+didParseCell: function(data) {},
 margin: { left: 14, right: 14 }
 });
 const afterY = doc.lastAutoTable.finalY + 8;
@@ -3439,13 +3416,11 @@ if (mergedExpRecs.length > 0) {
       '\u2605 MERGED'
     ];
   });
-  const mTot = mergedExpRecs.reduce((s,e)=>s+(parseFloat(e.amount)||0),0);
-  mergedRows.push(['','SUBTOTAL ('+mergedExpRecs.length+' year periods)',fmtAmt(mTot),'']);
   doc.autoTable({startY:tableStartY,head:[['Year Period','Summary','Amount','Note']],body:mergedRows,theme:'grid',
     headStyles:{fillColor:PDF_MERGED_HDR_COLOR,textColor:255,fontSize:9,fontStyle:'bold',halign:'center'},
     styles:{fontSize:8.5,cellPadding:3,lineWidth:0.15,lineColor:[200,180,230],overflow:'linebreak'},
     columnStyles:{0:{cellWidth:30,halign:'center'},1:{cellWidth:85},2:{cellWidth:30,halign:'right',fontStyle:'bold'},3:{cellWidth:31,halign:'center',fontStyle:'bold'}},
-    didParseCell:function(data){const isSub=data.row.index===mergedRows.length-1;if(isSub){data.cell.styles.fillColor=[230,210,255];data.cell.styles.fontStyle='bold';data.cell.styles.fontSize=9.5;}else{data.cell.styles.fillColor=PDF_MERGED_ROW_COLOR;data.cell.styles.textColor=[80,40,120];}if(data.column.index===2)data.cell.styles.textColor=isSub?[126,34,206]:[140,60,180];if(data.column.index===3&&!isSub)data.cell.styles.textColor=[126,34,206];},
+    didParseCell:function(data){data.cell.styles.fillColor=PDF_MERGED_ROW_COLOR;data.cell.styles.textColor=[80,40,120];if(data.column.index===2)data.cell.styles.textColor=[140,60,180];if(data.column.index===3)data.cell.styles.textColor=[126,34,206];},
     margin:{left:14,right:14}});
   tableStartY = doc.lastAutoTable.finalY + 8;
   if (tableStartY > 240) { doc.addPage(); tableStartY = 20; }
@@ -3468,7 +3443,6 @@ fmtAmt(parseFloat(e.amount) || 0),
 fmtAmt(runningTotal)
 ];
 });
-expenseRows.push(['', 'TOTAL (' + records.length + ' entries)', fmtAmt(total), '']);
 doc.autoTable({
 startY: tableStartY,
 head: [['Date', 'Description', 'Amount', 'Cumulative Total']],
@@ -3482,15 +3456,7 @@ columnStyles: {
 2: { cellWidth: 30, halign:'right', textColor:[220,53,69], fontStyle:'bold' },
 3: { cellWidth: 32, halign:'right', textColor:[255,149,0], fontStyle:'bold' }
 },
-didParseCell: function(data) {
-const isTotal = data.row.index === expenseRows.length - 1;
-if (isTotal) {
-data.cell.styles.fontStyle = 'bold';
-data.cell.styles.fillColor = [255, 245, 235];
-data.cell.styles.fontSize = 9.5;
-if (data.column.index === 2) data.cell.styles.textColor = [220, 53, 69];
-}
-},
+didParseCell: function(data) {},
 margin: { left: 14, right: 14 }
 });
 if (range === 'all' && records.length > 5) {

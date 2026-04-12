@@ -2585,13 +2585,6 @@ if (mergedTxns.length > 0) {
     row[1] = summary.substring(0, 70);
     return row;
   });
-  const mTotOut      = mergedTxns.filter(t => t.type === 'OUT').reduce((s,t) => s+(parseFloat(t.amount)||0), 0);
-  const mTotCashIn   = mergedTxns.filter(t => t.type === 'IN' && !t.isPayable).reduce((s,t) => s+(parseFloat(t.amount)||0), 0);
-  const mTotCredit   = mergedTxns.filter(t => t.type === 'IN' && t.isPayable).reduce((s,t) => s+(parseFloat(t.amount)||0), 0);
-  const mTotIn       = mTotCashIn + mTotCredit;
-  const mFin         = mTotIn - mTotOut;
-  mergedRows.push(['', 'SUBTOTAL', '', fmtAmt(mTotOut), fmtAmt(mTotIn),
-    Math.abs(mFin)<0.01?'SETTLED':fmtAmt(Math.abs(mFin))]);
   doc.autoTable({
     startY: yPos,
     head: [['Date', 'Year Period / Summary', 'Type', 'Payment OUT', 'Payment IN', 'Balance']],
@@ -2608,20 +2601,13 @@ if (mergedTxns.length > 0) {
       5: { cellWidth: 30, halign: 'center', fontStyle: 'bold' }
     },
     didParseCell: function(data) {
-      const isSubtotal = data.row.index === mergedRows.length - 1;
-      if (isSubtotal) {
-        data.cell.styles.fillColor = [230, 210, 255];
-        data.cell.styles.fontStyle = 'bold';
-        data.cell.styles.fontSize  = 8.5;
-      } else {
-        data.cell.styles.fillColor = PDF_MERGED_ROW_COLOR;
-        data.cell.styles.textColor = [80, 40, 120];
-      }
-      if (data.column.index === 2 && !isSubtotal)
+      data.cell.styles.fillColor = PDF_MERGED_ROW_COLOR;
+      data.cell.styles.textColor = [80, 40, 120];
+      if (data.column.index === 2)
         data.cell.styles.textColor = data.cell.text[0] === 'OUT' ? [180, 40, 40] : data.cell.text[0] === 'CR' ? [200, 100, 0] : [40, 130, 60];
-      if (data.column.index === 3 && !isSubtotal) data.cell.styles.textColor = [180, 40, 40];
-      if (data.column.index === 4 && !isSubtotal) data.cell.styles.textColor = [40, 130, 60];
-      if (data.column.index === 5 && !isSubtotal) {
+      if (data.column.index === 3) data.cell.styles.textColor = [180, 40, 40];
+      if (data.column.index === 4) data.cell.styles.textColor = [40, 130, 60];
+      if (data.column.index === 5) {
         const txt = (data.cell.text||[]).join('');
         data.cell.styles.textColor = txt==='SETTLED'?[100,100,100]:[126,34,206];
       }
@@ -2666,7 +2652,6 @@ if (normalTxns.length > 0 || hasPriorBalance) {
   doc.text('INDIVIDUAL TRANSACTIONS', 14, yPos);
   doc.setTextColor(80, 80, 80); doc.setFont(undefined, 'normal');
   yPos += 5;
-  txRows.push(['', 'TOTAL', '', fmtAmt(totalOut), fmtAmt(totalIn), finalBalDisplay]);
   doc.autoTable({
     startY: yPos,
     head: [['Date', 'Description', 'Type', 'Payment OUT', 'Payment IN', 'Running Balance']],
@@ -2684,18 +2669,13 @@ if (normalTxns.length > 0 || hasPriorBalance) {
     },
     didParseCell: function(data) {
       const isOpeningRow = hasPriorBalance && data.row.index === 0;
-      const isTotal      = data.row.index === txRows.length - 1;
       if (isOpeningRow) {
         data.cell.styles.fillColor  = [220, 235, 255];
         data.cell.styles.fontStyle  = 'bold';
         data.cell.styles.textColor  = [30, 80, 160];
         data.cell.styles.fontSize   = 8;
-      } else if (isTotal) {
-        data.cell.styles.fontStyle  = 'bold';
-        data.cell.styles.fillColor  = [240, 240, 240];
-        data.cell.styles.fontSize   = 9;
       }
-      if (!isOpeningRow && !isTotal) {
+      if (!isOpeningRow) {
         if (data.column.index===2)
           data.cell.styles.textColor = data.cell.text[0]==='OUT'?[220,53,69]:data.cell.text[0]==='CR'?[200,100,0]:[40,167,69];
         if (data.column.index===5) {
@@ -2791,13 +2771,6 @@ remaining > 0 ? fmtAmt(remaining) : '-',
 status
 ];
 });
-matRows.push([
-'', 'TOTAL', '',
-fmtAmt(totalInvoice),
-fmtAmt(totalPaid),
-fmtAmt(totalRemaining),
-totalRemaining <= 0 ? 'CLEARED' : ''
-]);
 doc.autoTable({
 startY: yPos,
 head: [['Invoice Date', 'Material', 'Qty', 'Invoice Amt', 'Paid So Far', 'Remaining', 'Status']],
@@ -2815,13 +2788,7 @@ columnStyles: {
 6: { cellWidth: 17, halign: 'center', fontStyle: 'bold' }
 },
 didParseCell: function(data) {
-const isTotal = data.row.index === matRows.length - 1;
-if (isTotal) {
-data.cell.styles.fontStyle = 'bold';
-data.cell.styles.fillColor = [255, 245, 230];
-data.cell.styles.fontSize = 9;
-}
-if (data.column.index === 6 && !isTotal) {
+if (data.column.index === 6) {
 const txt = (data.cell.text || []).join('');
 if (txt === 'PAID') data.cell.styles.textColor = [40, 167, 69];
 if (txt === 'PARTIAL') data.cell.styles.textColor = [200, 100, 0];
@@ -3064,11 +3031,6 @@ if (mergedSalesTxns.length > 0) {
     return [formatDisplayDate(t.date), typeLabel, details.substring(0,70),
       netOut>0?fmtAmt(netOut):'-', isSettled?fmtAmt(cashS):'-', balTxt];
   });
-  const mNetTotal = mergedSalesTxns.reduce((s,t)=>{
-    const ms=t.mergedSummary||{}; return s+(ms.netOutstanding||t.totalValue||0);},0);
-  mergedRows.push(['','SUBTOTAL',`${mergedSalesTxns.length} year-end record${mergedSalesTxns.length!==1?'s':''}`,
-    mNetTotal>0?fmtAmt(mNetTotal):'-','',
-    mNetTotal<=0.01?'SETTLED':fmtAmt(mNetTotal)]);
   doc.autoTable({
     startY: yPos,
     head: [['Date', 'Type', 'Year Period / Summary', 'Outstanding', 'Settled', 'Balance']],
@@ -3082,12 +3044,10 @@ if (mergedSalesTxns.length > 0) {
       4:{cellWidth:27,halign:'right',fontStyle:'bold'},5:{cellWidth:26,halign:'center',fontStyle:'bold'}
     },
     didParseCell: function(data) {
-      const isSubtotal = data.row.index === mergedRows.length - 1;
-      if (isSubtotal) { data.cell.styles.fillColor=[230,210,255]; data.cell.styles.fontStyle='bold'; }
-      else { data.cell.styles.fillColor=PDF_MERGED_ROW_COLOR; data.cell.styles.textColor=[80,40,120]; }
-      if (data.column.index===3&&!isSubtotal) data.cell.styles.textColor=[180,40,40];
-      if (data.column.index===4&&!isSubtotal) data.cell.styles.textColor=[40,130,60];
-      if (data.column.index===5&&!isSubtotal) {
+      data.cell.styles.fillColor=PDF_MERGED_ROW_COLOR; data.cell.styles.textColor=[80,40,120];
+      if (data.column.index===3) data.cell.styles.textColor=[180,40,40];
+      if (data.column.index===4) data.cell.styles.textColor=[40,130,60];
+      if (data.column.index===5) {
         const txt=(data.cell.text||[]).join('');
         data.cell.styles.textColor = txt==='SETTLED'?[100,100,100]:[126,34,206];
       }
@@ -3124,9 +3084,6 @@ if (normalSalesTxns.length > 0 || custHasPrior) {
   doc.text('INDIVIDUAL TRANSACTIONS', 14, yPos);
   doc.setTextColor(80,80,80); doc.setFont(undefined,'normal');
   yPos += 5;
-  txRows.push(['TOTALS','',`${fmtAmt(totQty)} kg total`,
-    fmtAmt(totDebit),fmtAmt(totCredit),
-    Math.abs(finalBal)<0.01?'SETTLED':(finalBal>0?fmtAmt(finalBal):'OVERPAID\n' +fmtAmt(Math.abs(finalBal)))]);
   doc.autoTable({
     startY: yPos,
     head: [['Date', 'Type', 'Details', 'Debit (Sale)', 'Credit (Rcvd)', 'Balance']],
@@ -3141,16 +3098,13 @@ if (normalSalesTxns.length > 0 || custHasPrior) {
     },
     didParseCell: function(data) {
       const isOpeningRow = custHasPrior && data.row.index === 0;
-      const isTotal = data.row.index === txRows.length - 1;
       if (isOpeningRow) {
         data.cell.styles.fillColor = [220, 235, 255];
         data.cell.styles.fontStyle = 'bold';
         data.cell.styles.textColor = [30, 80, 160];
         data.cell.styles.fontSize  = 8;
-      } else if (isTotal) {
-        data.cell.styles.fontStyle='bold'; data.cell.styles.fillColor=[235,255,235]; data.cell.styles.fontSize=9;
       }
-      if (!isOpeningRow && !isTotal) {
+      if (!isOpeningRow) {
         if (data.column.index===1){
           const txt=(data.cell.text||[]).join('');
           if(txt.includes('CASH')) data.cell.styles.textColor=[40,167,69];
