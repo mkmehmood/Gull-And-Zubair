@@ -1521,13 +1521,20 @@ const repOpeningBalance = repPriorTxns.reduce((bal, t) => {
   }
   return bal + (debit - credit);
 }, 0);
+const _repEffDate = (t) => {
+const pt = t.paymentType || 'CASH';
+if (t.transactionType === 'OLD_DEBT') return new Date(0);
+if (pt === 'COLLECTION' || pt === 'PARTIAL_PAYMENT' || (pt === 'CREDIT' && t.creditReceived)) {
+return new Date(t.creditReceivedDate || t.date || 0);
+}
+return new Date(t.supplyDate || t.date || 0);
+};
 transactions.sort((a, b) => {
 if (a.isMerged && !b.isMerged) return -1;
 if (!a.isMerged && b.isMerged) return 1;
-const ap = (a.paymentType === 'CREDIT' && !a.creditReceived) ? 1 : 0;
-const bp = (b.paymentType === 'CREDIT' && !b.creditReceived) ? 1 : 0;
-if (bp !== ap) return bp - ap;
-return new Date(a.date) - new Date(b.date);
+if (a.transactionType === 'OLD_DEBT' && b.transactionType !== 'OLD_DEBT') return -1;
+if (a.transactionType !== 'OLD_DEBT' && b.transactionType === 'OLD_DEBT') return 1;
+return _repEffDate(a) - _repEffDate(b);
 });
 const repContact = repCustomers.find(c => c && c.name && c.name.toLowerCase() === customerName.toLowerCase());
 const phone = repContact?.phone || transactions.find(t => t.customerPhone)?.customerPhone || 'N/A';
@@ -1571,13 +1578,14 @@ if (transactions.length > 0) {
 const buildRow = async (t, runBal) => {
 const pt = t.paymentType || 'CASH';
 const isOldDebt = t.transactionType === 'OLD_DEBT';
-let debit = 0, credit = 0, typeLabel = '', detailLabel = '', displayDate = formatDisplayDate(t.date);
+let debit = 0, credit = 0, typeLabel = '', detailLabel = '', displayDate = formatDisplayDate(t.supplyDate || t.date);
 const unitPrice = (t.unitPrice && t.unitPrice > 0) ? t.unitPrice : await getSalePriceForStore(t.supplyStore || 'STORE_A');
 if (isOldDebt) {
 debit = parseFloat(t.totalValue) || 0;
 credit = parseFloat(t.partialPaymentReceived) || 0;
 typeLabel = 'OLD DEBT';
 detailLabel = t.notes || 'Brought forward from previous records';
+displayDate = formatDisplayDate(t.date);
 } else if (pt === 'CASH') {
 const val = t.totalValue || 0;
 debit = val; credit = val;
@@ -1595,7 +1603,7 @@ const val = t.totalValue || 0;
 debit = val; credit = val;
 typeLabel = 'CREDIT\n(PAID)';
 detailLabel = `${fmtAmt(t.quantity||0)} kg × Rs ${fmtAmt(unitPrice)}`;
-displayDate = formatDisplayDate(t.creditReceivedDate || t.date);
+displayDate = formatDisplayDate(t.creditReceivedDate || t.supplyDate || t.date);
 } else if (pt === 'COLLECTION') {
 credit = parseFloat(t.totalValue) || 0;
 typeLabel = 'COLLECTION';

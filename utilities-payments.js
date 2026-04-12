@@ -2935,7 +2935,7 @@ let expenses = expenseRecords.filter(exp => exp && exp.category === 'operating')
 if (periodFilter !== 'all') {
 expenses = expenses.filter(exp => exp.date && new Date(exp.date) >= startDate);
 }
-expenses.sort((a, b) => new Date(b.date) - new Date(a.date));
+expenses.sort((a, b) => new Date(a.date) - new Date(b.date));
 if (expenses.length > 0) {
 const nameGroups = {};
 expenses.forEach(exp => {

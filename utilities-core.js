@@ -2935,13 +2935,20 @@ const custOpeningBalance = custPriorTxns.reduce((bal, t) => {
   }
   return bal + (debit - credit);
 }, 0);
+const _custEffDate = (t) => {
+const pt = t.paymentType || 'CASH';
+if (t.transactionType === 'OLD_DEBT') return new Date(0);
+if (pt === 'COLLECTION' || pt === 'PARTIAL_PAYMENT' || (pt === 'CREDIT' && t.creditReceived)) {
+return new Date(t.creditReceivedDate || t.date || 0);
+}
+return new Date(t.supplyDate || t.date || 0);
+};
 transactions.sort((a, b) => {
 if (a.isMerged && !b.isMerged) return -1;
 if (!a.isMerged && b.isMerged) return 1;
-const ap = (a.paymentType === 'CREDIT' && !a.creditReceived) ? 1 : 0;
-const bp = (b.paymentType === 'CREDIT' && !b.creditReceived) ? 1 : 0;
-if (bp !== ap) return bp - ap;
-return new Date(a.date) - new Date(b.date);
+if (a.transactionType === 'OLD_DEBT' && b.transactionType !== 'OLD_DEBT') return -1;
+if (a.transactionType !== 'OLD_DEBT' && b.transactionType === 'OLD_DEBT') return 1;
+return _custEffDate(a) - _custEffDate(b);
 });
 const salesContact = salesCustomers.find(c => c && c.name && c.name.toLowerCase() === customerName.toLowerCase());
 const phone = salesContact?.phone || transactions.find(t => t.customerPhone)?.customerPhone || 'N/A';
@@ -2987,12 +2994,13 @@ const getSalePrice = async (t) => {
 const buildSaleRow = async (t, runBal) => {
   const pt = t.paymentType || 'CASH';
   const isOldDebt = t.transactionType === 'OLD_DEBT';
-  let debit = 0, credit = 0, typeLabel = '', detailLabel = '', displayDate = formatDisplayDate(t.date);
+  let debit = 0, credit = 0, typeLabel = '', detailLabel = '', displayDate = formatDisplayDate(t.supplyDate || t.date);
   if (isOldDebt) {
     debit = parseFloat(t.totalValue) || 0;
     credit = parseFloat(t.partialPaymentReceived) || 0;
     typeLabel = 'OLD DEBT';
     detailLabel = t.notes || 'Brought forward from previous records';
+    displayDate = formatDisplayDate(t.date);
   } else if (pt === 'CASH') {
     const val = await getSaleTransactionValue(t);
     debit = val; credit = val;
@@ -3010,7 +3018,7 @@ const buildSaleRow = async (t, runBal) => {
     debit = val; credit = val;
     typeLabel = 'CREDIT\n(PAID)';
     detailLabel = `${fmtAmt(t.quantity||0)} kg \xd7 ${fmtAmt(await getSalePrice(t))}`;
-    displayDate = formatDisplayDate(t.creditReceivedDate || t.date);
+    displayDate = formatDisplayDate(t.creditReceivedDate || t.supplyDate || t.date);
   } else if (pt === 'COLLECTION') {
     credit = parseFloat(t.totalValue) || 0;
     typeLabel = 'COLLECTION';
