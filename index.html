@@ -149,7 +149,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="anonymous" defer></script>
 <script>
 window._swConfirmed = false;
-
+window._custStats={day:{q:0,v:0,cash:0,credit:0,profit:0},week:{q:0,v:0,cash:0,credit:0,profit:0},month:{q:0,v:0,cash:0,credit:0,profit:0},year:{q:0,v:0,cash:0,credit:0,profit:0},all:{q:0,v:0,cash:0,credit:0,profit:0}};
 function _showUpdateDialog(reg) {
   if (window._swDialogShown) return;
   if (sessionStorage.getItem('_swJustUpdated')) { sessionStorage.removeItem('_swJustUpdated'); return; }
@@ -1143,35 +1143,19 @@ window._showLogoutConfirmDialog = async function() {
     </div>
   </div>
   <div class="screen-body">
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">
-      <select id="entityPdfRange" class="store-selector" style="flex:1;" onchange="if(currentEntityId){const entity=paymentEntities.find(e=>String(e.id)===String(currentEntityId));if(entity)renderEntityOverlayContent(entity);}">
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;position:relative;">
+      <input type="text" id="entity-trans-search" class="search-bar u-m-0" style="flex:1;" placeholder="Search history..." oninput="filterEntityManagementHistory()">
+      <select id="entityPdfRange" style="display:none;" onchange="if(currentEntityId){const entity=paymentEntities.find(e=>String(e.id)===String(currentEntityId));if(entity)renderEntityOverlayContent(entity);}">
         <option value="today">Today</option>
         <option value="week">This Week</option>
         <option value="month">This Month</option>
         <option value="year">This Year</option>
         <option value="all" selected>All Time</option>
       </select>
-      <button class="btn btn-noran btn-sm btn-pdf" onclick="exportEntityToPDF()" title="Export to PDF" style="padding:8px 12px;">PDF</button>
-    </div>
-    <div class="debt-panel u-debt-header liquid-card" style="margin-bottom:14px;">
-      <h4 class="u-heading-accent">Quick Transaction</h4>
-      <div class="u-quick-row">
-        <div class="field u-field-flex-1-min">
-          <label>Amount</label>
-          <input class="u-w-full" type="number" id="quickEntityAmount" placeholder="0.00">
-        </div>
-        <div class="field u-field-flex-1-5">
-          <label>Type</label>
-          <div class="toggle-group u-toggle-full">
-            <div class="toggle-opt active u-flex-1" id="quick-type-out" onclick="setQuickEntityType('OUT')">Payment OUT</div>
-            <div class="toggle-opt u-flex-1" id="quick-type-in" onclick="setQuickEntityType('IN')">Payment IN</div>
-          </div>
-        </div>
-        <button class="btn btn-noman u-quick-btn" onclick="(async()=>{await saveQuickEntityTransaction()})()">Save</button>
+      <div style="position:relative;flex-shrink:0;">
+        <button class="btn btn-noran btn-sm btn-pdf" title="Export to PDF" style="padding:8px 12px;display:flex;align-items:center;justify-content:center;" onclick="(function(b){var p=document.getElementById('_epop_entity');if(p){p.style.display=p.style.display==='none'?'block':'none';}else{var pop=document.createElement('div');pop.id='_epop_entity';pop.style.cssText='position:absolute;right:0;top:calc(100% + 4px);background:var(--glass);border:1px solid var(--glass-border);border-radius:10px;box-shadow:var(--shadow);z-index:9999;min-width:130px;padding:6px 0;';['Today','This Week','This Month','This Year','All Time'].forEach(function(l,i){var vals=['today','week','month','year','all'];var d=document.createElement('div');d.textContent=l;d.style.cssText='padding:9px 16px;font-size:0.82rem;cursor:pointer;color:var(--text-main);';d.onmouseenter=function(){d.style.background='var(--glass-raised)';};d.onmouseleave=function(){d.style.background='';};d.onclick=function(){var sel=document.getElementById('entityPdfRange');if(sel){sel.value=vals[i];sel.dispatchEvent(new Event('change'));}pop.style.display='none';exportEntityToPDF();};pop.appendChild(d);});b.parentNode.appendChild(pop);document.addEventListener('click',function h(e){if(!b.parentNode.contains(e.target)){pop.style.display='none';}},true);}})(this)"><svg width="15" height="15" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M9 5 H27 A2 2 0 0 1 29 7 V29 L23 35 H9 A2 2 0 0 1 7 33 V7 A2 2 0 0 1 9 5 Z" fill="currentColor" fill-opacity="0.12" stroke="currentColor" stroke-width="1.5"/><path d="M23 35 V29 H29" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linejoin="round"/><line x1="12" y1="14" x2="24" y2="14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="12" y1="19" x2="24" y2="19" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="12" y1="24" x2="18" y2="24" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
       </div>
-      <div class="u-field-hint">* "Payment OUT" reduces what you owe. "Payment IN" reduces what they owe you.</div>
     </div>
-    <input type="text" id="entity-trans-search" class="search-bar" placeholder="Search history..." oninput="filterEntityManagementHistory()" style="margin-bottom:10px;width:100%;box-sizing:border-box;">
     <div id="entityManagementHistoryList"></div>
     <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--glass-border);">
       <button class="btn btn-danger btn-sm" style="width:100%;" onclick="deleteCurrentEntity()">Delete Entity Permanently</button>
@@ -1243,7 +1227,7 @@ window._showLogoutConfirmDialog = async function() {
         <option value="year">This Year</option>
         <option value="all" selected>All Time</option>
       </select>
-      <button class="btn btn-noran btn-sm btn-pdf" onclick="exportExpenseOverlayToPDF()" title="Export to PDF" style="padding:8px 12px;">PDF</button>
+      <button class="btn btn-noran btn-sm btn-pdf" onclick="exportExpenseOverlayToPDF()" title="Export to PDF" style="padding:8px 12px;display:flex;align-items:center;justify-content:center;"><svg width="15" height="15" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M9 5 H27 A2 2 0 0 1 29 7 V29 L23 35 H9 A2 2 0 0 1 7 33 V7 A2 2 0 0 1 9 5 Z" fill="currentColor" fill-opacity="0.12" stroke="currentColor" stroke-width="1.5"/><path d="M23 35 V29 H29" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linejoin="round"/><line x1="12" y1="14" x2="24" y2="14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="12" y1="19" x2="24" y2="19" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="12" y1="24" x2="18" y2="24" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
     </div>
     <div class="debt-panel u-debt-header liquid-card" style="margin-bottom:14px;">
       <h4 class="u-heading-accent">Quick Add Expense</h4>
@@ -1276,30 +1260,19 @@ window._showLogoutConfirmDialog = async function() {
     </div>
   </div>
   <div class="screen-body">
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">
-      <select id="customerPdfRange" class="store-selector" style="flex:1;" onchange="if(currentManagingCustomer)renderCustomerTransactions(currentManagingCustomer);">
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;position:relative;">
+      <input type="text" id="cust-trans-search" class="search-bar u-m-0" style="flex:1;" placeholder="Search history..." oninput="filterCustomerManagementHistory()">
+      <select id="customerPdfRange" style="display:none;" onchange="if(currentManagingCustomer)renderCustomerTransactions(currentManagingCustomer);">
         <option value="today">Today</option>
         <option value="week">This Week</option>
         <option value="month">This Month</option>
         <option value="year">This Year</option>
         <option value="all" selected>All Time</option>
       </select>
-      <button class="btn btn-noman btn-sm btn-pdf" onclick="exportCustomerToPDF()" title="Export to PDF" style="padding:8px 12px;">PDF</button>
-    </div>
-    <div class="debt-panel u-debt-header liquid-card" style="margin-bottom:14px;">
-      <h4 class="u-heading-accent">Credit Payment</h4>
-      <div class="u-quick-row-stretch">
-        <div class="field u-field-m0">
-          <label class="u-label-block">Amount Received</label>
-          <input class="u-input-full-tall" type="number" id="bulkPaymentAmount" placeholder="Enter amount...">
-        </div>
-        <div class="u-flex-col-end">
-          <button class="btn btn-noman u-quick-btn u-nowrap u-px-18" onclick="(async()=>{await processBulkPayment()})()">Process Payment</button>
-        </div>
+      <div style="position:relative;flex-shrink:0;">
+        <button class="btn btn-noman btn-sm btn-pdf" title="Export to PDF" style="padding:8px 12px;display:flex;align-items:center;justify-content:center;" onclick="(function(b){var p=document.getElementById('_epop_cust');if(p){p.style.display=p.style.display==='none'?'block':'none';}else{var pop=document.createElement('div');pop.id='_epop_cust';pop.style.cssText='position:absolute;right:0;top:calc(100% + 4px);background:var(--glass);border:1px solid var(--glass-border);border-radius:10px;box-shadow:var(--shadow);z-index:9999;min-width:130px;padding:6px 0;';['Today','This Week','This Month','This Year','All Time'].forEach(function(l,i){var vals=['today','week','month','year','all'];var d=document.createElement('div');d.textContent=l;d.style.cssText='padding:9px 16px;font-size:0.82rem;cursor:pointer;color:var(--text-main);';d.onmouseenter=function(){d.style.background='var(--glass-raised)';};d.onmouseleave=function(){d.style.background='';};d.onclick=function(){var sel=document.getElementById('customerPdfRange');if(sel){sel.value=vals[i];sel.dispatchEvent(new Event('change'));}pop.style.display='none';exportCustomerToPDF();};pop.appendChild(d);});b.parentNode.appendChild(pop);document.addEventListener('click',function h(e){if(!b.parentNode.contains(e.target)){pop.style.display='none';}},true);}})(this)"><svg width="15" height="15" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M9 5 H27 A2 2 0 0 1 29 7 V29 L23 35 H9 A2 2 0 0 1 7 33 V7 A2 2 0 0 1 9 5 Z" fill="currentColor" fill-opacity="0.12" stroke="currentColor" stroke-width="1.5"/><path d="M23 35 V29 H29" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linejoin="round"/><line x1="12" y1="14" x2="24" y2="14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="12" y1="19" x2="24" y2="19" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="12" y1="24" x2="18" y2="24" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
       </div>
-      <div class="u-field-hint">* This will mark oldest credit transactions as fully or partially paid up to this amount.</div>
     </div>
-    <input type="text" id="cust-trans-search" class="search-bar" placeholder="Search history..." oninput="filterCustomerManagementHistory()" style="margin-bottom:10px;width:100%;box-sizing:border-box;">
     <div id="customerManagementHistoryList"></div>
     <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--glass-border);">
       <button class="btn btn-danger btn-sm" style="width:100%;" onclick="(async()=>{await deleteCurrentCustomer()})()">Delete Customer Permanently</button>
@@ -1376,30 +1349,19 @@ window._showLogoutConfirmDialog = async function() {
     </div>
   </div>
   <div class="screen-body">
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">
-      <select id="repCustomerPdfRange" class="store-selector" style="flex:1;" onchange="if(currentManagingRepCustomer)renderRepCustomerTransactions(currentManagingRepCustomer);">
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;position:relative;">
+      <input type="text" id="rep-cust-trans-search" class="search-bar u-m-0" style="flex:1;" placeholder="Search history..." oninput="filterRepCustomerManagementHistory()">
+      <select id="repCustomerPdfRange" style="display:none;" onchange="if(currentManagingRepCustomer)renderRepCustomerTransactions(currentManagingRepCustomer);">
         <option value="today">Today</option>
         <option value="week">This Week</option>
         <option value="month">This Month</option>
         <option value="year">This Year</option>
         <option value="all" selected>All Time</option>
       </select>
-      <button class="btn btn-noman btn-sm btn-pdf" onclick="exportRepCustomerToPDF()" title="Export to PDF" style="padding:8px 12px;">PDF</button>
-    </div>
-    <div class="debt-panel u-debt-header liquid-card" style="margin-bottom:14px;">
-      <h4 class="u-heading-accent">Credit Payment</h4>
-      <div class="u-quick-row-stretch">
-        <div class="field u-field-m0">
-          <label class="u-label-block">Amount Received</label>
-          <input class="u-input-full-tall" type="number" id="repBulkPaymentAmount" placeholder="Enter amount...">
-        </div>
-        <div class="u-flex-col-end">
-          <button class="btn btn-noman u-quick-btn u-nowrap u-px-18" onclick="(async()=>{await processRepBulkPayment()})()">Process Payment</button>
-        </div>
+      <div style="position:relative;flex-shrink:0;">
+        <button class="btn btn-noman btn-sm btn-pdf" title="Export to PDF" style="padding:8px 12px;display:flex;align-items:center;justify-content:center;" onclick="(function(b){var p=document.getElementById('_epop_rep');if(p){p.style.display=p.style.display==='none'?'block':'none';}else{var pop=document.createElement('div');pop.id='_epop_rep';pop.style.cssText='position:absolute;right:0;top:calc(100% + 4px);background:var(--glass);border:1px solid var(--glass-border);border-radius:10px;box-shadow:var(--shadow);z-index:9999;min-width:130px;padding:6px 0;';['Today','This Week','This Month','This Year','All Time'].forEach(function(l,i){var vals=['today','week','month','year','all'];var d=document.createElement('div');d.textContent=l;d.style.cssText='padding:9px 16px;font-size:0.82rem;cursor:pointer;color:var(--text-main);';d.onmouseenter=function(){d.style.background='var(--glass-raised)';};d.onmouseleave=function(){d.style.background='';};d.onclick=function(){var sel=document.getElementById('repCustomerPdfRange');if(sel){sel.value=vals[i];sel.dispatchEvent(new Event('change'));}pop.style.display='none';exportRepCustomerToPDF();};pop.appendChild(d);});b.parentNode.appendChild(pop);document.addEventListener('click',function h(e){if(!b.parentNode.contains(e.target)){pop.style.display='none';}},true);}})(this)"><svg width="15" height="15" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M9 5 H27 A2 2 0 0 1 29 7 V29 L23 35 H9 A2 2 0 0 1 7 33 V7 A2 2 0 0 1 9 5 Z" fill="currentColor" fill-opacity="0.12" stroke="currentColor" stroke-width="1.5"/><path d="M23 35 V29 H29" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linejoin="round"/><line x1="12" y1="14" x2="24" y2="14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="12" y1="19" x2="24" y2="19" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="12" y1="24" x2="18" y2="24" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
       </div>
-      <div class="u-field-hint">* This will mark oldest credit transactions as fully or partially paid up to this amount.</div>
     </div>
-    <input type="text" id="rep-cust-trans-search" class="search-bar" placeholder="Search history..." oninput="filterRepCustomerManagementHistory()" style="margin-bottom:10px;width:100%;box-sizing:border-box;">
     <div id="repCustomerManagementHistoryList"></div>
     <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--glass-border);">
       <button class="btn btn-danger btn-sm" style="width:100%;" onclick="(async()=>{await deleteCurrentRepCustomer()})()">Delete Customer Permanently</button>
@@ -1849,7 +1811,7 @@ Insufficient formula units available! Please reduce formula units used.
 </div>
 </div>
 <div class="grid-inputs">
-<div class="field"><label>Date</label><input type="date" id="cust-date" onchange="refreshCustomerSales(); setSalesSummaryMode(currentSalesSummaryMode || 'day'); calculateCustomerSale();"></div>
+<div class="field"><label>Date</label><input type="date" id="cust-date" onchange="refreshCustomerSales(); setSalesSummaryMode(currentSalesSummaryMode || 'day'); if(typeof custTransactionMode==='undefined'||custTransactionMode==='sale'){calculateCustomerSale();} var _epd=document.getElementById('expenseDate'); if(_epd&&!_epd.value){_epd.value=this.value; if(typeof calculateNetCash==='function')calculateNetCash();}"></div>
 <div class="field u-pos-relative" >
 <label>Customer Name</label>
 <input type="text" id="cust-name" list="customer-list" placeholder="Search or type new..."
@@ -1933,7 +1895,7 @@ Profit: <span id="cust-profit">0.00</span>
 <h3 style="color:var(--text-main); margin:0; white-space: nowrap; flex-shrink: 0;">CUSTOMERS</h3>
 <input type="text" id="customer-filter" class="search-bar u-flex-1 u-min-w-0 u-fs-sm2 u-m-0" placeholder="Search customers..."
 oninput="filterCustomers()">
-<span id="customer-count" style="font-size: 0.7rem; color: var(--text-muted); display:none;">0 customers</span>
+<span id="customer-count" style="font-size: 0.7rem; color: var(--text-muted);">0 customers</span>
 <button class="btn-theme" onclick="exportCustomerData('admin')" title="Download PDF" style="color: var(--accent); border-color: var(--accent); padding: 6px 12px; flex-shrink: 0; white-space: nowrap;"><svg width="14" height="14" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:inline-block;vertical-align:-2px;"><path d="M9 5 H27 A2 2 0 0 1 29 7 V29 L23 35 H9 A2 2 0 0 1 7 33 V7 A2 2 0 0 1 9 5 Z" fill="currentColor" fill-opacity="0.12" stroke="currentColor" stroke-width="1.5"/><path d="M23 35 V29 H29" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linejoin="round"/><line x1="12" y1="14" x2="24" y2="14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="12" y1="19" x2="24" y2="19" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="12" y1="24" x2="18" y2="24" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
 <button class="btn-theme" onclick="openCustomerEditModal('')" title="Add New Customer" style="color: var(--accent-emerald); border-color: var(--accent-emerald); padding: 6px 8px; flex-shrink: 0; white-space: nowrap; display:inline-flex; align-items:center;"><svg width="18" height="18" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="14" cy="12" r="5.5" fill="currentColor" fill-opacity="0.15" stroke="currentColor" stroke-width="1.6"/><path d="M3 30c0-6.075 4.925-9 11-9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/><line x1="26" y1="20" x2="26" y2="32" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="20" y1="26" x2="32" y2="26" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
 </div>
@@ -2004,21 +1966,6 @@ No records found
 <p><span>Pending Credits:</span> <span style="color:#f59e0b; font-weight:800;" id="cust-active-credit">0.00</span></p>
 <p><span>Net Profit:</span> <span class="profit-val" id="cust-active-profit">0.00</span></p>
 </div>
-<span class="u-hidden" id="cust-day-qty" ></span><span class="u-hidden" id="cust-day-value" ></span>
-<span class="u-hidden" id="cust-day-cash" ></span><span class="u-hidden" id="cust-day-credit" ></span>
-<span class="u-hidden" id="cust-day-profit" ></span>
-<span class="u-hidden" id="cust-week-qty" ></span><span class="u-hidden" id="cust-week-value" ></span>
-<span class="u-hidden" id="cust-week-cash" ></span><span class="u-hidden" id="cust-week-credit" ></span>
-<span class="u-hidden" id="cust-week-profit" ></span>
-<span class="u-hidden" id="cust-month-qty" ></span><span class="u-hidden" id="cust-month-value" ></span>
-<span class="u-hidden" id="cust-month-cash" ></span><span class="u-hidden" id="cust-month-credit" ></span>
-<span class="u-hidden" id="cust-month-profit" ></span>
-<span class="u-hidden" id="cust-year-qty" ></span><span class="u-hidden" id="cust-year-value" ></span>
-<span class="u-hidden" id="cust-year-cash" ></span><span class="u-hidden" id="cust-year-credit" ></span>
-<span class="u-hidden" id="cust-year-profit" ></span>
-<span class="u-hidden" id="cust-all-qty" ></span><span class="u-hidden" id="cust-all-value" ></span>
-<span class="u-hidden" id="cust-all-cash" ></span><span class="u-hidden" id="cust-all-credit" ></span>
-<span class="u-hidden" id="cust-all-profit" ></span>
 <div style="display:flex; align-items:center; gap:12px; margin-top:25px; margin-bottom:10px; padding:0;">
 <span style="font-size:0.82rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em; white-space:nowrap; flex-shrink:0;">Sales History</span>
 </div>
@@ -2630,15 +2577,15 @@ Save Transaction
 <h4 style="color:var(--text-main); margin:15px 0 10px 0; border-bottom:1px solid var(--glass-border); padding-bottom:5px;">FINANCIAL RATIOS</h4>
 <div class="formula-item">
 <span>Current Ratio:</span>
-<span class="formula-value" id="formulaCalcDisc">1.00</span>
+<span class="formula-value" id="formulaCalcDisc">—</span>
 </div>
 <div class="formula-item">
 <span>Quick Ratio:</span>
-<span class="formula-value" id="quickRatio">1.00</span>
+<span class="formula-value" id="quickRatio">—</span>
 </div>
 <div class="formula-item">
 <span>Cash Ratio:</span>
-<span class="formula-value" id="cashRatio">1.00</span>
+<span class="formula-value" id="cashRatio">—</span>
 </div>
 </div>
 </div>
@@ -2720,7 +2667,6 @@ No records found
 <span id="unified-table-footer-label">Total:</span>
 </td>
 <td id="unified-table-total" style="padding: 10px 2px; font-weight: 700; text-align: right; font-size: 0.85rem;">0.00</td>
-<td></td>
 </tr>
 </tfoot>
 </table>

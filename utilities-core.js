@@ -609,7 +609,6 @@ showToast('Offline — changes will be saved locally', 'warning', 4000);
   }
 })();
 
-
 setInterval(async () => {
 if (!navigator.onLine) return;
 if (typeof firebaseDB === 'undefined' || !firebaseDB) return;
@@ -1024,7 +1023,6 @@ const _UI_DEFAULTS = {
   repTransactionMode: 'sale',
   entityViewMode: 'detailed',
   currentEntityId: null,
-  currentQuickType: 'OUT',
   currentExpenseOverlayName: null,
   editingFactoryInventoryId: null,
   editingEntityId: null,
@@ -1076,7 +1074,6 @@ Object.defineProperties(window, {
   repTransactionMode:           { get: () => getUI('repTransactionMode'),           set: v => setUI('repTransactionMode', v),           configurable: true },
   entityViewMode:               { get: () => getUI('entityViewMode'),               set: v => setUI('entityViewMode', v),               configurable: true },
   currentEntityId:              { get: () => getUI('currentEntityId'),              set: v => setUI('currentEntityId', v),              configurable: true },
-  currentQuickType:             { get: () => getUI('currentQuickType'),             set: v => setUI('currentQuickType', v),             configurable: true },
   currentExpenseOverlayName:    { get: () => getUI('currentExpenseOverlayName'),    set: v => setUI('currentExpenseOverlayName', v),    configurable: true },
   editingFactoryInventoryId:    { get: () => getUI('editingFactoryInventoryId'),    set: v => setUI('editingFactoryInventoryId', v),    configurable: true },
   editingEntityId:              { get: () => getUI('editingEntityId'),              set: v => setUI('editingEntityId', v),              configurable: true },
@@ -1803,9 +1800,6 @@ const expenseRecords = ensureArray(await sqliteStore.get('expenses'));
 currentEntityId = id;
 const entity = paymentEntities.find(e => String(e.id) === String(id));
 if (!entity) return;
-const quickAmountEl = document.getElementById('quickEntityAmount');
-if (quickAmountEl) quickAmountEl.value = '';
-setQuickEntityType('OUT');
 await renderEntityOverlayContent(entity);
 if (typeof openStandaloneScreen === 'function') openStandaloneScreen('entity-details-screen');
 }
@@ -1820,12 +1814,6 @@ function openEditEntityFromDetails() {
 const id = currentEntityId;
 if (!id) return;
 editEntityBasicInfo(id);
-}
-
-function setQuickEntityType(type) {
-currentQuickType = type;
-document.getElementById('quick-type-out').className = `toggle-opt ${type === 'OUT' ? 'active' : ''}`;
-document.getElementById('quick-type-in').className = `toggle-opt ${type === 'IN' ? 'active' : ''}`;
 }
 
 async function renderEntityOverlayContent(entity) {
@@ -1979,124 +1967,6 @@ async function _toggleEntityTxnPanel(btn, panelId, txnId, expenseId) {
     } catch(_) {}
   }
   showToast('No photo attached to this transaction', 'warning', 2000);
-}
-
-async function saveQuickEntityTransaction() {
-const factoryInventoryData = ensureArray(await sqliteStore.get('factory_inventory_data'));
-const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
-const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
-const quickAmountEl = document.getElementById('quickEntityAmount');
-if (!quickAmountEl) {
-return;
-}
-const amount = parseFloat(quickAmountEl.value);
-if (!amount || amount <= 0) {
-showToast("Please enter a valid amount", "warning");
-return;
-}
-if (!currentEntityId) return;
-const entity = paymentEntities.find(e => String(e.id) === String(currentEntityId));
-if (!entity) {
-showToast('Entity not found. Please refresh and try again.', 'error');
-return;
-}
-if (currentQuickType === 'OUT') {
-const _sqetAvail = await getAvailableCashInHand();
-if (_sqetAvail < amount) {
-showToast(`Insufficient cash in hand. Available: ${fmtAmt(Math.max(0, _sqetAvail))} — Required: ${fmtAmt(amount)}`, 'error', 5000);
-return;
-}
-}
-try {
-const now = new Date();
-const _sqetHours = now.getHours();
-const _sqetMins = now.getMinutes();
-const _sqetSecs = now.getSeconds();
-const _sqetAmpm = _sqetHours >= 12 ? 'PM' : 'AM';
-const _sqetH12 = (_sqetHours % 12) || 12;
-const timeString = `${String(_sqetH12).padStart(2,'0')}:${String(_sqetMins).padStart(2,'0')}:${String(_sqetSecs).padStart(2,'0')} ${_sqetAmpm}`;
-const dateStr = now.toISOString().split('T')[0];
-let txnId = generateUUID('pay');
-if (!validateUUID(txnId)) {
-txnId = generateUUID('pay');
-}
-let transaction = {
-id: txnId,
-entityId: entity.id,
-entityName: entity.name,
-entityType: entity.type,
-date: dateStr,
-time: timeString,
-amount: amount,
-description: `Quick ${currentQuickType} from Manager`,
-type: currentQuickType,
-isPayable: false,
-createdAt: now.getTime(),
-updatedAt: now.getTime(),
-timestamp: now.getTime(),
-syncedAt: new Date().toISOString(),
-createdBy: (appMode === 'userrole' && window._assignedManagerName) ? window._assignedManagerName : null
-};
-if (currentQuickType === 'OUT') {
-const pendingMaterials = factoryInventoryData
-.filter(m =>
-String(m.supplierId) === String(entity.id) &&
-m.paymentStatus === 'pending' &&
-m.totalPayable > 0
-)
-.sort((a, b) =>
-new Date(a.purchaseDate || a.date || a.createdAt || 0) -
-new Date(b.purchaseDate || b.date || b.createdAt || 0)
-);
-if (pendingMaterials.length > 0) {
-let remaining = amount;
-const materialsToSave = [];
-let firstMaterialId = null;
-for (const mat of pendingMaterials) {
-if (remaining <= 0) break;
-if (remaining >= mat.totalPayable) {
-remaining -= mat.totalPayable;
-mat.totalPayable = 0;
-mat.paymentStatus = 'paid';
-mat.paidDate = dateStr;
-mat.updatedAt = getTimestamp();
-} else {
-mat.totalPayable = parseFloat((mat.totalPayable - remaining).toFixed(2));
-remaining = 0;
-mat.updatedAt = getTimestamp();
-}
-ensureRecordIntegrity(mat, true);
-materialsToSave.push(mat);
-if (!firstMaterialId) firstMaterialId = mat.id;
-}
-if (materialsToSave.length > 0) {
-transaction.isPayable = true;
-transaction.materialId = firstMaterialId;
-for (const mat of materialsToSave) {
-await unifiedSave('factory_inventory_data', factoryInventoryData, mat);
-}
-}
-}
-}
-transaction = ensureRecordIntegrity(transaction, false);
-paymentTransactions.push(transaction);
-await unifiedSave('payment_transactions', paymentTransactions, transaction);
-emitSyncUpdate({ payment_transactions: null});
-notifyDataChange('payments');
-triggerAutoSync();
-quickAmountEl.value = '';
-renderEntityOverlayContent(entity);
-calculateNetCash();
-if (typeof calculateCashTracker === 'function') calculateCashTracker();
-if (transaction.isPayable) {
-if (typeof renderFactoryInventory === 'function') renderFactoryInventory();
-}
-
-if (typeof renderUnifiedTable === 'function') renderUnifiedTable(1);
-showToast("Transaction saved successfully", "success");
-} catch (error) {
-showToast('Failed to save transaction. Please try again.', 'error');
-}
 }
 
 async function _restorePayableFromDeletedTransaction(tx, allTransactions, allInventory) {

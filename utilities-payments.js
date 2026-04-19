@@ -9,7 +9,9 @@ const saleIndex = customerSales.findIndex(item => item.id === id);
 if (saleIndex !== -1) {
 customerSales[saleIndex].creditReceived = !customerSales[saleIndex].creditReceived;
 if (customerSales[saleIndex].creditReceived) {
-customerSales[saleIndex].paymentType = 'CASH';
+customerSales[saleIndex].creditReceivedManually = true;
+} else {
+customerSales[saleIndex].creditReceivedManually = false;
 }
 if (!customerSales[saleIndex].currentRepProfile) {
 customerSales[saleIndex].currentRepProfile = 'admin';
@@ -890,6 +892,7 @@ prefixes.forEach(p => {
 const btn = document.getElementById(`ss-${p}-btn`);
 if (btn) btn.className = 'toggle-opt' + (p === mode ? ' active' : '');
 });
+const s = (window._custStats && window._custStats[mode]) || {};
 const titleEl = document.getElementById('sales-summary-title');
 const qtyEl = document.getElementById('cust-active-qty');
 const valueEl = document.getElementById('cust-active-value');
@@ -897,11 +900,11 @@ const cashEl = document.getElementById('cust-active-cash');
 const creditEl = document.getElementById('cust-active-credit');
 const profitEl = document.getElementById('cust-active-profit');
 if (titleEl) titleEl.textContent = `${labels[mode]} Sales`;
-if (qtyEl) qtyEl.textContent = (document.getElementById(`cust-${mode}-qty`) ?.textContent || '0.00 kg');
-if (valueEl) valueEl.textContent = (document.getElementById(`cust-${mode}-value`) ?.textContent || '0.00');
-if (cashEl) cashEl.textContent = (document.getElementById(`cust-${mode}-cash`) ?.textContent || '0.00');
-if (creditEl) creditEl.textContent = (document.getElementById(`cust-${mode}-credit`)?.textContent || '0.00');
-if (profitEl) profitEl.textContent = (document.getElementById(`cust-${mode}-profit`)?.textContent || '0.00');
+if (qtyEl) qtyEl.textContent = (s.q !== undefined ? s.q.toFixed(2) + ' kg' : '0.00 kg');
+if (valueEl) valueEl.textContent = fmtAmt(s.v !== undefined ? s.v : 0);
+if (cashEl) cashEl.textContent = fmtAmt(s.cash !== undefined ? s.cash : 0);
+if (creditEl) creditEl.textContent = fmtAmt(s.credit !== undefined ? s.credit : 0);
+if (profitEl) profitEl.textContent = fmtAmt(s.profit !== undefined ? s.profit : 0);
 const card = document.getElementById('sales-summary-card');
 if (card) {
 if (mode === 'all') card.classList.add('all-times-summary');
@@ -1414,7 +1417,7 @@ return;
 }
 const _phFrag = document.createDocumentFragment();
 const sortedTransactions = [...paymentTransactions].sort((a, b) => b.timestamp - a.timestamp);
-sortedTransactions.forEach(async transaction => {
+for (const transaction of sortedTransactions) {
 const entity = paymentEntities.find(e => String(e.id) === String(transaction.entityId));
 const badgeClass = transaction.type === 'IN' ? 'transaction-in' : 'transaction-out';
 const badgeText = transaction.type === 'IN' ? 'IN' : 'OUT';
@@ -1441,7 +1444,7 @@ card.innerHTML = `
 ${deleteButton}
 `;
 _phFrag.appendChild(card);
-});
+}
 if (sortedTransactions.length === 0) {
 historyList.replaceChildren(Object.assign(document.createElement('p'), {textContent:'No payment transactions found.',style:'text-align:center;color:var(--text-muted);width:100%;font-size:0.85rem'}));
 } else {
@@ -1856,9 +1859,25 @@ showToast("Please select date", "warning");
 return;
 }
 if (category === 'OUT' || category === 'operating') {
+let _seMaterialOffset = 0;
+if (category === 'OUT') {
+const _seEntity = paymentEntities.find(e => e.name && e.name.toLowerCase() === name.toLowerCase() && !e.isExpenseEntity);
+if (_seEntity) {
+let _seRem = amount;
+const _seMats = factoryInventoryData
+.filter(m => String(m.supplierId) === String(_seEntity.id) && (m.paymentStatus === 'pending' || !m.paymentStatus) && parseFloat(m.totalPayable || 0) > 0)
+.sort((a, b) => new Date(a.purchaseDate || a.createdAt || 0) - new Date(b.purchaseDate || b.createdAt || 0));
+for (const m of _seMats) {
+if (_seRem <= 0) break;
+_seMaterialOffset += Math.min(_seRem, m.totalPayable);
+_seRem -= m.totalPayable;
+}
+}
+}
+const _seNetOutflow = amount - _seMaterialOffset;
 const _seAvailCash = await getAvailableCashInHand();
-if (_seAvailCash < amount) {
-showToast(`Insufficient cash in hand. Available: ${fmtAmt(Math.max(0, _seAvailCash))} — Required: ${fmtAmt(amount)}`, 'error', 5000);
+if (_seAvailCash < _seNetOutflow) {
+showToast(`Insufficient cash in hand. Available: ${fmtAmt(Math.max(0, _seAvailCash))} — Required: ${fmtAmt(_seNetOutflow)}`, 'error', 5000);
 return;
 }
 }

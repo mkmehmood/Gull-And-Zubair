@@ -36,29 +36,16 @@ const partialPaid = s.partialPaymentReceived || 0;
 totalCredit += (await getSaleTransactionValue(s) - partialPaid);
 }
 } else if (s.paymentType === 'CREDIT' && !s.creditReceived) {
-
 if (s.isMerged && typeof s.creditValue === 'number') {
 totalCredit += s.creditValue;
 } else {
 const partialPaid = s.partialPaymentReceived || 0;
 totalCredit += (await getSaleTransactionValue(s) - partialPaid);
 }
-} else if (isRepLinked) {
-if (s.paymentType === 'CREDIT' && !s.creditReceived) {
-const partialPaid = s.partialPaymentReceived || 0;
-totalCredit += (await getSaleTransactionValue(s) - partialPaid);
 } else if (s.paymentType === 'COLLECTION') {
 totalCredit -= (s.totalValue || 0);
 } else if (s.paymentType === 'PARTIAL_PAYMENT') {
 totalCredit -= (s.totalValue || 0);
-}
-} else {
-
-if (s.paymentType === 'COLLECTION') {
-totalCredit -= (s.totalValue || 0);
-} else if (s.paymentType === 'PARTIAL_PAYMENT') {
-totalCredit -= (s.totalValue || 0);
-}
 }
 }
 totalCredit = Math.max(0, totalCredit);
@@ -82,7 +69,10 @@ return;
 }
 try {
 const freshSales = await sqliteStore.get('customer_sales', []);
-const mergedSales = Array.isArray(freshSales) ? freshSales : customerSales;
+if (Array.isArray(freshSales) && freshSales.length > 0) {
+customerSales.length = 0;
+freshSales.forEach(s => customerSales.push(s));
+}
 } catch (error) {
 console.error('UI refresh failed.', _safeErr(error));
 showToast('Failed to reload sales data: ' + (_safeErr(error).message || 'please reload the app'), 'error');
@@ -116,29 +106,16 @@ if (sale.transactionType === 'OLD_DEBT' && !sale.creditReceived) {
 const partialPaid = sale.partialPaymentReceived || 0;
 customerStats[name].credit += (await getSaleTransactionValue(sale) - partialPaid);
 } else if (sale.paymentType === 'CREDIT' && !sale.creditReceived) {
-
 if (sale.isMerged && typeof sale.creditValue === 'number') {
 customerStats[name].credit += sale.creditValue;
 } else {
 const partialPaid = sale.partialPaymentReceived || 0;
 customerStats[name].credit += (await getSaleTransactionValue(sale) - partialPaid);
 }
-} else if (isRepLinked) {
-if (sale.paymentType === 'CREDIT' && !sale.creditReceived) {
-const partialPaid = sale.partialPaymentReceived || 0;
-customerStats[name].credit += (await getSaleTransactionValue(sale) - partialPaid);
 } else if (sale.paymentType === 'COLLECTION') {
 customerStats[name].credit -= (sale.totalValue || 0);
 } else if (sale.paymentType === 'PARTIAL_PAYMENT') {
 customerStats[name].credit -= (sale.totalValue || 0);
-}
-} else {
-
-if (sale.paymentType === 'COLLECTION') {
-customerStats[name].credit -= (sale.totalValue || 0);
-} else if (sale.paymentType === 'PARTIAL_PAYMENT') {
-customerStats[name].credit -= (sale.totalValue || 0);
-}
 }
 if (customerStats[name].credit < 0) customerStats[name].credit = 0;
 const saleDate = sale.date;
@@ -230,7 +207,6 @@ async function openCustomerManagement(customerName) {
 currentManagingCustomer = customerName;
 const _setMCT = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
 _setMCT('manageCustomerTitle', customerName);
-document.getElementById('bulkPaymentAmount').value = '';
 if (typeof openStandaloneScreen === 'function') openStandaloneScreen('customer-management-screen');
 await renderCustomerTransactions(customerName);
 }
@@ -532,6 +508,7 @@ customerSales[idx] = ensureRecordIntegrity(customerSales[idx], true);
 await unifiedSave('customer_sales', customerSales, customerSales[idx]);
 notifyDataChange('sales');
 triggerAutoSync();
+if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
 renderCustomerTransactions(currentManagingCustomer);
 refreshAllCalculations();
 }
@@ -559,7 +536,9 @@ repSales[idx] = ensureRecordIntegrity(repSales[idx], true);
 await unifiedSave('rep_sales', repSales, repSales[idx]);
 notifyDataChange('rep');
 triggerAutoSync();
+if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
 renderRepCustomerTransactions(currentManagingRepCustomer);
+refreshAllCalculations();
 }
 } catch (e) {
 repSales.length = 0; repSales.push(...snapshot);
@@ -644,6 +623,7 @@ ensureRecordIntegrity(rel, true);
 const customerSalesFiltered = customerSales.filter(s => s.id !== id);
 await unifiedDelete('customer_sales', customerSalesFiltered, id, { strict: true }, item);
 refreshAllCalculations();
+if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
 if (typeof refreshCustomerSales === 'function') await refreshCustomerSales();
 renderCustomersTable();
 if (currentManagingCustomer) renderCustomerTransactions(currentManagingCustomer);
@@ -737,174 +717,11 @@ showToast('Failed to delete transaction. Please try again.', 'error');
 }
 }
 
-async function processBulkPayment() {
-const customerSales = ensureArray(await sqliteStore.get('customer_sales'));
-const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
-const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
-const amount = parseFloat(document.getElementById('bulkPaymentAmount').value);
-if (!amount || amount <= 0) { showToast('Please enter a valid amount', 'warning', 3000); return; }
-const snapshot = [...customerSales];
-try {
-let remaining = amount, updatedCount = 0, partialPaymentMade = false;
-const pending = customerSales.filter(s =>
-s.customerName === currentManagingCustomer &&
-s.paymentType === 'CREDIT' && !s.creditReceived
-).sort((a, b) => a.timestamp - b.timestamp);
-if (pending.length === 0) { showToast('No pending credit transactions found for this customer.', 'info', 4000); return; }
-const nowDate = new Date();
-const nowISODate = nowDate.toISOString().split('T')[0];
-const nowTime = nowDate.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: true});
-const nowEpoch = getTimestamp();
-for (const sale of pending) {
-if (remaining <= 0) break;
-const amountDue = sale.isMerged && typeof sale.creditValue === 'number'
-? sale.creditValue
-: (sale.totalValue || 0) - (sale.partialPaymentReceived || 0);
-if (remaining >= amountDue) {
-sale.creditReceived = true;
-sale.creditReceivedDate = nowISODate;
-if (!sale.isMerged) sale.partialPaymentReceived = sale.totalValue;
-sale.updatedAt = nowEpoch;
-remaining -= amountDue; updatedCount++;
-        if (!sale.isMerged) ensureRecordIntegrity(sale, true);
-} else {
-if (!sale.isMerged) {
-sale.partialPaymentReceived = (sale.partialPaymentReceived || 0) + remaining;
-sale.creditReceived = false; sale.updatedAt = nowEpoch;
-}
-        if (!sale.isMerged) ensureRecordIntegrity(sale, true);
-const partialId = generateUUID('sale');
-customerSales.push(ensureRecordIntegrity({
-id: partialId, timestamp: nowEpoch, createdAt: nowEpoch, updatedAt: nowEpoch,
-date: nowISODate, time: nowTime,
-customerName: currentManagingCustomer, customerPhone: sale.customerPhone || '', quantity: 0,
-supplyStore: sale.supplyStore || 'STORE_A', paymentType: 'PARTIAL_PAYMENT', salesRep: 'NONE',
-currentRepProfile: 'admin',
-totalCost: 0, totalValue: remaining, profit: 0, creditReceived: true,
-relatedSaleId: sale.id, syncedAt: new Date().toISOString()
-}, false, false));
-partialPaymentMade = true; remaining = 0; updatedCount++; break;
-}
-}
-let collId = null;
-if (remaining > 0 && updatedCount > 0) {
-const ls = pending[pending.length - 1];
-collId = generateUUID('sale');
-customerSales.push(ensureRecordIntegrity({
-id: collId, timestamp: nowEpoch, createdAt: nowEpoch, updatedAt: nowEpoch,
-date: nowISODate, time: nowTime,
-customerName: currentManagingCustomer, customerPhone: ls?.customerPhone || '', quantity: 0,
-supplyStore: ls?.supplyStore || 'STORE_A', paymentType: 'COLLECTION', salesRep: 'NONE',
-currentRepProfile: 'admin',
-totalCost: 0, totalValue: remaining, profit: 0, creditReceived: true,
-syncedAt: new Date().toISOString()
-}, false, false));
-}
-if (updatedCount > 0 || partialPaymentMade) {
-const changedIds = new Set(pending.map(s => s.id));
-if (collId) changedIds.add(collId);
-await unifiedSave('customer_sales', customerSales, null, Array.from(changedIds));
-notifyDataChange('sales'); triggerAutoSync();
-let msg = `Payment of ${fmtAmt(amount)} processed successfully. `;
-msg += partialPaymentMade ? 'Partial payment applied.' : remaining === 0 ? `${updatedCount} transaction(s) fully cleared.` : `${updatedCount} cleared, ${fmtAmt(remaining)} extra.`;
-showToast(msg, 'info', 5000);
-document.getElementById('bulkPaymentAmount').value = '';
-renderCustomerTransactions(currentManagingCustomer);
-refreshAllCalculations();
-} else { showToast('No changes made.', 'info', 2500); }
-} catch (e) {
-customerSales.length = 0; customerSales.push(...snapshot);
-await sqliteStore.set('customer_sales', customerSales).catch(() => {});
-showToast('Failed to process bulk payment. Please try again.', 'error');
-}
-}
-
 function filterCustomerManagementHistory() {
 const term = document.getElementById('cust-trans-search').value.toLowerCase();
 document.querySelectorAll('#customerManagementHistoryList .cust-history-item').forEach(item => {
 item.style.display = item.innerText.toLowerCase().includes(term) ? 'flex' : 'none';
 });
-}
-
-async function processRepBulkPayment() {
-const repSales = ensureArray(await sqliteStore.get('rep_sales'));
-const paymentEntities = ensureArray(await sqliteStore.get('payment_entities'));
-const paymentTransactions = ensureArray(await sqliteStore.get('payment_transactions'));
-const amount = parseFloat(document.getElementById('repBulkPaymentAmount').value);
-if (!amount || amount <= 0) { showToast('Please enter a valid amount', 'warning', 3000); return; }
-const snapshot = [...repSales];
-try {
-let remaining = amount, updatedCount = 0, partialPaymentMade = false;
-const pending = repSales.filter(s =>
-s.customerName === currentManagingRepCustomer &&
-s.salesRep === currentRepProfile &&
-s.paymentType === 'CREDIT' && !s.creditReceived
-).sort((a, b) => a.timestamp - b.timestamp);
-if (pending.length === 0) { showToast('No pending credit transactions found for this customer.', 'info', 4000); return; }
-const nowDate = new Date();
-const nowISODate = nowDate.toISOString().split('T')[0];
-const nowTime = nowDate.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: true});
-const nowEpoch = getTimestamp();
-for (const sale of pending) {
-if (remaining <= 0) break;
-const amountDue = sale.isMerged && typeof sale.creditValue === 'number'
-? sale.creditValue
-: (sale.totalValue || 0) - (sale.partialPaymentReceived || 0);
-if (remaining >= amountDue) {
-sale.creditReceived = true;
-sale.creditReceivedDate = nowISODate;
-if (!sale.isMerged) sale.partialPaymentReceived = sale.totalValue;
-sale.updatedAt = nowEpoch;
-remaining -= amountDue; updatedCount++;
-        if (!sale.isMerged) ensureRecordIntegrity(sale, true);
-} else {
-if (!sale.isMerged) {
-sale.partialPaymentReceived = (sale.partialPaymentReceived || 0) + remaining;
-sale.creditReceived = false; sale.updatedAt = nowEpoch;
-}
-        if (!sale.isMerged) ensureRecordIntegrity(sale, true);
-const partialId = generateUUID('sale');
-repSales.push(ensureRecordIntegrity({
-id: partialId, timestamp: nowEpoch, createdAt: nowEpoch, updatedAt: nowEpoch,
-date: nowISODate, time: nowTime,
-customerName: currentManagingRepCustomer, customerPhone: sale.customerPhone || '', quantity: 0,
-supplyStore: sale.supplyStore || 'STORE_A', paymentType: 'PARTIAL_PAYMENT', salesRep: currentRepProfile,
-totalCost: 0, totalValue: remaining, profit: 0, creditReceived: true,
-relatedSaleId: sale.id, syncedAt: new Date().toISOString()
-}, false, false));
-partialPaymentMade = true; remaining = 0; updatedCount++; break;
-}
-}
-let collId = null;
-if (remaining > 0 && updatedCount > 0) {
-const ls = pending[pending.length - 1];
-collId = generateUUID('sale');
-repSales.push(ensureRecordIntegrity({
-id: collId, timestamp: nowEpoch, createdAt: nowEpoch, updatedAt: nowEpoch,
-date: nowISODate, time: nowTime,
-customerName: currentManagingRepCustomer, customerPhone: ls?.customerPhone || '', quantity: 0,
-supplyStore: ls?.supplyStore || 'STORE_A', paymentType: 'COLLECTION', salesRep: currentRepProfile,
-totalCost: 0, totalValue: remaining, profit: 0, creditReceived: true,
-syncedAt: new Date().toISOString()
-}, false, false));
-}
-if (updatedCount > 0 || partialPaymentMade) {
-const changedIds = new Set(pending.map(s => s.id));
-if (collId) changedIds.add(collId);
-await unifiedSave('rep_sales', repSales, null, Array.from(changedIds));
-notifyDataChange('rep'); triggerAutoSync();
-let msg = `Payment of ${fmtAmt(amount)} processed successfully. `;
-msg += partialPaymentMade ? 'Partial payment applied.' : remaining === 0 ? `${updatedCount} transaction(s) fully cleared.` : `${updatedCount} cleared, ${fmtAmt(remaining)} extra.`;
-showToast(msg, 'info', 5000);
-document.getElementById('repBulkPaymentAmount').value = '';
-renderRepCustomerTransactions(currentManagingRepCustomer);
-renderRepCustomerTable();
-} else { showToast('No changes made.', 'info', 2500); }
-} catch (e) {
-repSales.length = 0; repSales.push(...snapshot);
-await sqliteStore.set('rep_sales', repSales).catch(() => {});
-showToast('Failed to process bulk payment. Please try again.', 'error');
-}
 }
 
 function filterRepCustomerManagementHistory() {

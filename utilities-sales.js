@@ -82,7 +82,8 @@ rawData.totalSoldValue += _ctSaleVal;
 } else if (isRepLinked) {
 rawData.totalSoldValue += _ctSaleVal;
 if (!sale.creditReceived) {
-rawData.salesCredits += _ctSaleVal;
+const repPartialPaid = sale.partialPaymentReceived || 0;
+rawData.salesCredits += Math.max(0, _ctSaleVal - repPartialPaid);
 }
 } else {
 if (sale.paymentType === 'CASH' || sale.creditReceived) {
@@ -318,13 +319,6 @@ if (!entity) {
 showToast("Selected entity not found", 'error');
 return;
 }
-if (type === 'OUT') {
-const _spAvailCash = await getAvailableCashInHand();
-if (_spAvailCash < amount) {
-showToast(`Insufficient cash in hand. Available: ${fmtAmt(Math.max(0, _spAvailCash))} — Required: ${fmtAmt(amount)}`, 'error', 5000);
-return;
-}
-}
 const now = new Date();
 let hours = now.getHours();
 const minutes = now.getMinutes();
@@ -335,6 +329,33 @@ hours = hours ? hours : 12;
 const timeString = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')} ${ampm}`;
 let isPayable = false;
 let materialId = null;
+let materialPayableReduction = 0;
+if (type === 'OUT') {
+const isPendingMatCheck = (m) => (m.paymentStatus === 'pending' || !m.paymentStatus) && parseFloat(m.totalPayable || 0) > 0;
+const linkedCheck = factoryInventoryData
+.filter(m => String(m.supplierId) === String(entityId) && isPendingMatCheck(m))
+.sort((a, b) => new Date(a.purchaseDate || a.createdAt || 0) - new Date(b.purchaseDate || b.createdAt || 0));
+const unlinkedCheck = entity.isSupplier
+? factoryInventoryData
+.filter(m => !m.supplierId && isPendingMatCheck(m))
+.sort((a, b) => new Date(a.purchaseDate || a.createdAt || 0) - new Date(b.purchaseDate || b.createdAt || 0))
+: [];
+let checkRemaining = amount;
+for (const mat of [...linkedCheck, ...unlinkedCheck]) {
+if (checkRemaining <= 0) break;
+const settled = Math.min(checkRemaining, mat.totalPayable);
+materialPayableReduction += settled;
+checkRemaining -= settled;
+}
+}
+const netCashOutflow = amount - materialPayableReduction;
+if (type === 'OUT') {
+const _spAvailCash = await getAvailableCashInHand();
+if (_spAvailCash < netCashOutflow) {
+showToast(`Insufficient cash in hand. Available: ${fmtAmt(Math.max(0, _spAvailCash))} — Required (net): ${fmtAmt(netCashOutflow)}`, 'error', 5000);
+return;
+}
+}
 try {
 if (type === 'OUT') {
 const isPendingMat = (m) => (m.paymentStatus === 'pending' || !m.paymentStatus) && parseFloat(m.totalPayable || 0) > 0;
@@ -657,7 +678,8 @@ rawData.totalSoldValue += _saleVal;
 } else if (isRepLinked) {
 rawData.totalSoldValue += _saleVal;
 if (!sale.creditReceived) {
-rawData.salesCredits += _saleVal;
+const repPartialPaid = sale.partialPaymentReceived || 0;
+rawData.salesCredits += Math.max(0, _saleVal - repPartialPaid);
 }
 } else {
 if (sale.paymentType === 'CASH' || sale.creditReceived) {
@@ -826,9 +848,9 @@ CurrentLiabilities.total = CurrentLiabilities.accountsPayable.total;
 const WORKING_CAPITAL = CURRENT_ASSETS - CurrentLiabilities.total;
 const ENTERPRISE_VALUE = CURRENT_ASSETS - CurrentLiabilities.total;
 const liquidityRatios = {
-currentRatio: CurrentLiabilities.total > 0 ? CURRENT_ASSETS / CurrentLiabilities.total : 0,
-quickRatio: CurrentLiabilities.total > 0 ? (CURRENT_ASSETS - RawMaterialsValue - FormulaUnitsValue) / CurrentLiabilities.total : 0,
-cashRatio: CurrentLiabilities.total > 0 ? cashInHand / CurrentLiabilities.total : 0
+currentRatio: CurrentLiabilities.total > 0 ? CURRENT_ASSETS / CurrentLiabilities.total : null,
+quickRatio: CurrentLiabilities.total > 0 ? (CURRENT_ASSETS - RawMaterialsValue - FormulaUnitsValue) / CurrentLiabilities.total : null,
+cashRatio: CurrentLiabilities.total > 0 ? cashInHand / CurrentLiabilities.total : null
 };
 const indicators = {
 cashInHand: cashInHand,
@@ -925,21 +947,25 @@ indicators.workingCapital < 50000 ? 'var(--warning)' :
 { const _el_formulaFinal = document.getElementById('formulaFinal'); if (_el_formulaFinal) _el_formulaFinal.textContent = `${fmtAmt(safeValue(indicators.totalEnterpriseValue))}`; }
 const currentRatioElement = document.getElementById('formulaCalcDisc');
 if (currentRatioElement) {
-const currentRatio = safeNumber(parseFloat(indicators.liquidityRatios?.currentRatio), 0);
-currentRatioElement.textContent = safeNumber(currentRatio, 0).toFixed(2);
-currentRatioElement.style.color = currentRatio < 1 ? 'var(--danger)' :
-currentRatio < 2 ? 'var(--warning)' :
-'var(--accent-emerald)';
+const currentRatio = indicators.liquidityRatios?.currentRatio;
+if (currentRatio === null || currentRatio === undefined) {
+currentRatioElement.textContent = 'N/A';
+currentRatioElement.style.color = 'var(--text-muted)';
+} else {
+const _cr = safeNumber(parseFloat(currentRatio), 0);
+currentRatioElement.textContent = _cr.toFixed(2);
+currentRatioElement.style.color = _cr < 1 ? 'var(--danger)' : _cr < 2 ? 'var(--warning)' : 'var(--accent-emerald)';
+}
 }
 const quickRatioElement = document.getElementById('quickRatio');
 if (quickRatioElement) {
-const quickRatio = safeNumber(parseFloat(indicators.liquidityRatios?.quickRatio), 0);
-quickRatioElement.textContent = safeNumber(quickRatio, 0).toFixed(2);
+const quickRatio = indicators.liquidityRatios?.quickRatio;
+quickRatioElement.textContent = (quickRatio === null || quickRatio === undefined) ? 'N/A' : safeNumber(parseFloat(quickRatio), 0).toFixed(2);
 }
 const cashRatioElement = document.getElementById('cashRatio');
 if (cashRatioElement) {
-const cashRatio = safeNumber(parseFloat(indicators.liquidityRatios?.cashRatio), 0);
-cashRatioElement.textContent = safeNumber(cashRatio, 0).toFixed(2);
+const cashRatio = indicators.liquidityRatios?.cashRatio;
+cashRatioElement.textContent = (cashRatio === null || cashRatio === undefined) ? 'N/A' : safeNumber(parseFloat(cashRatio), 0).toFixed(2);
 }
 }
 
@@ -1027,8 +1053,8 @@ const profit = totalValue - totalCost;
 const existingCustomer = customerSales.find(s => s && s.customerName && name && s.customerName.toLowerCase() === name.toLowerCase());
 let existingCredit = 0;
 if (existingCustomer) {
-customerSales.forEach(async sale => {
-if (!(sale && sale.customerName && name && sale.customerName.toLowerCase() === name.toLowerCase())) return;
+for (const sale of customerSales) {
+if (!(sale && sale.customerName && name && sale.customerName.toLowerCase() === name.toLowerCase())) continue;
 if (sale.transactionType === 'OLD_DEBT' && !sale.creditReceived) {
 existingCredit += (await getSaleTransactionValue(sale)) - (sale.partialPaymentReceived || 0);
 } else if (sale.paymentType === 'CREDIT' && !sale.creditReceived) {
@@ -1042,7 +1068,7 @@ existingCredit -= (sale.totalValue || 0);
 } else if (sale.paymentType === 'PARTIAL_PAYMENT') {
 existingCredit -= (sale.totalValue || 0);
 }
-});
+}
 existingCredit = Math.max(0, existingCredit);
 }
 if (paymentType === 'CREDIT') {
@@ -1314,6 +1340,7 @@ notifyDataChange('sales');
 triggerAutoSync();
 if (typeof calculateCashTracker === 'function') calculateCashTracker();
 if (typeof calculateNetCash === 'function') calculateNetCash();
+if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
 emitSyncUpdate({ customer_sales: null});
 
 const savedName = name;
@@ -1714,6 +1741,7 @@ await unifiedDelete('customer_sales', customerSalesFiltered, id, { strict: true 
 await refreshCustomerSales();
 calculateNetCash();
 calculateCashTracker();
+if (typeof refreshPaymentTab === 'function') await refreshPaymentTab();
 renderCustomersTable();
 if (currentManagingCustomer && typeof renderCustomerTransactions === 'function') {
 await renderCustomerTransactions(currentManagingCustomer);
@@ -2083,7 +2111,7 @@ async clearAllTimestamps() {
     await sqliteStore.remove(lsKey);
     await sqliteStore.remove(lmKey);
     await sqliteStore.remove(`uploadedIds_${col}`);
-    await sqliteStore.remove(`downloadedIds_${col}`); // Fix 3: was orphaned on reset
+    await sqliteStore.remove(`downloadedIds_${col}`);
     await sqliteStore.remove(`pendingSync_${col}`);
   }
 },
@@ -2248,7 +2276,7 @@ const UUIDSyncRegistry = (() => {
     const sid = String(id);
     _set(_downloaded, col).add(sid);
     DeltaSync.markDownloaded(col, sid);
-    _persistDownloadedIds(col); // Fix 2: persist so it survives page reload
+    _persistDownloadedIds(col);
   }
 
   function skipDownload(col, id) {
@@ -2734,7 +2762,7 @@ sale.paymentType === 'CREDIT' &&
 sale.transactionType !== 'OLD_DEBT' &&
 !(reconciledCustomerIds && reconciledCustomerIds.has(sale.id))
 ) {
-sale.paymentType = 'CASH';
+sale.creditReceivedManually = true;
 sale.creditReceived = true;
 sale.creditReceivedDate = receivedDate;
 sale.creditReceivedTime = receivedTime;
@@ -2769,7 +2797,7 @@ sale.paymentType === 'CREDIT' &&
 for (const sale of pendingSales) {
 if (remainingQty <= 0) break;
 if (sale.quantity <= remainingQty) {
-sale.paymentType = 'CASH';
+sale.creditReceivedManually = true;
 sale.creditReceived = true;
 sale.creditReceivedDate = new Date().toISOString().split('T')[0];
 sale.creditReceivedTime = new Date().toLocaleTimeString('en-US', {hour: '2-digit', minute:'2-digit', hour12: true});
@@ -6101,9 +6129,6 @@ if (isOldDebt) {
 period.credit += (item.totalValue || 0);
 return;
 }
-period.q += (item.quantity || 0);
-period.v += (item.totalValue || 0);
-period.profit += (item.profit || 0);
 if (item.isMerged && item.mergedSummary) {
 const ms = item.mergedSummary;
 period.cash += (ms.cashSales || 0);
@@ -6113,11 +6138,16 @@ if (item.paymentType === 'CREDIT' && !item.creditReceived) {
 const partialPaid = item.partialPaymentReceived || 0;
 period.credit += (item.totalValue || 0) - partialPaid;
 }
+return;
 } else if (item.paymentType === 'CREDIT' && !item.creditReceived) {
-period.credit += (item.totalValue || 0);
+const partialPaid = item.partialPaymentReceived || 0;
+period.credit += Math.max(0, (item.totalValue || 0) - partialPaid);
 } else if (item.paymentType === 'CASH' || item.creditReceived) {
 period.cash += (item.totalValue || 0);
 }
+period.q += (item.quantity || 0);
+period.v += (item.totalValue || 0);
+period.profit += (item.profit || 0);
 };
 if (effDateStr === selectedDate) updatePeriod(stats.day);
 if (rowDate >= weekStart && rowDate <= selectedDateObj) updatePeriod(stats.week);
@@ -6134,16 +6164,14 @@ return item.paymentType !== 'PARTIAL_PAYMENT' && item.paymentType !== 'COLLECTIO
 });
 const totalItems = displayData.length;
 const updateStatDisplay = (prefix, stat) => {
-const qtyEl = document.getElementById(`cust-${prefix}-qty`);
-const valueEl = document.getElementById(`cust-${prefix}-value`);
-const cashEl = document.getElementById(`cust-${prefix}-cash`);
-const creditEl = document.getElementById(`cust-${prefix}-credit`);
-const profitEl = document.getElementById(`cust-${prefix}-profit`);
-if (qtyEl) qtyEl.innerText = safeValue(stat.q).toFixed(2) + ' kg';
-if (valueEl) valueEl.innerText = '' + fmtAmt(safeValue(stat.v));
-if (cashEl) cashEl.innerText = '' + fmtAmt(safeValue(stat.cash));
-if (creditEl) creditEl.innerText = '' + fmtAmt(safeValue(stat.credit));
-if (profitEl) profitEl.innerText = '' + fmtAmt(safeValue(stat.profit));
+if (!window._custStats) window._custStats = {};
+window._custStats[prefix] = {
+q: safeValue(stat.q),
+v: safeValue(stat.v),
+cash: safeValue(stat.cash),
+credit: safeValue(stat.credit),
+profit: safeValue(stat.profit)
+};
 };
 updateStatDisplay('day', stats.day);
 updateStatDisplay('week', stats.week);

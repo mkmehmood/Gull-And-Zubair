@@ -915,7 +915,6 @@ _setRepH('rep-customers-total-collections', fmtAmt(repTotalCollections));
 async function openRepCustomerManagement(customerName) {
 currentManagingRepCustomer = customerName;
 const _repMCT = document.getElementById('repManageCustomerTitle'); if (_repMCT) _repMCT.innerText = customerName;
-const _repBulk = document.getElementById('repBulkPaymentAmount'); if (_repBulk) _repBulk.value = '';
 if (typeof openStandaloneScreen === 'function') openStandaloneScreen('rep-customer-management-screen');
 await renderRepCustomerTransactions(customerName);
 }
